@@ -1,0 +1,36 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "label"
+    },
+    {
+      "name": "float_window_permission",
+      "value": "用于显示悬浮导航栏"
+    },
+    {
+      "name": "tab_claude",
+      "value": "Claude"
+    },
+    {
+      "name": "tab_codex",
+      "value": "Codex"
+    },
+    {
+      "name": "tab_open_code",
+      "value": "Open Code"
+    },
+    {
+      "name": "tab_settings",
+      "value": "设置"
+    }
+  ]
+}
