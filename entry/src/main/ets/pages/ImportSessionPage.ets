@@ -1,5 +1,6 @@
 /**
  * 导入会话页面 - 从服务器选择会话导入
+ * 使用鸿蒙液态玻璃效果
  */
 
 import { Theme } from '../common/Theme'
@@ -8,6 +9,11 @@ import { sessionStore } from '../stores/SessionStore'
 import { apiService } from '../services/APIService'
 import { TabType } from '../viewmodel/ConversationModel'
 import router from '@ohos.router'
+
+// 液态玻璃颜色
+const GLASS_LIGHT = 'rgba(255, 255, 255, 0.05)'
+const GLASS_CARD = 'rgba(255, 255, 255, 0.03)'
+const GLASS_INPUT = 'rgba(255, 255, 255, 0.08)'
 
 @Entry
 @Component
@@ -138,7 +144,7 @@ struct ImportSessionPage {
         }
         .width(36)
         .height(36)
-        .backgroundColor(Theme.GlassBackground)
+        .backgroundColor(GLASS_LIGHT)
         .borderRadius(18)
         .justifyContent(FlexAlign.Center)
         .onClick(() => {
@@ -230,6 +236,7 @@ struct ImportSessionPage {
             .fontColor(Theme.TextOnPrimary)
             .backgroundColor(Theme.PrimaryColor)
             .borderRadius(12)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
             .enabled(!this.isImporting)
             .onClick(() => {
               this.importSelected()
@@ -288,7 +295,7 @@ struct ImportSessionPage {
     }
     .width('100%')
     .padding(Theme.SpacingMD)
-    .backgroundColor(Theme.BackgroundSecondary)
+    .backgroundColor(GLASS_CARD)
     .borderRadius(Theme.RadiusMedium)
     .margin({ bottom: Theme.SpacingSM })
     .onClick(() => {

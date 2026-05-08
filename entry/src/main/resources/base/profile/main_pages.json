@@ -3,6 +3,7 @@
     "pages/Index",
     "pages/LoginPage",
     "pages/ChatDetailPage",
-    "pages/ImportSessionPage"
+    "pages/ImportSessionPage",
+    "pages/StorageManagementPage"
   ]
 }

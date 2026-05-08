@@ -81,8 +81,8 @@ export struct MainPage {
       }
     })
     .barMode(BarMode.Fixed)
-    .scrollable(false)  // 禁止左右滑动切换
-    .backgroundColor(Theme.BackgroundPrimary)
+    .scrollable(false)
+    .backgroundColor(Color.Transparent)
     .width('100%')
     .height('100%')
     .onChange((index: number) => {

@@ -158,15 +158,22 @@ export struct SettingsPage {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(Theme.BackgroundPrimary)
+    .linearGradient({
+      angle: 180,
+      colors: [
+        [Theme.BackgroundGradientStart, 0.0],
+        [Theme.BackgroundGradientMiddle, 0.5],
+        [Theme.BackgroundGradientEnd, 1.0]
+      ]
+    })
     .bindSheet($$this.showLanEdit, this.LanEditSheet(), {
       height: 280,
-      backgroundColor: Theme.BackgroundSecondary,
+      backgroundColor: Theme.LiquidGlassBackground,
       dragBar: true
     })
     .bindSheet($$this.showTunnelEdit, this.TunnelEditSheet(), {
       height: 280,
-      backgroundColor: Theme.BackgroundSecondary,
+      backgroundColor: Theme.LiquidGlassBackground,
       dragBar: true
     })
   }
@@ -196,8 +203,10 @@ export struct SettingsPage {
     }
     .width('100%')
     .padding(Theme.SpacingMD)
-    .backgroundColor(Theme.BackgroundSecondary)
+    .backgroundColor(Theme.LiquidGlassBackground)
     .borderRadius(Theme.RadiusMedium)
+    .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
   }
 
   @Builder
@@ -215,9 +224,10 @@ export struct SettingsPage {
           Button('局域网')
             .fontSize(Theme.FontTiny)
             .fontColor(this.serverMode === 'lan' ? Theme.TextOnPrimary : Theme.TextSecondary)
-            .backgroundColor(this.serverMode === 'lan' ? Theme.PrimaryColor : Theme.BackgroundTertiary)
+            .backgroundColor(this.serverMode === 'lan' ? Theme.PrimaryColor : Theme.LiquidGlassBackground)
             .borderRadius(8)
             .height(28)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
             .enabled(this.lanUrl.length > 0)
             .onClick(() => {
               this.setServerMode('lan')
@@ -226,9 +236,10 @@ export struct SettingsPage {
           Button('公网')
             .fontSize(Theme.FontTiny)
             .fontColor(this.serverMode === 'tunnel' ? Theme.TextOnPrimary : Theme.TextSecondary)
-            .backgroundColor(this.serverMode === 'tunnel' ? Theme.PrimaryColor : Theme.BackgroundTertiary)
+            .backgroundColor(this.serverMode === 'tunnel' ? Theme.PrimaryColor : Theme.LiquidGlassBackground)
             .borderRadius(8)
             .height(28)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
             .enabled(this.tunnelUrl.length > 0)
             .onClick(() => {
               this.setServerMode('tunnel')
@@ -237,7 +248,7 @@ export struct SettingsPage {
       }
       .width('100%')
 
-      Divider().color(Theme.Border)
+      Divider().color(Theme.LiquidGlassBorderColor)
 
       // 局域网地址
       Row() {
@@ -263,7 +274,7 @@ export struct SettingsPage {
       }
       .width('100%')
 
-      Divider().color(Theme.Border)
+      Divider().color(Theme.LiquidGlassBorderColor)
 
       // 公网地址
       Row() {
@@ -289,7 +300,7 @@ export struct SettingsPage {
       }
       .width('100%')
 
-      Divider().color(Theme.Border)
+      Divider().color(Theme.LiquidGlassBorderColor)
 
       // 当前地址
       Row() {
@@ -307,7 +318,7 @@ export struct SettingsPage {
       }
       .width('100%')
 
-      Divider().color(Theme.Border)
+      Divider().color(Theme.LiquidGlassBorderColor)
 
       // 连接速度
       Row() {
@@ -341,8 +352,10 @@ export struct SettingsPage {
     }
     .width('100%')
     .padding(Theme.SpacingMD)
-    .backgroundColor(Theme.BackgroundSecondary)
+    .backgroundColor(Theme.LiquidGlassBackground)
     .borderRadius(Theme.RadiusMedium)
+    .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
   }
 
   @Builder
@@ -366,8 +379,10 @@ export struct SettingsPage {
     }
     .width('100%')
     .padding(Theme.SpacingMD)
-    .backgroundColor(Theme.BackgroundSecondary)
+    .backgroundColor(Theme.LiquidGlassBackground)
     .borderRadius(Theme.RadiusMedium)
+    .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
     .onClick(() => {
       // 显示模型选择对话框
     })
@@ -377,17 +392,19 @@ export struct SettingsPage {
   PermissionModeItem() {
     Column({ space: Theme.SpacingSM }) {
       this.PermissionModeRow(PermissionMode.DEFAULT)
-      Divider().color(Theme.Border)
+      Divider().color(Theme.LiquidGlassBorderColor)
       this.PermissionModeRow(PermissionMode.ACCEPT_EDITS)
-      Divider().color(Theme.Border)
+      Divider().color(Theme.LiquidGlassBorderColor)
       this.PermissionModeRow(PermissionMode.PLAN)
-      Divider().color(Theme.Border)
+      Divider().color(Theme.LiquidGlassBorderColor)
       this.PermissionModeRow(PermissionMode.BYPASS_PERMISSIONS)
     }
     .width('100%')
     .padding(Theme.SpacingMD)
-    .backgroundColor(Theme.BackgroundSecondary)
+    .backgroundColor(Theme.LiquidGlassBackground)
     .borderRadius(Theme.RadiusMedium)
+    .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
   }
 
   @Builder
@@ -437,8 +454,10 @@ export struct SettingsPage {
     }
     .width('100%')
     .padding(Theme.SpacingMD)
-    .backgroundColor(Theme.BackgroundSecondary)
+    .backgroundColor(Theme.LiquidGlassBackground)
     .borderRadius(Theme.RadiusMedium)
+    .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
     .onClick(() => {
       // 切换主题
       if (this.themeMode === 'dark') {
@@ -479,7 +498,7 @@ export struct SettingsPage {
         // 导航到导入页面
       })
 
-      Divider().color(Theme.Border)
+      Divider().color(Theme.LiquidGlassBorderColor)
 
       // 存储管理
       Row() {
@@ -502,13 +521,15 @@ export struct SettingsPage {
       .width('100%')
       .padding({ top: Theme.SpacingSM, bottom: Theme.SpacingSM })
       .onClick(() => {
-        // 导航到存储管理页面
+        router.pushUrl({ url: 'pages/StorageManagementPage' })
       })
     }
     .width('100%')
     .padding(Theme.SpacingMD)
-    .backgroundColor(Theme.BackgroundSecondary)
+    .backgroundColor(Theme.LiquidGlassBackground)
     .borderRadius(Theme.RadiusMedium)
+    .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
   }
 
   @Builder
@@ -526,8 +547,10 @@ export struct SettingsPage {
     }
     .width('100%')
     .padding(Theme.SpacingMD)
-    .backgroundColor(Theme.BackgroundSecondary)
+    .backgroundColor(Theme.LiquidGlassBackground)
     .borderRadius(Theme.RadiusMedium)
+    .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
   }
 
   @Builder
@@ -545,8 +568,10 @@ export struct SettingsPage {
     }
     .width('100%')
     .padding(Theme.SpacingMD)
-    .backgroundColor(Theme.BackgroundSecondary)
+    .backgroundColor(Theme.LiquidGlassBackground)
     .borderRadius(Theme.RadiusMedium)
+    .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
   }
 
   @Builder
@@ -558,6 +583,7 @@ export struct SettingsPage {
       .fontColor(Color.White)
       .backgroundColor(Theme.ErrorColor)
       .borderRadius(Theme.RadiusMedium)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
       .onClick(() => {
         this.logout()
       })
@@ -587,11 +613,13 @@ export struct SettingsPage {
       TextInput({ placeholder: 'http://192.168.x.x:3456', text: this.editUrl })
         .width('100%')
         .height(44)
-        .backgroundColor(Theme.BackgroundTertiary)
+        .backgroundColor(Theme.LiquidGlassBackground)
         .borderRadius(8)
         .fontColor(Theme.TextPrimary)
+        .border({ width: 1, color: Theme.LiquidGlassBorderColor })
         .padding({ left: 12, right: 12 })
         .margin({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
         .onChange((value: string) => {
           this.editUrl = value
         })
@@ -607,9 +635,10 @@ export struct SettingsPage {
         Button('取消')
           .layoutWeight(1)
           .height(44)
-          .backgroundColor(Theme.BackgroundTertiary)
+          .backgroundColor(Theme.LiquidGlassBackground)
           .fontColor(Theme.TextPrimary)
           .borderRadius(8)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
           .onClick(() => {
             this.showLanEdit = false
           })
@@ -620,6 +649,7 @@ export struct SettingsPage {
           .backgroundColor(Theme.PrimaryColor)
           .fontColor(Theme.TextOnPrimary)
           .borderRadius(8)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
           .enabled(this.editUrl.length > 0)
           .onClick(() => {
             this.lanUrl = this.editUrl
@@ -646,11 +676,13 @@ export struct SettingsPage {
       TextInput({ placeholder: 'https://xxx.trycloudflare.com', text: this.editUrl })
         .width('100%')
         .height(44)
-        .backgroundColor(Theme.BackgroundTertiary)
+        .backgroundColor(Theme.LiquidGlassBackground)
         .borderRadius(8)
         .fontColor(Theme.TextPrimary)
+        .border({ width: 1, color: Theme.LiquidGlassBorderColor })
         .padding({ left: 12, right: 12 })
         .margin({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
         .onChange((value: string) => {
           this.editUrl = value
         })
@@ -666,9 +698,10 @@ export struct SettingsPage {
         Button('取消')
           .layoutWeight(1)
           .height(44)
-          .backgroundColor(Theme.BackgroundTertiary)
+          .backgroundColor(Theme.LiquidGlassBackground)
           .fontColor(Theme.TextPrimary)
           .borderRadius(8)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
           .onClick(() => {
             this.showTunnelEdit = false
           })
@@ -679,6 +712,7 @@ export struct SettingsPage {
           .backgroundColor(Theme.PrimaryColor)
           .fontColor(Theme.TextOnPrimary)
           .borderRadius(8)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
           .enabled(this.editUrl.length > 0)
           .onClick(() => {
             this.tunnelUrl = this.editUrl

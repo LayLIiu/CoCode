@@ -302,6 +302,8 @@ export struct ConversationListPage {
   @State refreshTrigger: number = 0
   @State showNewSessionDialog: boolean = false
 
+  private scroller: Scroller = new Scroller()
+
   aboutToAppear(): void {
     if (!this.sessions) {
       this.sessions = []
@@ -486,19 +488,73 @@ export struct ConversationListPage {
   build() {
     Stack() {
       Column() {
-        this.NavigationBar()
+        // 顶部固定区域（导航栏 + 搜索框）
+        Column() {
+          // 导航栏按钮行
+          Row() {
+            // 导入会话按钮
+            Column() {
+              SymbolGlyph($r('sys.symbol.arrow_down_circle'))
+                .fontSize(20)
+                .fontColor([Theme.TextPrimary])
+            }
+            .width(36)
+            .height(36)
+            .backgroundColor(Theme.GlassBackground)
+            .borderRadius(18)
+            .justifyContent(FlexAlign.Center)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+            .onClick(() => {
+              this.importSessions()
+            })
 
-        SearchBar({
-          searchText: $searchText,
-          onSearchChange: () => {
+            Text(this.pageTitle)
+              .fontSize(Theme.FontTitle)
+              .fontColor(Theme.TextPrimary)
+              .fontWeight(FontWeight.Bold)
+              .layoutWeight(1)
+              .textAlign(TextAlign.Center)
+
+            // 新建对话按钮
+            Column() {
+              SymbolGlyph($r('sys.symbol.plus'))
+                .fontSize(20)
+                .fontColor([Theme.TextPrimary])
+            }
+            .width(36)
+            .height(36)
+            .backgroundColor(Theme.GlassBackground)
+            .borderRadius(18)
+            .justifyContent(FlexAlign.Center)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+            .onClick(() => {
+              this.showNewSessionDialog = true
+            })
           }
-        })
-          .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: Theme.SpacingXL })
+          .width('100%')
+          .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
 
-        if (this.isLoading && (!this.sessions || this.sessions.length === 0)) {
-          this.LoadingState()
-        } else if (this.sessions && this.sessions.length > 0) {
-          List({ space: 0 }) {
+          // 搜索框
+          SearchBar({
+            searchText: $searchText,
+            onSearchChange: () => {
+            }
+          })
+            .width('100%')
+            .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: Theme.SpacingMD, bottom: Theme.SpacingMD })
+        }
+        .width('100%')
+        .backgroundColor(Theme.BackgroundPrimary)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+        .padding({ top: 50 })
+
+        // 会话列表（可滚动）
+        List({ space: 0, scroller: this.scroller }) {
+          if (this.isLoading && (!this.sessions || this.sessions.length === 0)) {
+            ListItem() {
+              this.LoadingState()
+            }
+          } else if (this.sessions && this.sessions.length > 0) {
             ForEach(this.getGroupedSessionArray(), (group: SessionGroup) => {
               ListItemGroup({
                 header: this.GroupHeader(group.groupName)
@@ -510,19 +566,22 @@ export struct ConversationListPage {
                 }, (session: Session) => `${session.id}-${this.refreshTrigger}`)
               }
             }, (group: SessionGroup) => group.groupName)
+          } else {
+            ListItem() {
+              this.EmptyState()
+            }
           }
-          .width('100%')
-          .layoutWeight(1)
-          .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: Theme.SpacingMD })
-          .scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.Spring)
-        } else {
-          this.EmptyState()
         }
+        .width('100%')
+        .layoutWeight(1)
+        .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       }
       .width('100%')
       .height('100%')
       .backgroundColor(Theme.BackgroundPrimary)
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
 
       // 新建对话弹窗
       NewSessionDialog({
@@ -532,52 +591,6 @@ export struct ConversationListPage {
     }
     .width('100%')
     .height('100%')
-  }
-
-  @Builder
-  NavigationBar() {
-    Row() {
-      // 导入会话按钮
-      Column() {
-        SymbolGlyph($r('sys.symbol.arrow_down_circle'))
-          .fontSize(20)
-          .fontColor([Theme.TextPrimary])
-      }
-      .width(36)
-      .height(36)
-      .backgroundColor(Theme.GlassBackground)
-      .borderRadius(18)
-      .justifyContent(FlexAlign.Center)
-      .onClick(() => {
-        this.importSessions()
-      })
-
-      Text(this.pageTitle)
-        .fontSize(Theme.FontTitle)
-        .fontColor(Theme.TextPrimary)
-        .fontWeight(FontWeight.Bold)
-        .layoutWeight(1)
-        .textAlign(TextAlign.Center)
-
-      // 新建对话按钮
-      Column() {
-        SymbolGlyph($r('sys.symbol.plus'))
-          .fontSize(20)
-          .fontColor([Theme.TextPrimary])
-      }
-      .width(36)
-      .height(36)
-      .backgroundColor(Theme.GlassBackground)
-      .borderRadius(18)
-      .justifyContent(FlexAlign.Center)
-      .onClick(() => {
-        this.showNewSessionDialog = true
-      })
-    }
-    .width('100%')
-    .height(80)
-    .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: 56 })
-    .alignItems(VerticalAlign.Center)
   }
 
   @Builder
@@ -603,7 +616,7 @@ export struct ConversationListPage {
         .margin({ top: Theme.SpacingMD })
     }
     .width('100%')
-    .layoutWeight(1)
+    .height(300)
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
   }
@@ -626,7 +639,7 @@ export struct ConversationListPage {
         .fontColor(Theme.TextSecondary)
     }
     .width('100%')
-    .layoutWeight(1)
+    .height(300)
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
   }

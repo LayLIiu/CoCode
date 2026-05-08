@@ -1,8 +1,8 @@
 import { Theme } from '../common/Theme'
-import { hdsMaterial } from '@hms.hds.hdsMaterial'
 
 /**
- * 搜索栏组件 - 沉浸光感液态玻璃效果
+ * 搜索栏组件 - 鸿蒙6.1.0液态玻璃效果
+ * 精致液态玻璃：光泽感 + 通透感
  */
 @Component
 export struct SearchBar {
@@ -11,45 +11,79 @@ export struct SearchBar {
   onSearchChange: () => void = () => {}
 
   build() {
-    Row() {
-      Image($r('app.media.ic_search'))
-        .width(20)
-        .height(20)
-        .fillColor(Theme.TextSecondary)
-        .margin({ right: Theme.SpacingSM })
-      
-      TextInput({ placeholder: this.placeholder, text: this.searchText })
-        .layoutWeight(1)
-        .height(40)
-        .backgroundColor(Color.Transparent) // 透明背景，让容器材质透出
-        .placeholderColor(Theme.TextSecondary)
-        .placeholderFont({ size: Theme.FontBody })
-        .fontColor(Theme.TextPrimary)
-        .fontSize(Theme.FontBody)
-        .caretColor(Theme.AccentBlue)
-        .onChange((value: string) => {
-          this.searchText = value
-          this.onSearchChange()
+    Stack() {
+      // 底层：液态玻璃背景
+      Row()
+        .width('100%')
+        .height('100%')
+        .backgroundColor('rgba(255, 255, 255, 0.06)')
+        .backdropBlur(30)
+        .borderRadius(24)
+
+      // 中层：光泽渐变层
+      Row()
+        .width('100%')
+        .height('100%')
+        .borderRadius(24)
+        .linearGradient({
+          angle: 145,
+          colors: [
+            ['rgba(255, 255, 255, 0.18)', 0.0],
+            ['rgba(255, 255, 255, 0.03)', 0.4],
+            ['rgba(255, 255, 255, 0.01)', 0.6],
+            ['rgba(255, 255, 255, 0.12)', 1.0]
+          ]
         })
-      
-      if (this.searchText.length > 0) {
-        Image($r('app.media.ic_clear'))
-          .width(18)
-          .height(18)
+
+      // 内容层
+      Row() {
+        // 搜索图标
+        Image($r('app.media.ic_search'))
+          .width(20)
+          .height(20)
           .fillColor(Theme.TextSecondary)
-          .onClick(() => {
-            this.searchText = ''
+          .margin({ right: Theme.SpacingSM })
+
+        // 输入框
+        TextInput({ placeholder: this.placeholder, text: this.searchText })
+          .layoutWeight(1)
+          .height(40)
+          .backgroundColor(Color.Transparent)
+          .placeholderColor(Theme.TextSecondary)
+          .placeholderFont({ size: Theme.FontBody })
+          .fontColor(Theme.TextPrimary)
+          .fontSize(Theme.FontBody)
+          .caretColor(Theme.AccentBlue)
+          .onChange((value: string) => {
+            this.searchText = value
             this.onSearchChange()
           })
+
+        // 清除按钮
+        if (this.searchText.length > 0) {
+          Image($r('app.media.ic_clear'))
+            .width(18)
+            .height(18)
+            .fillColor(Theme.TextSecondary)
+            .onClick(() => {
+              this.searchText = ''
+              this.onSearchChange()
+            })
+        }
       }
+      .width('100%')
+      .height('100%')
+      .padding({ left: Theme.SpacingMD, right: Theme.SpacingMD })
     }
     .width('100%')
-    .height(44)
-    .padding({ left: Theme.SpacingMD, right: Theme.SpacingMD })
-    // 沉浸光感液态玻璃核心效果
-    .backgroundColor('rgba(255, 255, 255, 0.08)') // 半透明白色背景
-    .backgroundBlurStyle(BlurStyle.Regular) // 常规背景模糊
-    .borderRadius(Theme.RadiusLarge)
-    .border({ width: 1, color: 'rgba(255, 255, 255, 0.1)' }) // 玻璃边缘高光
+    .height(48)
+    .borderRadius(24)
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.18)' })
+    .shadow({
+      radius: 12,
+      color: 'rgba(0, 0, 0, 0.2)',
+      offsetX: 0,
+      offsetY: 3
+    })
   }
 }

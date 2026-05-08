@@ -45,11 +45,11 @@ export default class EntryAbility extends UIAbility {
         hilog.error(DOMAIN, 'testTag', 'Failed to set window layout full screen. Cause: %{public}s', JSON.stringify(err));
       });
       
-      // 设置状态栏颜色为黑色
+      // 设置状态栏透明，实现全面屏沉浸式效果
       mainWindow.setWindowSystemBarProperties({
-        statusBarColor: '#000000',
+        statusBarColor: '#00000000',
         statusBarContentColor: '#FFFFFF',
-        navigationBarColor: '#000000',
+        navigationBarColor: '#00000000',
         navigationBarContentColor: '#FFFFFF'
       }).then(() => {
         hilog.info(DOMAIN, 'testTag', 'Succeeded in setting system bar properties.');

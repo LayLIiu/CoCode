@@ -42,7 +42,14 @@ export struct LoginPage {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(Theme.BackgroundPrimary)
+    .linearGradient({
+      angle: 180,
+      colors: [
+        [Theme.BackgroundGradientStart, 0.0],
+        [Theme.BackgroundGradientMiddle, 0.5],
+        [Theme.BackgroundGradientEnd, 1.0]
+      ]
+    })
     .padding({ top: 60 })
   }
 
@@ -73,9 +80,10 @@ export struct LoginPage {
         .fontWeight(FontWeight.Medium)
         .layoutWeight(1)
         .height(44)
-        .backgroundColor(this.mode === 'pairing' ? Theme.PrimaryColor : 'transparent')
+        .backgroundColor(this.mode === 'pairing' ? Theme.PrimaryColor : Theme.LiquidGlassBackground)
         .fontColor(this.mode === 'pairing' ? Theme.TextOnPrimary : Theme.TextSecondary)
         .borderRadius(8)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
         .onClick(() => {
           this.mode = 'pairing'
         })
@@ -85,16 +93,19 @@ export struct LoginPage {
         .fontWeight(FontWeight.Medium)
         .layoutWeight(1)
         .height(44)
-        .backgroundColor(this.mode === 'manual' ? Theme.PrimaryColor : 'transparent')
+        .backgroundColor(this.mode === 'manual' ? Theme.PrimaryColor : Theme.LiquidGlassBackground)
         .fontColor(this.mode === 'manual' ? Theme.TextOnPrimary : Theme.TextSecondary)
         .borderRadius(8)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
         .onClick(() => {
           this.mode = 'manual'
         })
     }
     .width('85%')
-    .backgroundColor(Theme.BackgroundSecondary)
+    .backgroundColor(Theme.LiquidGlassBackground)
     .borderRadius(12)
+    .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
     .padding(4)
     .margin({ bottom: 24 })
   }
@@ -112,9 +123,11 @@ export struct LoginPage {
         TextInput({ placeholder: '粘贴连接串或 IP:端口:配对码' })
           .width('85%')
           .height(48)
-          .backgroundColor(Theme.BackgroundSecondary)
+          .backgroundColor(Theme.LiquidGlassBackground)
           .borderRadius(8)
           .fontColor(Theme.TextPrimary)
+          .border({ width: 1, color: Theme.LiquidGlassBorderColor })
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
           .onChange((value: string) => {
             this.pairingCode = value
           })
@@ -140,6 +153,7 @@ export struct LoginPage {
         .backgroundColor(this.pairingCode && !this.isConnecting ? Theme.PrimaryColor : Theme.TextTertiary)
         .fontColor(Theme.TextOnPrimary)
         .borderRadius(12)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
         .enabled(!!this.pairingCode && !this.isConnecting)
         .onClick(() => {
           this.connectWithPairingCode()
@@ -162,9 +176,11 @@ export struct LoginPage {
         TextInput({ placeholder: 'http://192.168.1.100:3456' })
           .width('85%')
           .height(48)
-          .backgroundColor(Theme.BackgroundSecondary)
+          .backgroundColor(Theme.LiquidGlassBackground)
           .borderRadius(8)
           .fontColor(Theme.TextPrimary)
+          .border({ width: 1, color: Theme.LiquidGlassBorderColor })
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
           .onChange((value: string) => {
             this.serverUrl = value
           })
@@ -190,6 +206,7 @@ export struct LoginPage {
         .backgroundColor(this.serverUrl && !this.isConnecting ? Theme.PrimaryColor : Theme.TextTertiary)
         .fontColor(Theme.TextOnPrimary)
         .borderRadius(12)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
         .enabled(!!this.serverUrl && !this.isConnecting)
         .onClick(() => {
           this.connectManual()
@@ -214,8 +231,10 @@ export struct LoginPage {
     }
     .width('85%')
     .padding(20)
-    .backgroundColor(Theme.BackgroundSecondary)
+    .backgroundColor(Theme.LiquidGlassBackground)
     .borderRadius(12)
+    .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
     .margin({ top: 24 })
   }
 

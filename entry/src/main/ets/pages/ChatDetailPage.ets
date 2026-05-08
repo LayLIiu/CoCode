@@ -166,118 +166,121 @@ struct ChatDetailPage {
   }
 
   build() {
-    Stack() {
-      Column() {
-        // 顶部导航栏
-        this.NavigationBar()
-
-        // 消息列表区域
+    Column() {
+      // 顶部固定标题栏
+      Row() {
+        // 返回按钮
         Column() {
-          List({ scroller: this.scroller }) {
-            if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' || this.chatStatus === 'tool_executing') {
-              ListItem() {
-                this.StreamingIndicator()
-              }
-            }
-
-            ForEach(this.messages, (message: Message) => {
-              ListItem() {
-                this.MessageBubble(message)
-              }
-            }, (message: Message) => message.id)
-
-            // 底部留白，避免最后一条消息被输入框遮挡
-            ListItem() {
-              Row().width('100%').height(24)
-            }
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: Theme.SpacingSM })
-          .scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.Spring)
+          SymbolGlyph($r('sys.symbol.chevron_left'))
+            .fontSize(20)
+            .fontColor([Theme.TextPrimary])
         }
-        .width('100%')
+        .width(36)
+        .height(36)
+        .backgroundColor(Theme.GlassBackground)
+        .borderRadius(18)
+        .justifyContent(FlexAlign.Center)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+        .onClick(() => {
+          router.back()
+        })
+
+        Column({ space: 2 }) {
+          Text(this.conversationTitle)
+            .fontSize(Theme.FontBody)
+            .fontColor(Theme.TextPrimary)
+            .fontWeight(FontWeight.Medium)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+          Text(this.getStatusText())
+            .fontSize(Theme.FontTiny)
+            .fontColor(this.getStatusColor())
+        }
         .layoutWeight(1)
+        .alignItems(HorizontalAlign.Center)
+        .margin({ left: 8, right: 8 })
 
-        // 底部输入区域
+        // 菜单按钮
         Column() {
-          this.InputAreaContent()
+          SymbolGlyph($r('sys.symbol.ellipsis_circle'))
+            .fontSize(20)
+            .fontColor([Theme.TextPrimary])
         }
-        .width('100%')
-        .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: 8, bottom: 16 })
+        .width(36)
+        .height(36)
+        .backgroundColor(Theme.GlassBackground)
+        .borderRadius(18)
+        .justifyContent(FlexAlign.Center)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+        .onClick(() => {
+          this.showMenu = !this.showMenu
+        })
       }
       .width('100%')
-      .height('100%')
+      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: 50, bottom: Theme.SpacingMD })
       .backgroundColor(Theme.BackgroundPrimary)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
 
-      // 弹出菜单
-      if (this.showMenu) {
-        this.MenuPopup()
-      }
+      // 消息列表（可滚动）
+      List({ scroller: this.scroller }) {
+        if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' || this.chatStatus === 'tool_executing') {
+          ListItem() {
+            this.StreamingIndicator()
+          }
+        }
 
-      // 模型选择器
-      if (this.showModelSelector) {
-        this.ModelSelectorPopup()
-      }
+        ForEach(this.messages, (message: Message) => {
+          ListItem() {
+            this.MessageBubble(message)
+          }
+        }, (message: Message) => message.id)
 
-      // 斜杠命令
-      if (this.showSlashCommands) {
-        this.SlashCommandsPopup()
+        // 底部留白（给输入框留空间）
+        ListItem() {
+          Row().width('100%').height(80)
+        }
       }
+      .width('100%')
+      .layoutWeight(1)
+      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+
+      // 底部固定输入框
+      Column() {
+        this.InputAreaContent()
+      }
+      .width('100%')
+      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, bottom: Theme.SpacingLG })
+      .backgroundColor(Theme.BackgroundPrimary)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
     }
     .width('100%')
     .height('100%')
-  }
-
-  @Builder
-  NavigationBar() {
-    Row() {
-      Column() {
-        SymbolGlyph($r('sys.symbol.chevron_left'))
-          .fontSize(20)
-          .fontColor([Theme.TextPrimary])
-      }
-      .width(36)
-      .height(36)
-      .backgroundColor(Theme.GlassBackground)
-      .borderRadius(18)
-      .justifyContent(FlexAlign.Center)
-      .onClick(() => {
-        router.back()
-      })
-
-      Column({ space: 2 }) {
-        Text(this.conversationTitle)
-          .fontSize(16)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TextPrimary)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-        Text(this.getStatusText())
-          .fontSize(12)
-          .fontColor(this.getStatusColor())
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Center)
-
-      Column() {
-        SymbolGlyph($r('sys.symbol.ellipsis_circle'))
-          .fontSize(20)
-          .fontColor([Theme.TextPrimary])
-      }
-      .width(36)
-      .height(36)
-      .backgroundColor(Theme.GlassBackground)
-      .borderRadius(18)
-      .justifyContent(FlexAlign.Center)
-    }
-    .width('100%')
-    .height(90)
-    .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: 56 })
-    .alignItems(VerticalAlign.Center)
     .backgroundColor(Theme.BackgroundPrimary)
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+    .bindContentCover(this.showMenu, this.MenuPopup(), {
+      modalTransition: ModalTransition.NONE,
+      backgroundColor: Color.Transparent,
+      onDisappear: () => {
+        this.showMenu = false
+      }
+    })
+    .bindContentCover(this.showModelSelector, this.ModelSelectorPopup(), {
+      modalTransition: ModalTransition.NONE,
+      backgroundColor: Color.Transparent,
+      onDisappear: () => {
+        this.showModelSelector = false
+      }
+    })
+    .bindContentCover(this.showSlashCommands, this.SlashCommandsPopup(), {
+      modalTransition: ModalTransition.NONE,
+      backgroundColor: Color.Transparent,
+      onDisappear: () => {
+        this.showSlashCommands = false
+      }
+    })
   }
 
   @Builder
@@ -661,8 +664,9 @@ struct ChatDetailPage {
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .backgroundColor(Theme.BackgroundSecondary)
+    .backgroundColor(Theme.LiquidGlassBackground)
     .borderRadius(24)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
   }
 
   // 菜单弹出

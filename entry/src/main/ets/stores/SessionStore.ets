@@ -760,6 +760,32 @@ export class SessionStore {
     this.taskBarExpanded = false
     this.notifySessionsChanged()
   }
+
+  // MARK: - 清除所有数据
+
+  async clearAllSessions(): Promise<void> {
+    // 断开所有 WebSocket 连接
+    this.disconnectAllSessions()
+
+    // 清除所有本地存储的数据
+    for (const session of this.sessions) {
+      await storageService.deleteMessages(session.id)
+    }
+
+    // 清空内存数据
+    this.sessions = []
+    this.messages.clear()
+    this.sessionStatuses.clear()
+    this.sessionTasks.clear()
+    this.currentSessionId = null
+
+    // 清除本地存储
+    await storageService.saveSessions([])
+    await storageService.saveSessionStatuses(new Map())
+
+    this.notifySessionsChanged()
+    console.info('[SessionStore] All sessions cleared')
+  }
 }
 
 export const sessionStore = SessionStore.getInstance()
