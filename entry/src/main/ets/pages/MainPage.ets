@@ -9,6 +9,7 @@ import { SettingsPage } from './SettingsPage'
 
 /**
  * 主页面 - 使用 HdsTabs 实现原生液态玻璃Tab栏
+ * 所有 Tab 都使用真实服务器数据
  */
 @Component
 export struct MainPage {
@@ -17,7 +18,7 @@ export struct MainPage {
 
   build() {
     HdsTabs({ controller: this.tabsController }) {
-      // Claude Tab
+      // Claude Tab - 真实服务器数据
       TabContent() {
         ConversationListPage({
           tabType: TabType.CLAUDE,
@@ -31,7 +32,7 @@ export struct MainPage {
           .fontColor([$r('sys.color.ohos_id_color_activated')])
       }, 'Claude'))
 
-      // Codex Tab
+      // Codex Tab - 真实服务器数据
       TabContent() {
         ConversationListPage({
           tabType: TabType.CODEX,
@@ -45,7 +46,7 @@ export struct MainPage {
           .fontColor([$r('sys.color.ohos_id_color_activated')])
       }, 'Codex'))
 
-      // Open Code Tab
+      // Open Code Tab - 真实服务器数据
       TabContent() {
         ConversationListPage({
           tabType: TabType.OPEN_CODE,

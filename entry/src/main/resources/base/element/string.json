@@ -13,6 +13,10 @@
       "value": "label"
     },
     {
+      "name": "internet_permission",
+      "value": "用于网络通信"
+    },
+    {
       "name": "float_window_permission",
       "value": "用于显示悬浮导航栏"
     },

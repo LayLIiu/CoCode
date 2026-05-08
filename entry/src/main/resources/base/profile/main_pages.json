@@ -1,6 +1,8 @@
 {
   "src": [
     "pages/Index",
-    "pages/ChatDetailPage"
+    "pages/LoginPage",
+    "pages/ChatDetailPage",
+    "pages/ImportSessionPage"
   ]
 }

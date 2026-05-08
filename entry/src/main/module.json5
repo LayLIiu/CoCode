@@ -48,6 +48,10 @@
     ],
     "requestPermissions": [
       {
+        "name": "ohos.permission.INTERNET",
+        "reason": "$string:internet_permission"
+      },
+      {
         "name": "ohos.permission.SYSTEM_FLOAT_WINDOW",
         "reason": "$string:float_window_permission"
       }
