@@ -2,6 +2,8 @@
  * 会话列表页面 - 根据 Tab 类型过滤显示会话
  */
 
+import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
+import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import { Theme } from '../common/Theme'
 import { Constants, TabIndex } from '../common/Constants'
 import { TabType, DateGroup } from '../viewmodel/ConversationModel'
@@ -313,6 +315,22 @@ export struct ConversationListPage {
 
   private scroller: Scroller = new Scroller()
 
+  private subIcon: HdsNavigationBadgeIconOptions = {
+    content: {
+      icon: $r('sys.symbol.arrow_down_circle'),
+      action: () => { this.importSessions() }
+    }
+  }
+
+  private menus: Array<HdsNavigationBadgeIconOptions> = [
+    {
+      content: {
+        icon: $r('sys.symbol.plus'),
+        action: () => { this.showNewSessionDialog = true }
+      }
+    }
+  ]
+
   aboutToAppear(): void {
     if (!this.sessions) {
       this.sessions = []
@@ -496,110 +514,77 @@ export struct ConversationListPage {
 
   build() {
     Stack() {
-      // 底层：会话列表（延伸到屏幕最顶部）
-      List({ space: 0, scroller: this.scroller }) {
-        if (this.isLoading && (!this.sessions || this.sessions.length === 0)) {
+      HdsNavigation() {
+        // 会话列表（延伸到屏幕最顶部，向上滑时内容可延伸到标题栏后面）
+        List({ space: 0, scroller: this.scroller }) {
+          // 顶部占位：让列表内容默认从搜索框下方开始
           ListItem() {
-            this.LoadingState()
+            Column().width('100%').height(135)
           }
-        } else if (this.sessions && this.sessions.length > 0) {
-          // 顶部占位：让列表内容默认从搜索框下方开始，向上滑时可延伸到最顶部
-          ListItem() {
-            Column().width('100%').height(158)
-          }
-          ForEach(this.getGroupedSessionArray(), (group: SessionGroup) => {
-            ListItemGroup({
-              header: this.GroupHeader(group.groupName)
-            }) {
-              ForEach(group.sessions, (session: Session) => {
-                ListItem() {
-                  SessionItemView({ session: session, refreshTrigger: this.refreshTrigger })
-                }
-              }, (session: Session) => `${session.id}-${this.refreshTrigger}`)
+
+          if (this.isLoading && (!this.sessions || this.sessions.length === 0)) {
+            ListItem() {
+              this.LoadingState()
             }
-          }, (group: SessionGroup) => group.groupName)
-        } else {
-          ListItem() {
-            this.EmptyState()
+          } else if (this.sessions && this.sessions.length > 0) {
+            ForEach(this.getGroupedSessionArray(), (group: SessionGroup) => {
+              ListItemGroup({
+                header: this.GroupHeader(group.groupName)
+              }) {
+                ForEach(group.sessions, (session: Session) => {
+                  ListItem() {
+                    SessionItemView({ session: session, refreshTrigger: this.refreshTrigger })
+                  }
+                }, (session: Session) => `${session.id}-${this.refreshTrigger}`)
+              }
+            }, (group: SessionGroup) => group.groupName)
+          } else {
+            ListItem() {
+              this.EmptyState()
+            }
           }
-        }
-      }
-      .width('100%')
-      .height('100%')
-      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
-
-      // 上层：浮动标题栏 + 搜索框（透明背景，内容可透到下方）
-      Column() {
-        // 导航栏按钮行
-        Row() {
-          // 导入会话按钮 - 液态玻璃
-          Column() {
-            SymbolGlyph($r('sys.symbol.arrow_down_circle'))
-              .fontSize(20)
-              .fontColor([Theme.TextPrimary])
-          }
-          .width(36)
-          .height(36)
-          .backgroundColor('#40FFFFFF')
-          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-          .shadow({ radius: 20, color: '#33000000', offsetX: 0, offsetY: 2 })
-          .borderRadius(18)
-          .borderWidth(1)
-          .borderColor('#80FFFFFF')
-          .outline({ width: 1, color: '#1A000000', radius: 18 })
-          .linearGradient({ angle: 180, colors: [['#10FFFFFF', 0.0], ['#00FFFFFF', 0.3]] })
-          .justifyContent(FlexAlign.Center)
-          .onClick(() => {
-            this.importSessions()
-          })
-
-          Text(this.pageTitle)
-            .fontSize(20)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Theme.TextPrimary)
-            .layoutWeight(1)
-            .textAlign(TextAlign.Center)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-          // 新建对话按钮 - 液态玻璃
-          Column() {
-            SymbolGlyph($r('sys.symbol.plus'))
-              .fontSize(20)
-              .fontColor([Theme.TextPrimary])
-          }
-          .width(36)
-          .height(36)
-          .backgroundColor('#40FFFFFF')
-          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-          .shadow({ radius: 20, color: '#33000000', offsetX: 0, offsetY: 2 })
-          .borderRadius(18)
-          .borderWidth(1)
-          .borderColor('#80FFFFFF')
-          .outline({ width: 1, color: '#1A000000', radius: 18 })
-          .linearGradient({ angle: 180, colors: [['#10FFFFFF', 0.0], ['#00FFFFFF', 0.3]] })
-          .justifyContent(FlexAlign.Center)
-          .onClick(() => {
-            this.showNewSessionDialog = true
-          })
         }
         .width('100%')
+        .layoutWeight(1)
         .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
-
-        // 搜索框
-        SearchBar({
-          searchText: $searchText,
-          onSearchChange: () => {
-          }
-        })
-          .width('100%')
-          .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: Theme.SpacingMD, bottom: Theme.SpacingMD })
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       }
-      .width('100%')
+      .titleBar({
+        content: {
+          title: {
+            mainTitle: this.pageTitle,
+          },
+          subIcon: this.subIcon,
+          menu: { value: this.menus },
+        },
+        style: {
+          scrollEffectOpts: {
+            enableScrollEffect: false,
+            scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
+          },
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.ADAPTIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+          },
+        },
+        avoidLayoutSafeArea: true,
+        enableComponentSafeArea: false,
+      })
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .hideBackButton(true)
       .backgroundColor(Color.Transparent)
-      .padding({ top: 50 })
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+
+      // 浮动搜索框（在导航栏下方，不随列表滚动）
+      SearchBar({
+        searchText: $searchText,
+        onSearchChange: () => {
+        }
+      })
+        .width('100%')
+        .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+        .position({ x: 0, y: 96 })
 
       // 新建对话弹窗
       NewSessionDialog({
@@ -610,8 +595,6 @@ export struct ConversationListPage {
     .width('100%')
     .height('100%')
     .backgroundColor('#121214')
-    .alignContent(Alignment.Top)
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
   @Builder

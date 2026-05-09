@@ -2,7 +2,7 @@ import { Theme } from '../common/Theme'
 
 /**
  * 搜索栏组件 - 鸿蒙6.1.0液态玻璃效果
- * 精致液态玻璃：光泽感 + 通透感
+ * 液态玻璃：backgroundBlurStyle + backgroundBlur + 半透明背景 + 光泽渐变
  */
 @Component
 export struct SearchBar {
@@ -12,15 +12,7 @@ export struct SearchBar {
 
   build() {
     Stack() {
-      // 底层：沉浸光感玻璃背景
-      Row()
-        .width('100%')
-        .height('100%')
-        .backgroundColor(Theme.GlassBackground)
-        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-        .borderRadius(24)
-
-      // 中层：光泽渐变层
+      // 光泽渐变层
       Row()
         .width('100%')
         .height('100%')
@@ -78,7 +70,9 @@ export struct SearchBar {
     .width('100%')
     .height(48)
     .borderRadius(24)
-    .border({ width: 0.5, color: Theme.GlassBorder })
+    .backgroundColor('rgba(255, 255, 255, 0.6)')
+    .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.3)' })
     .shadow({
       radius: 12,
       color: 'rgba(0, 0, 0, 0.2)',
