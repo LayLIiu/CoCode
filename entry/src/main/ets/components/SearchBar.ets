@@ -12,12 +12,12 @@ export struct SearchBar {
 
   build() {
     Stack() {
-      // 底层：液态玻璃背景
+      // 底层：沉浸光感玻璃背景
       Row()
         .width('100%')
         .height('100%')
-        .backgroundColor('rgba(255, 255, 255, 0.06)')
-        .backdropBlur(30)
+        .backgroundColor(Theme.GlassBackground)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
         .borderRadius(24)
 
       // 中层：光泽渐变层
@@ -78,7 +78,7 @@ export struct SearchBar {
     .width('100%')
     .height(48)
     .borderRadius(24)
-    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.18)' })
+    .border({ width: 0.5, color: Theme.GlassBorder })
     .shadow({
       radius: 12,
       color: 'rgba(0, 0, 0, 0.2)',

@@ -55,7 +55,7 @@ export struct LiquidGlassTabBarAdvanced {
       }
       .barHeight(0)  // 隐藏默认TabBar
       .barOverlap(true)  // 允许TabBar叠加在内容上
-      .barBackgroundBlurStyle(BlurStyle.Thin)  // 毛玻璃模糊效果
+      .barBackgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)  // 沉浸光感模糊效果
       .width('100%')
       .layoutWeight(1)
       .onChange((index: number) => {
@@ -91,10 +91,10 @@ export struct LiquidGlassTabBarAdvanced {
       }
       .width('90%')
       .height(56)
-      .backgroundColor(Theme.GlassBackground)  // 玻璃背景
-      .backdropBlur(20)  // 背景模糊
+      .backgroundColor(Theme.GlassBackground)  // 沉浸光感背景
+      .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
       .borderRadius(28)
-      .border({ width: 1, color: Theme.GlassBorder })
+      .border({ width: 0.5, color: Theme.GlassBorder })
       .margin({ bottom: Theme.SpacingLG })
       .shadow({
         radius: 20,

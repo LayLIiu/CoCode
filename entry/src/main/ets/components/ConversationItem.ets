@@ -84,7 +84,7 @@ export struct ConversationItem {
         .width(48)
         .height(48)
         .backgroundColor(this.conversation.iconTheme)
-        .backgroundBlurStyle(BlurStyle.Thin)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
         .borderRadius(Theme.RadiusMedium)
         .border({ width: 1, color: 'rgba(255, 255, 255, 0.1)' })
         .opacity(0.25)

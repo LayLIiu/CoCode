@@ -24,10 +24,10 @@ export struct ChatNavigationBar {
         }
         .width(36)
         .height(36)
-        .backgroundColor('rgba(255, 255, 255, 0.1)')
-        .backgroundBlurStyle(BlurStyle.Thin)
+        .backgroundColor(Theme.GlassBackground)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
         .borderRadius(18)
-        .border({ width: 1, color: 'rgba(255, 255, 255, 0.1)' })
+        .border({ width: 0.5, color: Theme.GlassBorder })
         .justifyContent(FlexAlign.Center)
         .onClick(() => {
           this.onBackClick()
@@ -53,10 +53,10 @@ export struct ChatNavigationBar {
         }
         .width(36)
         .height(36)
-        .backgroundColor('rgba(255, 255, 255, 0.1)')
-        .backgroundBlurStyle(BlurStyle.Thin)
+        .backgroundColor(Theme.GlassBackground)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
         .borderRadius(18)
-        .border({ width: 1, color: 'rgba(255, 255, 255, 0.1)' })
+        .border({ width: 0.5, color: Theme.GlassBorder })
         .justifyContent(FlexAlign.Center)
         .onClick(() => {
           this.onMenuClick()

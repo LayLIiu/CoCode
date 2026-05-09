@@ -158,7 +158,7 @@ struct StorageManagementPage {
         .backgroundColor('rgba(255, 255, 255, 0.08)')
         .borderRadius(18)
         .justifyContent(FlexAlign.Center)
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
         .onClick(() => {
           router.back()
         })
@@ -192,12 +192,12 @@ struct StorageManagementPage {
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .bindSheet($$this.showClearCacheConfirm, this.ClearCacheConfirmSheet(), {
       height: 200,
-      backgroundColor: Theme.LiquidGlassBackground,
+      backgroundColor: Theme.GlassBackground,
       dragBar: true
     })
     .bindSheet($$this.showDeleteSessionsConfirm, this.DeleteSessionsConfirmSheet(), {
       height: 220,
-      backgroundColor: Theme.LiquidGlassBackground,
+      backgroundColor: Theme.GlassBackground,
       dragBar: true
     })
   }
@@ -218,7 +218,7 @@ struct StorageManagementPage {
           Progress({ value: 0, total: 100, type: ProgressType.Ring })
             .width(120)
             .height(120)
-            .color(Theme.LiquidGlassBorderColor)
+            .color(Theme.GlassBorder)
 
           // 已使用
           Progress({ value: this.storageInfo.cacheSize / 1024, total: 100, type: ProgressType.Ring })
@@ -267,9 +267,9 @@ struct StorageManagementPage {
       }
       .width('100%')
       .padding(Theme.SpacingLG)
-      .backgroundColor(Theme.LiquidGlassBackground)
+      .backgroundColor(Theme.GlassBackground)
       .borderRadius(Theme.RadiusMedium)
-      .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+      .border({ width: 0.5, color: Theme.GlassBorder })
       .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
     }
     .width('100%')
@@ -310,7 +310,7 @@ struct StorageManagementPage {
           router.back()
         })
 
-        Divider().color(Theme.LiquidGlassBorderColor)
+        Divider().color(Theme.GlassBorder)
 
         // 消息记录
         Row() {
@@ -333,9 +333,9 @@ struct StorageManagementPage {
         .width('100%')
         .padding(Theme.SpacingMD)
       }
-      .backgroundColor(Theme.LiquidGlassBackground)
+      .backgroundColor(Theme.GlassBackground)
       .borderRadius(Theme.RadiusMedium)
-      .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+      .border({ width: 0.5, color: Theme.GlassBorder })
       .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
     }
     .width('100%')
@@ -372,7 +372,7 @@ struct StorageManagementPage {
         .width('100%')
         .padding(Theme.SpacingMD)
 
-        Divider().color(Theme.LiquidGlassBorderColor)
+        Divider().color(Theme.GlassBorder)
 
         // 网络缓存
         Row() {
@@ -395,7 +395,7 @@ struct StorageManagementPage {
         .width('100%')
         .padding(Theme.SpacingMD)
 
-        Divider().color(Theme.LiquidGlassBorderColor)
+        Divider().color(Theme.GlassBorder)
 
         // 清除缓存按钮
         Row() {
@@ -424,9 +424,9 @@ struct StorageManagementPage {
           }
         })
       }
-      .backgroundColor(Theme.LiquidGlassBackground)
+      .backgroundColor(Theme.GlassBackground)
       .borderRadius(Theme.RadiusMedium)
-      .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+      .border({ width: 0.5, color: Theme.GlassBorder })
       .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
     }
     .width('100%')
@@ -460,9 +460,9 @@ struct StorageManagementPage {
       }
       .width('100%')
       .padding(Theme.SpacingMD)
-      .backgroundColor(Theme.LiquidGlassBackground)
+      .backgroundColor(Theme.GlassBackground)
       .borderRadius(Theme.RadiusMedium)
-      .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+      .border({ width: 0.5, color: Theme.GlassBorder })
       .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
       .onClick(() => {
         // 可以展示最近目录列表
@@ -505,9 +505,9 @@ struct StorageManagementPage {
           this.showDeleteSessionsConfirm = true
         })
       }
-      .backgroundColor(Theme.LiquidGlassBackground)
+      .backgroundColor(Theme.GlassBackground)
       .borderRadius(Theme.RadiusMedium)
-      .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+      .border({ width: 0.5, color: Theme.GlassBorder })
       .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
     }
     .width('100%')
@@ -535,10 +535,10 @@ struct StorageManagementPage {
         Button('取消')
           .layoutWeight(1)
           .height(44)
-          .backgroundColor(Theme.LiquidGlassBackground)
+          .backgroundColor(Theme.GlassBackground)
           .fontColor(Theme.TextPrimary)
           .borderRadius(8)
-          .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
           .onClick(() => {
             this.showClearCacheConfirm = false
           })
@@ -549,7 +549,7 @@ struct StorageManagementPage {
           .backgroundColor(Theme.WarningColor)
           .fontColor(Color.White)
           .borderRadius(8)
-          .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
           .onClick(async () => {
             this.isClearing = true
             this.showClearCacheConfirm = false
@@ -585,10 +585,10 @@ struct StorageManagementPage {
         Button('取消')
           .layoutWeight(1)
           .height(44)
-          .backgroundColor(Theme.LiquidGlassBackground)
+          .backgroundColor(Theme.GlassBackground)
           .fontColor(Theme.TextPrimary)
           .borderRadius(8)
-          .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
           .onClick(() => {
             this.showDeleteSessionsConfirm = false
           })
@@ -599,7 +599,7 @@ struct StorageManagementPage {
           .backgroundColor(Theme.ErrorColor)
           .fontColor(Color.White)
           .borderRadius(8)
-          .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
           .onClick(async () => {
             this.showDeleteSessionsConfirm = false
             await this.deleteAllSessions()

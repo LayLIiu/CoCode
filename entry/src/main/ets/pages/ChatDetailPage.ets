@@ -415,7 +415,7 @@ struct ChatDetailPage {
         .backgroundColor(Theme.GlassBackground)
         .borderRadius(18)
         .justifyContent(FlexAlign.Center)
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
         .onClick(() => {
           router.back()
         })
@@ -447,7 +447,7 @@ struct ChatDetailPage {
         .backgroundColor(Theme.GlassBackground)
         .borderRadius(18)
         .justifyContent(FlexAlign.Center)
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
         .onClick(() => {
           this.showMenu = !this.showMenu
         })
@@ -455,7 +455,7 @@ struct ChatDetailPage {
       .width('100%')
       .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: 50, bottom: Theme.SpacingMD })
       .backgroundColor(Theme.BackgroundPrimary)
-      .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
 
       // 消息列表（可滚动）
       List({ scroller: this.scroller }) {
@@ -568,7 +568,7 @@ struct ChatDetailPage {
           .backgroundColor(Theme.GlassBackground)
           .borderRadius(18)
           .border({ width: 0.5, color: Theme.GlassBorder })
-          .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
           .onClick(() => {
             this.showNewMessageButton = false
             this.userIsViewingHistory = false
@@ -591,7 +591,7 @@ struct ChatDetailPage {
       .width('100%')
       .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, bottom: Theme.SpacingLG })
       .backgroundColor(Theme.BackgroundPrimary)
-      .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
       .opacity(this.userIsViewingHistory ? 0.7 : 1.0)
       .scale({ x: this.userIsViewingHistory ? 0.85 : 1.0, y: this.userIsViewingHistory ? 0.85 : 1.0 })
       .translate({ y: this.userIsViewingHistory ? 10 : 0 })
@@ -1386,9 +1386,9 @@ struct ChatDetailPage {
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .backgroundColor(Theme.LiquidGlassBackground)
+    .backgroundColor(Theme.GlassBackground)
     .borderRadius(24)
-    .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+    .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
   }
 
   // 菜单弹出

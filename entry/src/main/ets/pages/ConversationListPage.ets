@@ -512,7 +512,7 @@ export struct ConversationListPage {
             .backgroundColor(Theme.GlassBackground)
             .borderRadius(18)
             .justifyContent(FlexAlign.Center)
-            .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
             .onClick(() => {
               this.importSessions()
             })
@@ -535,7 +535,7 @@ export struct ConversationListPage {
             .backgroundColor(Theme.GlassBackground)
             .borderRadius(18)
             .justifyContent(FlexAlign.Center)
-            .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
             .onClick(() => {
               this.showNewSessionDialog = true
             })
@@ -554,7 +554,7 @@ export struct ConversationListPage {
         }
         .width('100%')
         .backgroundColor(Theme.BackgroundPrimary)
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
         .padding({ top: 50 })
 
         // 会话列表（可滚动）

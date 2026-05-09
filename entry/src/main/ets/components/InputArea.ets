@@ -23,11 +23,11 @@ export struct InputArea {
       .width(36)
       .height(36)
       .justifyContent(FlexAlign.Center)
-      // 和tab栏一样的液态玻璃效果
-      .backgroundColor('rgba(28, 28, 30, 0.75)')
-      .backdropBlur(20)
+      // 沉浸光感玻璃效果
+      .backgroundColor(Theme.GlassBackground)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
       .borderRadius(18)
-      .border({ width: 1, color: 'rgba(255, 255, 255, 0.1)' })
+      .border({ width: 0.5, color: Theme.GlassBorder })
       .shadow({
         radius: 20,
         color: 'rgba(0, 0, 0, 0.3)',
@@ -71,11 +71,11 @@ export struct InputArea {
       .layoutWeight(1)
       .height(36)
       .padding({ left: Theme.SpacingMD, right: Theme.SpacingSM })
-      // 和tab栏一样的液态玻璃效果
-      .backgroundColor('rgba(28, 28, 30, 0.75)')
-      .backdropBlur(20)
+      // 沉浸光感玻璃效果
+      .backgroundColor(Theme.GlassBackground)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
       .borderRadius(18)
-      .border({ width: 1, color: 'rgba(255, 255, 255, 0.1)' })
+      .border({ width: 0.5, color: Theme.GlassBorder })
       .shadow({
         radius: 20,
         color: 'rgba(0, 0, 0, 0.3)',
@@ -94,11 +94,11 @@ export struct InputArea {
       .width(36)
       .height(36)
       .justifyContent(FlexAlign.Center)
-      // 和tab栏一样的液态玻璃效果
-      .backgroundColor('rgba(28, 28, 30, 0.75)')
-      .backdropBlur(20)
+      // 沉浸光感玻璃效果
+      .backgroundColor(Theme.GlassBackground)
+      .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
       .borderRadius(18)
-      .border({ width: 1, color: 'rgba(255, 255, 255, 0.1)' })
+      .border({ width: 0.5, color: Theme.GlassBorder })
       .shadow({
         radius: 20,
         color: 'rgba(0, 0, 0, 0.3)',

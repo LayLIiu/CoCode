@@ -38,9 +38,9 @@ export class Theme {
   static readonly LiquidGlassShadowRadius: number = 20
   static readonly LiquidGlassShadowColor: string = 'rgba(0, 0, 0, 0.3)'
 
-  // Tab栏风格液态玻璃效果（胶囊悬浮样式）
-  static readonly GlassBackground: string = 'rgba(255, 255, 255, 0.08)'
-  static readonly GlassBorder: string = 'rgba(255, 255, 255, 0.15)'
+  // 沉浸光感材质效果（HDS Material Adaptive 风格）
+  static readonly GlassBackground: string = 'rgba(255, 255, 255, 0.06)'
+  static readonly GlassBorder: string = 'rgba(255, 255, 255, 0.10)'
 
   // 背景渐变颜色
   static readonly BackgroundGradientStart: string = '#0a0a0a'

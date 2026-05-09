@@ -236,7 +236,7 @@ struct ImportSessionPage {
             .fontColor(Theme.TextOnPrimary)
             .backgroundColor(Theme.PrimaryColor)
             .borderRadius(12)
-            .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+            .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
             .enabled(!this.isImporting)
             .onClick(() => {
               this.importSelected()
