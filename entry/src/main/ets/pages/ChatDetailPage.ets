@@ -5,7 +5,7 @@
 
 import { Theme } from '../common/Theme'
 import { Message, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus } from '../models/Models'
-import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, TitleSize, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
+import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import { sessionStore } from '../stores/SessionStore'
 import { apiService } from '../services/APIService'
@@ -477,6 +477,10 @@ struct ChatDetailPage {
       HdsNavigation() {
         // 消息列表
         List({ scroller: this.scroller }) {
+          // 顶部占位
+          ListItem() {
+            Row().width('100%').height(8)
+          }
 
         // 查看历史时：加载更多 + 消息计数（在列表顶部）
         if (this.hasMoreMessages()) {
@@ -603,10 +607,6 @@ struct ChatDetailPage {
         content: {
           title: {
             mainTitle: this.conversationTitle,
-            mainTitleSize: TitleSize.TITLE_S,
-            subTitleBuilder: () => {
-              this.TitleStatusView()
-            },
           },
           menu: { value: this.menus },
         },
@@ -627,6 +627,34 @@ struct ChatDetailPage {
       .hideBackButton(false)
       .backgroundColor('#121214')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+
+      // 工作状态行（标题栏下方独立浮动容器）
+      if (this.chatStatus !== 'idle' && this.chatStatus !== 'completed') {
+        Row({ space: 6 }) {
+          LoadingProgress()
+            .width(10)
+            .height(10)
+            .color(this.getStatusColor())
+          Text(this.getStatusText())
+            .fontSize(11)
+            .fontColor(this.getStatusColor())
+          if (this.elapsedSeconds > 0) {
+            Text(this.formatElapsed(this.elapsedSeconds))
+              .fontSize(10)
+              .fontColor(Theme.TextTertiary)
+          }
+          if (this.contextUsage > 0) {
+            Text(`(${this.contextUsage}%)`)
+              .fontSize(9)
+              .fontColor(Theme.TextTertiary)
+          }
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+        .position({ x: 0, y: 90 })
+        .zIndex(5)
+      }
 
       // 任务面板
       this.TaskBarView()
@@ -685,6 +713,10 @@ struct ChatDetailPage {
         this.SlashCommandsPopup()
       }
     }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('#121214')
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .width('100%')
     .height('100%')
   }
