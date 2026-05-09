@@ -496,101 +496,110 @@ export struct ConversationListPage {
 
   build() {
     Stack() {
-      Column() {
-        // 顶部固定区域（导航栏 + 搜索框）
-        Column() {
-          // 导航栏按钮行
-          Row() {
-            // 导入会话按钮
-            Column() {
-              SymbolGlyph($r('sys.symbol.arrow_down_circle'))
-                .fontSize(20)
-                .fontColor([Theme.TextPrimary])
-            }
-            .width(36)
-            .height(36)
-            .backgroundColor(Theme.GlassBackground)
-            .borderRadius(18)
-            .justifyContent(FlexAlign.Center)
-            .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-            .onClick(() => {
-              this.importSessions()
-            })
-
-            Text(this.pageTitle)
-              .fontSize(Theme.FontTitle)
-              .fontColor(Theme.TextPrimary)
-              .fontWeight(FontWeight.Bold)
-              .layoutWeight(1)
-              .textAlign(TextAlign.Center)
-
-            // 新建对话按钮
-            Column() {
-              SymbolGlyph($r('sys.symbol.plus'))
-                .fontSize(20)
-                .fontColor([Theme.TextPrimary])
-            }
-            .width(36)
-            .height(36)
-            .backgroundColor(Theme.GlassBackground)
-            .borderRadius(18)
-            .justifyContent(FlexAlign.Center)
-            .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-            .onClick(() => {
-              this.showNewSessionDialog = true
-            })
+      // 底层：会话列表（延伸到屏幕最顶部）
+      List({ space: 0, scroller: this.scroller }) {
+        if (this.isLoading && (!this.sessions || this.sessions.length === 0)) {
+          ListItem() {
+            this.LoadingState()
           }
-          .width('100%')
-          .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
-
-          // 搜索框
-          SearchBar({
-            searchText: $searchText,
-            onSearchChange: () => {
+        } else if (this.sessions && this.sessions.length > 0) {
+          // 顶部占位：让列表内容默认从搜索框下方开始，向上滑时可延伸到最顶部
+          ListItem() {
+            Column().width('100%').height(158)
+          }
+          ForEach(this.getGroupedSessionArray(), (group: SessionGroup) => {
+            ListItemGroup({
+              header: this.GroupHeader(group.groupName)
+            }) {
+              ForEach(group.sessions, (session: Session) => {
+                ListItem() {
+                  SessionItemView({ session: session, refreshTrigger: this.refreshTrigger })
+                }
+              }, (session: Session) => `${session.id}-${this.refreshTrigger}`)
             }
-          })
-            .width('100%')
-            .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: Theme.SpacingMD, bottom: Theme.SpacingMD })
-        }
-        .width('100%')
-        .backgroundColor(Theme.BackgroundPrimary)
-        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-        .padding({ top: 50 })
-
-        // 会话列表（可滚动）
-        List({ space: 0, scroller: this.scroller }) {
-          if (this.isLoading && (!this.sessions || this.sessions.length === 0)) {
-            ListItem() {
-              this.LoadingState()
-            }
-          } else if (this.sessions && this.sessions.length > 0) {
-            ForEach(this.getGroupedSessionArray(), (group: SessionGroup) => {
-              ListItemGroup({
-                header: this.GroupHeader(group.groupName)
-              }) {
-                ForEach(group.sessions, (session: Session) => {
-                  ListItem() {
-                    SessionItemView({ session: session, refreshTrigger: this.refreshTrigger })
-                  }
-                }, (session: Session) => `${session.id}-${this.refreshTrigger}`)
-              }
-            }, (group: SessionGroup) => group.groupName)
-          } else {
-            ListItem() {
-              this.EmptyState()
-            }
+          }, (group: SessionGroup) => group.groupName)
+        } else {
+          ListItem() {
+            this.EmptyState()
           }
         }
-        .width('100%')
-        .layoutWeight(1)
-        .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(Theme.BackgroundPrimary)
-      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+
+      // 上层：浮动标题栏 + 搜索框（透明背景，内容可透到下方）
+      Column() {
+        // 导航栏按钮行
+        Row() {
+          // 导入会话按钮 - 液态玻璃
+          Column() {
+            SymbolGlyph($r('sys.symbol.arrow_down_circle'))
+              .fontSize(20)
+              .fontColor([Theme.TextPrimary])
+          }
+          .width(36)
+          .height(36)
+          .backgroundColor('#40FFFFFF')
+          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+          .shadow({ radius: 20, color: '#33000000', offsetX: 0, offsetY: 2 })
+          .borderRadius(18)
+          .borderWidth(1)
+          .borderColor('#80FFFFFF')
+          .outline({ width: 1, color: '#1A000000', radius: 18 })
+          .linearGradient({ angle: 180, colors: [['#10FFFFFF', 0.0], ['#00FFFFFF', 0.3]] })
+          .justifyContent(FlexAlign.Center)
+          .onClick(() => {
+            this.importSessions()
+          })
+
+          Text(this.pageTitle)
+            .fontSize(20)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextPrimary)
+            .layoutWeight(1)
+            .textAlign(TextAlign.Center)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+          // 新建对话按钮 - 液态玻璃
+          Column() {
+            SymbolGlyph($r('sys.symbol.plus'))
+              .fontSize(20)
+              .fontColor([Theme.TextPrimary])
+          }
+          .width(36)
+          .height(36)
+          .backgroundColor('#40FFFFFF')
+          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+          .shadow({ radius: 20, color: '#33000000', offsetX: 0, offsetY: 2 })
+          .borderRadius(18)
+          .borderWidth(1)
+          .borderColor('#80FFFFFF')
+          .outline({ width: 1, color: '#1A000000', radius: 18 })
+          .linearGradient({ angle: 180, colors: [['#10FFFFFF', 0.0], ['#00FFFFFF', 0.3]] })
+          .justifyContent(FlexAlign.Center)
+          .onClick(() => {
+            this.showNewSessionDialog = true
+          })
+        }
+        .width('100%')
+        .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+
+        // 搜索框
+        SearchBar({
+          searchText: $searchText,
+          onSearchChange: () => {
+          }
+        })
+          .width('100%')
+          .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: Theme.SpacingMD, bottom: Theme.SpacingMD })
+      }
+      .width('100%')
+      .backgroundColor(Color.Transparent)
+      .padding({ top: 50 })
 
       // 新建对话弹窗
       NewSessionDialog({
@@ -600,6 +609,9 @@ export struct ConversationListPage {
     }
     .width('100%')
     .height('100%')
+    .backgroundColor('#121214')
+    .alignContent(Alignment.Top)
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
   @Builder

@@ -1534,7 +1534,7 @@ struct ChatDetailPage {
   @Builder
   InputAreaContent() {
     Row({ space: 10 }) {
-      // 菜单按钮
+      // 菜单按钮 - 液态玻璃
       Column() {
         SymbolGlyph($r('sys.symbol.plus'))
           .fontSize(16)
@@ -1542,8 +1542,14 @@ struct ChatDetailPage {
       }
       .width(36)
       .height(36)
-      .backgroundColor('rgba(255,255,255,0.08)')
+      .backgroundColor('#40FFFFFF')
+      .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+      .shadow({ radius: 20, color: '#33000000', offsetX: 0, offsetY: 2 })
       .borderRadius(18)
+      .borderWidth(1)
+      .borderColor('#80FFFFFF')
+      .outline({ width: 1, color: '#1A000000', radius: 18 })
+      .linearGradient({ angle: 180, colors: [['#10FFFFFF', 0.0], ['#00FFFFFF', 0.3]] })
       .justifyContent(FlexAlign.Center)
       .onClick(() => {
         this.showMenu = !this.showMenu
@@ -1551,11 +1557,18 @@ struct ChatDetailPage {
         this.showSlashCommands = false
       })
 
+      // 输入框 - 液态玻璃
       TextInput({ placeholder: '发送消息...', text: this.inputText })
         .layoutWeight(1)
         .height(36)
-        .backgroundColor('rgba(255,255,255,0.06)')
+        .backgroundColor('#40FFFFFF')
+        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+        .shadow({ radius: 20, color: '#33000000', offsetX: 0, offsetY: 2 })
         .borderRadius(18)
+        .borderWidth(1)
+        .borderColor('#80FFFFFF')
+        .outline({ width: 1, color: '#1A000000', radius: 18 })
+        .linearGradient({ angle: 180, colors: [['#10FFFFFF', 0.0], ['#00FFFFFF', 0.3]] })
         .fontColor(Theme.TextPrimary)
         .placeholderColor('rgba(255,255,255,0.3)')
         .onChange((value: string) => {
@@ -1565,6 +1578,7 @@ struct ChatDetailPage {
           this.sendMessage()
         })
 
+      // 发送按钮 - 液态玻璃（无输入时），有输入时高亮
       Column() {
         SymbolGlyph($r('sys.symbol.arrow_up'))
           .fontSize(16)
@@ -1572,8 +1586,14 @@ struct ChatDetailPage {
       }
       .width(36)
       .height(36)
-      .backgroundColor(this.inputText ? Theme.PrimaryColor : 'rgba(255,255,255,0.08)')
+      .backgroundColor(this.inputText ? Theme.PrimaryColor : '#40FFFFFF')
+      .backgroundBlurStyle(this.inputText ? BlurStyle.NONE : BlurStyle.COMPONENT_REGULAR)
+      .shadow({ radius: 20, color: '#33000000', offsetX: 0, offsetY: 2 })
       .borderRadius(18)
+      .borderWidth(this.inputText ? 0 : 1)
+      .borderColor(this.inputText ? Color.Transparent : '#80FFFFFF')
+      .outline(this.inputText ? undefined : { width: 1, color: '#1A000000', radius: 18 })
+      .linearGradient(this.inputText ? undefined : { angle: 180, colors: [['#10FFFFFF', 0.0], ['#00FFFFFF', 0.3]] })
       .justifyContent(FlexAlign.Center)
       .onClick(() => {
         this.sendMessage()
