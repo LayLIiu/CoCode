@@ -5,6 +5,8 @@
 
 import { Theme } from '../common/Theme'
 import { Message, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus } from '../models/Models'
+import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, TitleSize, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
+import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import { sessionStore } from '../stores/SessionStore'
 import { apiService } from '../services/APIService'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
@@ -458,71 +460,23 @@ struct ChatDetailPage {
     }
   }
 
+  // HdsNavigation 菜单项
+  private menus: Array<HdsNavigationBadgeIconOptions> = [
+    {
+      content: {
+        icon: $r('sys.symbol.ellipsis_circle'),
+        action: () => {
+          this.showMenu = !this.showMenu
+        }
+      }
+    }
+  ]
+
   build() {
     Stack() {
-      Column() {
-        // 顶部固定标题栏
-      Row() {
-        // 返回按钮
-        Column() {
-          SymbolGlyph($r('sys.symbol.chevron_left'))
-            .fontSize(20)
-            .fontColor([Theme.TextPrimary])
-        }
-        .width(36)
-        .height(36)
-        .backgroundColor(Theme.GlassBackground)
-        .borderRadius(18)
-        .justifyContent(FlexAlign.Center)
-        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-        .onClick(() => {
-          router.back()
-        })
-
-        Column({ space: 2 }) {
-          Text(this.conversationTitle)
-            .fontSize(Theme.FontBody)
-            .fontColor(Theme.TextPrimary)
-            .fontWeight(FontWeight.Medium)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-          Text(this.getStatusText())
-            .fontSize(Theme.FontTiny)
-            .fontColor(this.getStatusColor())
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Center)
-        .margin({ left: 8, right: 8 })
-
-        // 菜单按钮
-        Column() {
-          SymbolGlyph($r('sys.symbol.ellipsis_circle'))
-            .fontSize(20)
-            .fontColor([Theme.TextPrimary])
-        }
-        .width(36)
-        .height(36)
-        .backgroundColor(Theme.GlassBackground)
-        .borderRadius(18)
-        .justifyContent(FlexAlign.Center)
-        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-        .onClick(() => {
-          this.showMenu = !this.showMenu
-        })
-      }
-      .width('100%')
-      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: 50, bottom: Theme.SpacingMD })
-      .backgroundColor(Color.Transparent)
-      .position({ x: 0, y: 0 })
-      .zIndex(1)
-
-      // 消息列表（可滚动，顶部留出标题栏空间，消息可延伸到标题栏后面）
-      List({ scroller: this.scroller }) {
-        // 顶部占位：与标题栏等高，让消息可以滚动到标题栏后面
-        ListItem() {
-          Row().width('100%').height(96)
-        }
+      HdsNavigation() {
+        // 消息列表
+        List({ scroller: this.scroller }) {
 
         // 查看历史时：加载更多 + 消息计数（在列表顶部）
         if (this.hasMoreMessages()) {
@@ -644,6 +598,35 @@ struct ChatDetailPage {
           this.scrollOffset = yOffset
         }
       })
+      }
+      .titleBar({
+        content: {
+          title: {
+            mainTitle: this.conversationTitle,
+            mainTitleSize: TitleSize.TITLE_S,
+            subTitleBuilder: () => {
+              this.TitleStatusView()
+            },
+          },
+          menu: { value: this.menus },
+        },
+        style: {
+          scrollEffectOpts: {
+            enableScrollEffect: false,
+            scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
+          },
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.ADAPTIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+          },
+        },
+        avoidLayoutSafeArea: true,
+        enableComponentSafeArea: false,
+      })
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .hideBackButton(false)
+      .backgroundColor('#121214')
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
       // 任务面板
       this.TaskBarView()
@@ -686,11 +669,6 @@ struct ChatDetailPage {
       .zIndex(2)
       .opacity(this.userIsViewingHistory ? 0.7 : 1.0)
       .animation({ duration: 300, curve: Curve.EaseInOut })
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor('#121214')
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
     // 弹出菜单
       if (this.showMenu) {
@@ -705,6 +683,29 @@ struct ChatDetailPage {
       // 斜杠命令
       if (this.showSlashCommands) {
         this.SlashCommandsPopup()
+      }
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  // 标题栏状态行（与 iOS 一致：状态指示器 + 状态文字 + 上下文用量）
+  @Builder
+  TitleStatusView() {
+    Row({ space: 4 }) {
+      if (this.chatStatus !== 'idle' && this.chatStatus !== 'completed') {
+        LoadingProgress()
+          .width(10)
+          .height(10)
+          .color(this.getStatusColor())
+      }
+      Text(this.getStatusText())
+        .fontSize(10)
+        .fontColor(this.getStatusColor())
+      if (this.contextUsage > 0) {
+        Text(`(${this.contextUsage}%)`)
+          .fontSize(9)
+          .fontColor(Theme.TextTertiary)
       }
     }
   }
@@ -1547,10 +1548,7 @@ struct ChatDetailPage {
       })
     }
     .width('100%')
-    .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .backgroundColor('rgba(255,255,255,0.06)')
-    .borderRadius(24)
-    .border({ width: 0.5, color: 'rgba(255,255,255,0.15)' })
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
   }
 
   // 菜单弹出
