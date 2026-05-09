@@ -55,7 +55,7 @@ export interface Message {
   content: string
   timestamp: string
   toolName?: string
-  toolInput?: Record<string, object>
+  toolInput?: Record<string, Object>
   toolResult?: string
   toolStatus?: ToolStatus
   isStreaming?: boolean
@@ -152,7 +152,7 @@ export interface WSMessage {
   blockType?: string
   toolName?: string
   toolUseId?: string
-  input?: Record<string, object>
+  input?: Record<string, Object>
   content?: object | string
   isError?: boolean
   requestId?: string
@@ -213,6 +213,209 @@ export interface NetworkInfo {
   serverPort: number
 }
 
+export function getBestUrl(info: NetworkInfo): string | undefined {
+  if (info.recommendedType) {
+    switch (info.recommendedType) {
+      case 'lan':
+        return info.lanUrl
+      case 'tailscale':
+        return info.tailscaleUrl
+      case 'tunnel':
+        return info.tunnelUrl
+    }
+  }
+  return info.lanUrl || info.tunnelUrl
+}
+
+export function getConnectionTypeName(info: NetworkInfo): string {
+  switch (info.recommendedType) {
+    case 'lan':
+      return '局域网直连'
+    case 'tailscale':
+      return 'Tailscale'
+    case 'tunnel':
+      return 'Cloudflare 隧道'
+    default:
+      return '未知'
+  }
+}
+
 // MARK: - 服务器模式
 
 export type ServerMode = 'lan' | 'tunnel'
+
+// MARK: - 最近项目
+
+export interface RecentProject {
+  projectName: string
+  projectPath: string
+  realPath: string
+  isGit: boolean
+  repoName?: string
+  branch?: string
+  modifiedAt: string
+  sessionCount: number
+}
+
+// MARK: - 任务列表 API 响应
+
+export interface TasksListResponse {
+  tasks: CLITaskResponse[]
+}
+
+export interface CLITaskResponse {
+  id: string
+  subject: string
+  description?: string
+  activeForm?: string
+  owner?: string
+  status: string
+  taskListId?: string
+}
+
+// MARK: - Effort 响应
+
+export interface EffortResponse {
+  level: string
+  available: string[]
+}
+
+// MARK: - 服务商预设
+
+export interface ProviderPreset {
+  id: string
+  name: string
+  baseUrl: string
+  apiFormat: ApiFormat
+  defaultModels: ModelMapping
+}
+
+export const PROVIDER_PRESETS: ProviderPreset[] = [
+  {
+    id: 'openai',
+    name: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    apiFormat: 'openai_chat',
+    defaultModels: {
+      main: 'gpt-4o',
+      haiku: 'gpt-4o-mini',
+      sonnet: 'gpt-4o',
+      opus: 'gpt-4o'
+    }
+  },
+  {
+    id: 'anthropic',
+    name: 'Anthropic',
+    baseUrl: 'https://api.anthropic.com',
+    apiFormat: 'anthropic',
+    defaultModels: {
+      main: 'claude-sonnet-4-20250514',
+      haiku: 'claude-haiku-4-5-20250219',
+      sonnet: 'claude-sonnet-4-20250514',
+      opus: 'claude-opus-4-20250514'
+    }
+  },
+  {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    baseUrl: 'https://api.deepseek.com',
+    apiFormat: 'openai_chat',
+    defaultModels: {
+      main: 'deepseek-chat',
+      haiku: 'deepseek-chat',
+      sonnet: 'deepseek-reasoner',
+      opus: 'deepseek-reasoner'
+    }
+  },
+  {
+    id: 'gemini',
+    name: 'Google Gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    apiFormat: 'openai_chat',
+    defaultModels: {
+      main: 'gemini-2.5-pro',
+      haiku: 'gemini-2.5-flash',
+      sonnet: 'gemini-2.5-pro',
+      opus: 'gemini-2.5-pro'
+    }
+  },
+  {
+    id: 'custom',
+    name: '自定义',
+    baseUrl: '',
+    apiFormat: 'openai_chat',
+    defaultModels: {
+      main: '',
+      haiku: '',
+      sonnet: '',
+      opus: ''
+    }
+  }
+]
+
+// MARK: - 服务商输入/测试
+
+export class ProviderInput {
+  presetId: string = ''
+  name: string = ''
+  apiKey: string = ''
+  baseUrl: string = ''
+  apiFormat?: ApiFormat
+  models: ModelMapping = { main: '', haiku: '', sonnet: '', opus: '' }
+  notes?: string
+}
+
+export class ProviderTestOverrides {
+  baseUrl?: string
+  modelId?: string
+  apiFormat?: string
+}
+
+// MARK: - 服务商测试结果
+
+export interface ConnectivityResult {
+  success: boolean
+  latencyMs?: number
+  error?: string
+}
+
+export interface ProviderTestResult {
+  connectivity: ConnectivityResult
+}
+
+export interface ProviderTestResultResponse {
+  result: ProviderTestResult
+}
+
+export interface ProviderResponse {
+  provider: Provider
+}
+
+// MARK: - 权限/问题请求
+
+export interface PermissionRequest {
+  requestId: string
+  toolName: string
+  input: Record<string, Object>
+  description?: string
+}
+
+export interface QuestionRequest {
+  questionId: string
+  questionText: string
+  options: string[]
+}
+
+// MARK: - 最近项目响应
+
+export interface RecentProjectsResponse {
+  projects: RecentProject[]
+}
+
+// MARK: - 隧道响应
+
+export interface TunnelResponse {
+  ok: boolean
+  tunnelUrl?: string
+  error?: string
+}

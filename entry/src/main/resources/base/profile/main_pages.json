@@ -4,6 +4,7 @@
     "pages/LoginPage",
     "pages/ChatDetailPage",
     "pages/ImportSessionPage",
-    "pages/StorageManagementPage"
+    "pages/StorageManagementPage",
+    "pages/ProvidersPage"
   ]
 }

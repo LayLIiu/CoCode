@@ -4,7 +4,11 @@
  */
 
 import http from '@ohos.net.http'
-import { Session, Message, Provider, NetworkInfo, ModelInfo } from '../models/Models'
+import {
+  Session, Message, Provider, NetworkInfo, ModelInfo,
+  RecentProject, EffortResponse, ProviderInput, ProviderTestOverrides,
+  ProviderTestResultResponse, ProviderResponse, TunnelResponse, RecentProjectsResponse
+} from '../models/Models'
 
 // 请求体类型定义
 export class WorkDirRequest {
@@ -164,8 +168,12 @@ export class APIService {
 
   // MARK: - 会话 API
 
-  async getSessions(): Promise<Session[]> {
-    const response = await this.request<SessionsResponse>('/api/sessions', 'GET', '')
+  async getSessions(providerId?: string): Promise<Session[]> {
+    let path = '/api/sessions'
+    if (providerId) {
+      path += '?providerId=' + providerId
+    }
+    const response = await this.request<SessionsResponse>(path, 'GET', '')
     return response.sessions
   }
 
@@ -193,7 +201,7 @@ export class APIService {
   async renameSession(sessionId: string, title: string): Promise<void> {
     const req = new TitleRequest()
     req.title = title
-    await this.request<Object>('/api/sessions/' + sessionId, 'PUT', JSON.stringify(req))
+    await this.request<Object>('/api/sessions/' + sessionId, 'PATCH', JSON.stringify(req))
   }
 
   async getMessages(sessionId: string): Promise<Message[]> {
@@ -251,14 +259,68 @@ export class APIService {
     return response !== null
   }
 
+  // MARK: - 最近项目 API
+
+  async getRecentProjects(): Promise<RecentProject[]> {
+    const response = await this.request<RecentProjectsResponse>('/api/sessions/recent-projects', 'GET', '')
+    return response.projects
+  }
+
+  // MARK: - Effort API
+
+  async getEffort(): Promise<EffortResponse> {
+    return await this.request<EffortResponse>('/api/effort', 'GET', '')
+  }
+
+  async setEffort(level: string): Promise<void> {
+    await this.request<Object>('/api/effort', 'PUT', JSON.stringify({ level: level }))
+  }
+
+  // MARK: - 隧道 API
+
+  async enableTunnel(enabled: boolean): Promise<TunnelResponse> {
+    const paths = ['/api/mobile/tunnel', '/api/mobile/tunnel/enable']
+    let lastError: Error | null = null
+    for (let i = 0; i < paths.length; i++) {
+      try {
+        return await this.request<TunnelResponse>(paths[i], 'POST', JSON.stringify({ enabled: enabled }))
+      } catch (e) {
+        lastError = e as Error
+        continue
+      }
+    }
+    throw lastError || new Error('隧道操作失败')
+  }
+
   // MARK: - 服务商 API
 
   async getProviders(): Promise<ProvidersResponse> {
     return await this.request<ProvidersResponse>('/api/providers', 'GET', '')
   }
 
+  async createProvider(input: ProviderInput): Promise<ProviderResponse> {
+    return await this.request<ProviderResponse>('/api/providers', 'POST', JSON.stringify(input))
+  }
+
+  async updateProvider(id: string, input: ProviderInput): Promise<ProviderResponse> {
+    return await this.request<ProviderResponse>('/api/providers/' + id, 'PUT', JSON.stringify(input))
+  }
+
+  async deleteProvider(id: string): Promise<void> {
+    await this.request<Object>('/api/providers/' + id, 'DELETE', '')
+  }
+
+  async testProvider(id: string, overrides?: ProviderTestOverrides): Promise<ProviderTestResultResponse> {
+    return await this.request<ProviderTestResultResponse>('/api/providers/' + id + '/test', 'POST',
+      JSON.stringify(overrides || {}))
+  }
+
   async activateProvider(id: string): Promise<void> {
     await this.request<Object>('/api/providers/' + id + '/activate', 'POST', '')
+  }
+
+  async activateOfficialProvider(): Promise<void> {
+    await this.request<Object>('/api/providers/official', 'POST', '')
   }
 
   // MARK: - 模型 API
@@ -295,6 +357,8 @@ export class APIService {
       httpMethod = http.RequestMethod.POST
     } else if (method === 'PUT') {
       httpMethod = http.RequestMethod.PUT
+    } else if (method === 'PATCH') {
+      httpMethod = http.RequestMethod.PUT // 鸿蒙没有 PATCH，用 PUT 替代
     } else if (method === 'DELETE') {
       httpMethod = http.RequestMethod.DELETE
     }

@@ -192,9 +192,18 @@ struct NewSessionDialog {
 @Component
 struct SessionItemView {
   @Prop session: Session
+  @Prop @Watch('onRefresh') refreshTrigger: number = 0
   @State currentStatus: SessionStatus = 'idle'
 
   aboutToAppear(): void {
+    this.refreshStatus()
+  }
+
+  onRefresh(): void {
+    this.refreshStatus()
+  }
+
+  private refreshStatus(): void {
     this.currentStatus = sessionStore.getSessionStatus(this.session.id)
   }
 
@@ -561,7 +570,7 @@ export struct ConversationListPage {
               }) {
                 ForEach(group.sessions, (session: Session) => {
                   ListItem() {
-                    SessionItemView({ session: session })
+                    SessionItemView({ session: session, refreshTrigger: this.refreshTrigger })
                   }
                 }, (session: Session) => `${session.id}-${this.refreshTrigger}`)
               }

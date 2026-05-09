@@ -95,6 +95,24 @@ export struct SettingsPage {
             this.ModelItem()
           }
 
+          // 思考强度
+          ListItem() {
+            this.SettingSection('思考强度')
+          }
+
+          ListItem() {
+            this.EffortItem()
+          }
+
+          // 服务商管理
+          ListItem() {
+            this.SettingSection('服务商')
+          }
+
+          ListItem() {
+            this.ProviderManageItem()
+          }
+
           // 权限模式
           ListItem() {
             this.SettingSection('权限模式')
@@ -472,6 +490,71 @@ export struct SettingsPage {
   }
 
   @Builder
+  EffortItem() {
+    Column({ space: Theme.SpacingSM }) {
+      ForEach(appState.availableEfforts, (level: string) => {
+        Row() {
+          Text(this.getEffortLabel(level))
+            .fontSize(Theme.FontBody)
+            .fontColor(Theme.TextPrimary)
+
+          Blank()
+
+          Radio({ value: level, group: 'effort' })
+            .checked(appState.effortLevel === level)
+            .onChange((isChecked: boolean) => {
+              if (isChecked) {
+                appState.setEffortLevel(level)
+              }
+            })
+        }
+        .width('100%')
+        .padding({ top: 8, bottom: 8 })
+
+        if (level !== appState.availableEfforts[appState.availableEfforts.length - 1]) {
+          Divider().color(Theme.LiquidGlassBorderColor)
+        }
+      }, (level: string) => level)
+    }
+    .width('100%')
+    .padding(Theme.SpacingMD)
+    .backgroundColor(Theme.LiquidGlassBackground)
+    .borderRadius(Theme.RadiusMedium)
+    .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
+  }
+
+  @Builder
+  ProviderManageItem() {
+    Row() {
+      Column({ space: 2 }) {
+        Text('服务商管理')
+          .fontSize(Theme.FontBody)
+          .fontColor(Theme.TextPrimary)
+
+        Text('管理自定义 API 服务商')
+          .fontSize(Theme.FontCaption)
+          .fontColor(Theme.TextSecondary)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+
+      SymbolGlyph($r('sys.symbol.chevron_right'))
+        .fontSize(14)
+        .fontColor([Theme.TextSecondary])
+    }
+    .width('100%')
+    .padding(Theme.SpacingMD)
+    .backgroundColor(Theme.LiquidGlassBackground)
+    .borderRadius(Theme.RadiusMedium)
+    .border({ width: Theme.LiquidGlassBorderWidth, color: Theme.LiquidGlassBorderColor })
+    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
+    .onClick(() => {
+      router.pushUrl({ url: 'pages/ProvidersPage' })
+    })
+  }
+
+  @Builder
   DataManageItem() {
     Column({ space: Theme.SpacingSM }) {
       // 导入对话
@@ -722,6 +805,16 @@ export struct SettingsPage {
       }
       .width('100%')
       .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: Theme.SpacingLG })
+    }
+  }
+
+  private getEffortLabel(level: string): string {
+    switch (level) {
+      case 'low': return '低 (更快速)'
+      case 'medium': return '中 (平衡)'
+      case 'high': return '高 (更深入)'
+      case 'max': return '最大 (最强推理)'
+      default: return level
     }
   }
 

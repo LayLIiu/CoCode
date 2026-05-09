@@ -3,7 +3,7 @@
  * 支持状态持久化和 WebSocket 实时更新
  */
 
-import { Session, Message, SessionStatus, TaskItem, PermissionMode, WSMessage, OutgoingMessage } from '../models/Models'
+import { Session, Message, SessionStatus, TaskItem, PermissionMode, WSMessage, OutgoingMessage, RecentProject } from '../models/Models'
 import { apiService } from '../services/APIService'
 import { wsService } from '../services/WebSocketService'
 import { storageService } from '../services/StorageService'
@@ -28,6 +28,10 @@ export class SessionStore {
   taskBarExpanded: boolean = false
   taskBarDismissed: boolean = false
 
+  // 最近项目
+  recentProjects: RecentProject[] = []
+  isLoadingRecentProjects: boolean = false
+
   // 加载状态
   isLoading: boolean = false
   isCreating: boolean = false
@@ -40,6 +44,7 @@ export class SessionStore {
   onSessionsChanged?: () => void
   onMessagesChanged?: (sessionId: string) => void
   onStatusChanged?: (sessionId: string, status: SessionStatus) => void
+  onRawMessage?: (sessionId: string, msg: WSMessage) => void
 
   static getInstance(): SessionStore {
     if (!SessionStore.instance) {
@@ -477,6 +482,11 @@ export class SessionStore {
   private handleWSMessage(sessionId: string, msg: WSMessage): void {
     console.info(`[SessionStore] WS msg: ${msg.type} for ${sessionId}`)
 
+    // 转发原始消息给 ChatDetailPage（用于流式缓冲等本地处理）
+    if (this.onRawMessage) {
+      this.onRawMessage(sessionId, msg)
+    }
+
     // 忽略 connected 消息
     if (msg.type === 'connected') {
       // 连接成功后请求状态
@@ -758,6 +768,19 @@ export class SessionStore {
   dismissTaskBar(): void {
     this.taskBarDismissed = true
     this.taskBarExpanded = false
+    this.notifySessionsChanged()
+  }
+
+  // MARK: - 最近项目
+
+  async fetchRecentProjects(): Promise<void> {
+    this.isLoadingRecentProjects = true
+    try {
+      this.recentProjects = await apiService.getRecentProjects()
+    } catch (e) {
+      console.error(`[SessionStore] Fetch recent projects error: ${e}`)
+    }
+    this.isLoadingRecentProjects = false
     this.notifySessionsChanged()
   }
 

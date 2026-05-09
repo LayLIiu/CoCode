@@ -113,8 +113,8 @@ export struct PixelMascot {
     this.zzzOffset2 = ((t + 900) % 3000) / 3000
     this.zzzOffset3 = ((t + 1800) % 3000) / 3000
 
-    // 弹跳动画 - 周期 250ms（工作状态）
-    this.bounceValue = (Math.sin(t * 2 * Math.PI / 250) + 1) / 2
+    // 弹跳动画 - 周期 500ms（工作状态）
+    this.bounceValue = (Math.sin(t * 2 * Math.PI / 500) + 1) / 2
 
     // 跳跃动画 - 周期 1750ms（警告状态）
     this.jumpValue = (t % 1750) / 1750
