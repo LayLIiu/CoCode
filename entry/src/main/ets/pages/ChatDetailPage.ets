@@ -119,6 +119,10 @@ struct ChatDetailPage {
   @State displayedMessageCount: number = 50
   @State isLoadingMore: boolean = false
 
+  // 标题栏动态模糊（滚动时背景渐变透明）
+  @State scrollOffset: number = 0
+  private readonly blurThreshold: number = 30
+
   private scroller: Scroller = new Scroller()
 
   // 斜杠命令列表
@@ -201,6 +205,18 @@ struct ChatDetailPage {
     setTimeout(() => {
       this.scroller.scrollEdge(Edge.Bottom)
     }, 100)
+  }
+
+  // 标题栏动态模糊：根据滚动位置计算背景透明度
+  private getTitleBarBackgroundColor(): string {
+    const progress = Math.min(this.scrollOffset / this.blurThreshold, 1.0)
+    const alpha = 1.0 - progress * 0.3
+    return `rgba(18, 18, 18, ${alpha})`
+  }
+
+  // 标题栏动态模糊：根据滚动位置返回模糊样式
+  private getTitleBarBlurStyle(): BlurStyle {
+    return this.scrollOffset > this.blurThreshold ? BlurStyle.COMPONENT_THICK : BlurStyle.COMPONENT_REGULAR
   }
 
   // 加载模型列表
@@ -497,11 +513,17 @@ struct ChatDetailPage {
       }
       .width('100%')
       .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: 50, bottom: Theme.SpacingMD })
-      .backgroundColor(Theme.BackgroundPrimary)
-      .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+      .backgroundColor(Color.Transparent)
+      .position({ x: 0, y: 0 })
+      .zIndex(1)
 
-      // 消息列表（可滚动）
+      // 消息列表（可滚动，顶部留出标题栏空间，消息可延伸到标题栏后面）
       List({ scroller: this.scroller }) {
+        // 顶部占位：与标题栏等高，让消息可以滚动到标题栏后面
+        ListItem() {
+          Row().width('100%').height(96)
+        }
+
         // 查看历史时：加载更多 + 消息计数（在列表顶部）
         if (this.hasMoreMessages()) {
           ListItem() {
@@ -576,13 +598,13 @@ struct ChatDetailPage {
           }
         }
 
-        // 底部留白（给输入框留空间）
+        // 底部留白（给悬浮输入框留空间，消息可滚入输入框下方）
         ListItem() {
-          Row().width('100%').height(80)
+          Row().width('100%').height(120)
         }
       }
       .width('100%')
-      .layoutWeight(1)
+      .height('100%')
       .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
@@ -617,58 +639,60 @@ struct ChatDetailPage {
           }
         }
       })
-
-      // "最新消息"浮动按钮
-      if (this.showNewMessageButton) {
-        Column() {
-          Row({ space: 4 }) {
-            SymbolGlyph($r('sys.symbol.star_fill'))
-              .fontSize(14)
-              .fontColor([Theme.AccentOrange])
-              .scale({ x: this.mascotScale, y: this.mascotScale })
-            Text('最新消息')
-              .fontSize(11)
-              .fontColor(Theme.TextPrimary)
-          }
-          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          .backgroundColor(Theme.GlassBackground)
-          .borderRadius(18)
-          .border({ width: 0.5, color: Theme.GlassBorder })
-          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-          .onClick(() => {
-            this.showNewMessageButton = false
-            this.userIsViewingHistory = false
-            this.animationProgress = 0
-            this.scrollToBottom()
-          })
+      .onDidScroll((xOffset: number, yOffset: number) => {
+        if (yOffset !== this.scrollOffset) {
+          this.scrollOffset = yOffset
         }
-        .width('100%')
-        .alignItems(HorizontalAlign.Center)
-        .margin({ bottom: 8 })
-      }
+      })
 
       // 任务面板
       this.TaskBarView()
 
-      // 底部输入框（带收缩动画）
+      // "最新消息"悬浮按钮（独立定位，不影响输入框位置）
+      if (this.showNewMessageButton) {
+        Row({ space: 4 }) {
+          SymbolGlyph($r('sys.symbol.star_fill'))
+            .fontSize(14)
+            .fontColor([Theme.AccentOrange])
+            .scale({ x: this.mascotScale, y: this.mascotScale })
+          Text('最新消息')
+            .fontSize(11)
+            .fontColor(Theme.TextPrimary)
+        }
+        .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+        .backgroundColor('rgba(255,255,255,0.08)')
+        .borderRadius(18)
+        .border({ width: 0.5, color: 'rgba(255,255,255,0.15)' })
+        .position({ x: '50%', y: '100%' })
+        .translate({ x: '-50%', y: -130 })
+        .zIndex(3)
+        .onClick(() => {
+          this.showNewMessageButton = false
+          this.userIsViewingHistory = false
+          this.animationProgress = 0
+          this.scrollToBottom()
+        })
+      }
+
+      // 底部悬浮输入框
       Column() {
         this.InputAreaContent()
       }
       .width('100%')
       .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, bottom: Theme.SpacingLG })
-      .backgroundColor(Theme.BackgroundPrimary)
-      .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+      .backgroundColor(Color.Transparent)
+      .position({ x: 0, y: '100%' })
+      .translate({ y: -80 })
+      .zIndex(2)
       .opacity(this.userIsViewingHistory ? 0.7 : 1.0)
-      .scale({ x: this.userIsViewingHistory ? 0.85 : 1.0, y: this.userIsViewingHistory ? 0.85 : 1.0 })
-      .translate({ y: this.userIsViewingHistory ? 10 : 0 })
       .animation({ duration: 300, curve: Curve.EaseInOut })
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(Theme.BackgroundPrimary)
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+    .backgroundColor('#121214')
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
-      // 弹出菜单
+    // 弹出菜单
       if (this.showMenu) {
         this.MenuPopup()
       }
@@ -1485,7 +1509,7 @@ struct ChatDetailPage {
       }
       .width(36)
       .height(36)
-      .backgroundColor(Theme.BackgroundSecondary)
+      .backgroundColor('rgba(255,255,255,0.08)')
       .borderRadius(18)
       .justifyContent(FlexAlign.Center)
       .onClick(() => {
@@ -1497,9 +1521,10 @@ struct ChatDetailPage {
       TextInput({ placeholder: '发送消息...', text: this.inputText })
         .layoutWeight(1)
         .height(36)
-        .backgroundColor(Theme.BackgroundSecondary)
+        .backgroundColor('rgba(255,255,255,0.06)')
         .borderRadius(18)
         .fontColor(Theme.TextPrimary)
+        .placeholderColor('rgba(255,255,255,0.3)')
         .onChange((value: string) => {
           this.inputText = value
         })
@@ -1514,7 +1539,7 @@ struct ChatDetailPage {
       }
       .width(36)
       .height(36)
-      .backgroundColor(this.inputText ? Theme.PrimaryColor : Theme.BackgroundSecondary)
+      .backgroundColor(this.inputText ? Theme.PrimaryColor : 'rgba(255,255,255,0.08)')
       .borderRadius(18)
       .justifyContent(FlexAlign.Center)
       .onClick(() => {
@@ -1523,9 +1548,9 @@ struct ChatDetailPage {
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .backgroundColor(Theme.GlassBackground)
+    .backgroundColor('rgba(255,255,255,0.06)')
     .borderRadius(24)
-    .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+    .border({ width: 0.5, color: 'rgba(255,255,255,0.15)' })
   }
 
   // 菜单弹出
