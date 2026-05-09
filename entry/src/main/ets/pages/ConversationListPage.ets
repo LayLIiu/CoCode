@@ -421,9 +421,23 @@ export struct ConversationListPage {
     const result: Session[] = []
     for (let i = 0; i < filtered.length; i++) {
       const s = filtered[i]
+      // 匹配标题、项目路径、工作目录
       if (s.title.toLowerCase().includes(lowerSearch) ||
-        s.projectPath.toLowerCase().includes(lowerSearch)) {
+        s.projectPath.toLowerCase().includes(lowerSearch) ||
+        (s.workDir && s.workDir.toLowerCase().includes(lowerSearch))) {
         result.push(s)
+        continue
+      }
+      // 匹配消息内容
+      const messages = sessionStore.messages.get(s.id)
+      if (messages) {
+        for (let j = 0; j < messages.length; j++) {
+          const msg = messages[j]
+          if (msg.content && msg.content.toLowerCase().includes(lowerSearch)) {
+            result.push(s)
+            break
+          }
+        }
       }
     }
     return result

@@ -57,6 +57,7 @@ export struct PixelMascot {
   private context: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings)
   private animationTimer: number = -1
   private isCanvasReady: boolean = false
+  private lastFrameTime: number = 0
 
   aboutToAppear(): void {
     // 启动动画定时器，每帧更新
@@ -89,9 +90,12 @@ export struct PixelMascot {
 
   // 启动动画定时器
   private startAnimationTimer(): void {
-    // 每 16ms 更新一次（约 60fps）
+    this.lastFrameTime = Date.now()
     this.animationTimer = setInterval(() => {
-      this.animationTime += 16
+      const now = Date.now()
+      const delta = now - this.lastFrameTime
+      this.lastFrameTime = now
+      this.animationTime += delta
 
       // 更新各种动画值
       this.updateAnimationValues()
@@ -113,8 +117,8 @@ export struct PixelMascot {
     this.zzzOffset2 = ((t + 900) % 3000) / 3000
     this.zzzOffset3 = ((t + 1800) % 3000) / 3000
 
-    // 弹跳动画 - 周期 500ms（工作状态）
-    this.bounceValue = (Math.sin(t * 2 * Math.PI / 500) + 1) / 2
+    // 弹跳动画 - 周期 1000ms（工作状态）
+    this.bounceValue = (Math.sin(t * 2 * Math.PI / 1000) + 1) / 2
 
     // 跳跃动画 - 周期 1750ms（警告状态）
     this.jumpValue = (t % 1750) / 1750

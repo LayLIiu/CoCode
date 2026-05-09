@@ -10,6 +10,8 @@ import { appState } from '../stores/AppState'
 export class NotificationHelper {
   private static instance: NotificationHelper
   private context: Context | null = null
+  private isNotificationEnabled: boolean = false
+  private isSlotCreated: boolean = false
 
   static getInstance(): NotificationHelper {
     if (!NotificationHelper.instance) {
@@ -23,6 +25,48 @@ export class NotificationHelper {
   }
 
   /**
+   * 请求通知授权（应在应用启动时调用）
+   */
+  async requestNotificationPermission(): Promise<void> {
+    if (!this.context) return
+
+    try {
+      // 先检查是否已授权
+      const enabled = await notificationManager.isNotificationEnabled()
+      if (enabled) {
+        this.isNotificationEnabled = true
+        console.info('[NotificationHelper] Notification already enabled')
+      } else {
+        // 请求用户授权（无参版本，由 EntryAbility 调用带 context 版本）
+        await notificationManager.requestEnableNotification()
+        this.isNotificationEnabled = true
+        console.info('[NotificationHelper] Notification permission granted')
+      }
+
+      // 创建通知渠道
+      await this.ensureSlotCreated()
+    } catch (e) {
+      console.error(`[NotificationHelper] Request permission error: ${e}`)
+      this.isNotificationEnabled = false
+    }
+  }
+
+  /**
+   * 确保通知渠道已创建
+   */
+  private async ensureSlotCreated(): Promise<void> {
+    if (this.isSlotCreated) return
+
+    try {
+      await notificationManager.addSlot(notificationManager.SlotType.SOCIAL_COMMUNICATION)
+      this.isSlotCreated = true
+      console.info('[NotificationHelper] Notification slot created')
+    } catch (e) {
+      console.error(`[NotificationHelper] Create slot error: ${e}`)
+    }
+  }
+
+  /**
    * 发送新消息通知（仅在后台时发送）
    */
   async notifyNewMessage(sessionTitle: string, content: string, sessionId: string): Promise<void> {
@@ -30,11 +74,32 @@ export class NotificationHelper {
     if (appState.isInForeground) return
     if (!this.context) return
 
+    // 确保已授权
+    if (!this.isNotificationEnabled) {
+      try {
+        const enabled = await notificationManager.isNotificationEnabled()
+        if (!enabled) {
+          console.warn('[NotificationHelper] Notification not enabled, skip')
+          return
+        }
+        this.isNotificationEnabled = true
+      } catch (e) {
+        return
+      }
+    }
+
+    // 确保渠道存在
+    if (!this.isSlotCreated) {
+      await this.ensureSlotCreated()
+    }
+
     try {
       const agent = await this.createWantAgent(sessionId)
+      const notificationId = this.hashSessionId(sessionId)
 
       const request: notificationManager.NotificationRequest = {
-        id: this.hashSessionId(sessionId),
+        id: notificationId,
+        notificationSlotType: notificationManager.SlotType.SOCIAL_COMMUNICATION,
         content: {
           notificationContentType: notificationManager.ContentType.NOTIFICATION_CONTENT_BASIC_TEXT,
           normal: {
@@ -43,7 +108,12 @@ export class NotificationHelper {
           }
         },
         wantAgent: agent,
-        notificationSlotType: notificationManager.SlotType.SOCIAL_COMMUNICATION
+        isAlertOnce: false,
+        isStopwatch: false,
+        isCountDown: false,
+        showDeliveryTime: true,
+        isUnremovable: false,
+        label: 'ChatMessage'
       }
 
       await notificationManager.publish(request)
@@ -97,7 +167,7 @@ export class NotificationHelper {
     let hash = 0
     for (let i = 0; i < sessionId.length; i++) {
       hash = ((hash << 5) - hash) + sessionId.charCodeAt(i)
-      hash = hash & hash // Convert to 32bit integer
+      hash = hash & hash
     }
     return Math.abs(hash) % 2147483647
   }

@@ -70,14 +70,8 @@ export struct SearchBar {
     .width('100%')
     .height(48)
     .borderRadius(24)
-    .backgroundColor('rgba(255, 255, 255, 0.6)')
-    .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.3)' })
-    .shadow({
-      radius: 12,
-      color: 'rgba(0, 0, 0, 0.2)',
-      offsetX: 0,
-      offsetY: 3
-    })
+    .backgroundColor('#08FFFFFF')
+    .backdropBlur(24)
+    .border({ width: 0.5, color: '#30FFFFFF' })
   }
 }

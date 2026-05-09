@@ -693,7 +693,7 @@ struct ChatDetailPage {
       .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, bottom: Theme.SpacingLG })
       .backgroundColor(Color.Transparent)
       .position({ x: 0, y: '100%' })
-      .translate({ y: -80 })
+      .translate({ y: '-100%' })
       .zIndex(2)
       .opacity(this.userIsViewingHistory ? 0.7 : 1.0)
       .animation({ duration: 300, curve: Curve.EaseInOut })
@@ -1557,10 +1557,10 @@ struct ChatDetailPage {
         this.showSlashCommands = false
       })
 
-      // 输入框 - 液态玻璃
-      TextInput({ placeholder: '发送消息...', text: this.inputText })
+      // 输入框 - 液态玻璃，多行自适应高度（往上增长）
+      TextArea({ placeholder: '发送消息...', text: this.inputText })
         .layoutWeight(1)
-        .height(36)
+        .constraintSize({ minHeight: 36, maxHeight: 120 })
         .backgroundColor('#40FFFFFF')
         .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
         .shadow({ radius: 20, color: '#33000000', offsetX: 0, offsetY: 2 })
@@ -1571,11 +1571,10 @@ struct ChatDetailPage {
         .linearGradient({ angle: 180, colors: [['#10FFFFFF', 0.0], ['#00FFFFFF', 0.3]] })
         .fontColor(Theme.TextPrimary)
         .placeholderColor('rgba(255,255,255,0.3)')
+        .fontSize(Theme.FontBody)
+        .padding({ left: 14, right: 14, top: 8, bottom: 8 })
         .onChange((value: string) => {
           this.inputText = value
-        })
-        .onSubmit(() => {
-          this.sendMessage()
         })
 
       // 发送按钮 - 液态玻璃（无输入时），有输入时高亮
@@ -1600,6 +1599,7 @@ struct ChatDetailPage {
       })
     }
     .width('100%')
+    .alignItems(VerticalAlign.Bottom)
     .padding({ left: 0, right: 0, top: 0, bottom: 0 })
   }
 

@@ -3,6 +3,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit'
 import { window } from '@kit.ArkUI'
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit'
 import { wantAgent } from '@kit.AbilityKit'
+import { notificationManager } from '@kit.NotificationKit'
 import { authStore } from '../stores/AuthStore'
 import { appState } from '../stores/AppState'
 import { sessionStore } from '../stores/SessionStore'
@@ -28,6 +29,19 @@ export default class EntryAbility extends UIAbility {
     // 初始化本地存储
     await storageService.init(this.context)
     hilog.info(DOMAIN, 'testTag', 'StorageService initialized')
+
+    // 请求通知授权（在 EntryAbility 中调用，this.context 就是 UIAbilityContext）
+    try {
+      const enabled = await notificationManager.isNotificationEnabled()
+      if (!enabled) {
+        await notificationManager.requestEnableNotification(this.context)
+        hilog.info(DOMAIN, 'testTag', 'Notification permission granted via dialog')
+      }
+    } catch (e) {
+      hilog.error(DOMAIN, 'testTag', 'Notification permission error: %{public}s', JSON.stringify(e))
+    }
+    await notificationHelper.requestNotificationPermission()
+    hilog.info(DOMAIN, 'testTag', 'Notification helper initialized')
   }
 
   onDestroy(): void {
