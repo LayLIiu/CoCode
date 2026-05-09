@@ -96,6 +96,9 @@ struct ChatDetailPage {
   // thinking 自动展开/合上（与 iOS 一致：最新 thinking 自动展开，新工具/内容出现后自动合上）
   private latestThinkingId: string = ''
 
+  // 强制重绘计数器（ArkTS @State 不追踪嵌套对象属性变更）
+  @State messageUpdateCounter: number = 0
+
   // "最新消息"浮动按钮
   @State showNewMessageButton: boolean = false
   @State userIsViewingHistory: boolean = false
@@ -539,7 +542,16 @@ struct ChatDetailPage {
           ListItem() {
             this.MessageBubble(message)
           }
-        }, (message: Message) => message.id)
+        }, (message: Message) => {
+          // key 包含交互状态，确保权限/问答操作后 ForEach 重建组件
+          if (message.type === 'permission_request') {
+            return message.id + '_' + (message.isPermissionHandled ? 'done' : 'pending')
+          }
+          if (message.type === 'question') {
+            return message.id + '_' + (message.isQuestionAnswered ? 'done' : 'pending')
+          }
+          return message.id
+        })
 
         // 流式文本实时渲染（AI 逐字输出）
         if (this.streamingText) {
@@ -1307,6 +1319,7 @@ struct ChatDetailPage {
                 sessionStore.sendPermissionResponse(message.permissionId, false)
                 message.isPermissionHandled = true
                 message.permissionResult = false
+                this.messageUpdateCounter++
               }
             })
 
@@ -1321,6 +1334,7 @@ struct ChatDetailPage {
                 sessionStore.sendPermissionResponse(message.permissionId, true)
                 message.isPermissionHandled = true
                 message.permissionResult = true
+                this.messageUpdateCounter++
               }
             })
         }
@@ -1380,6 +1394,7 @@ struct ChatDetailPage {
                   sessionStore.sendQuestionResponse(message.questionId, option)
                   message.isQuestionAnswered = true
                   message.selectedAnswer = option
+                  this.messageUpdateCounter++
                 }
               })
           }, (option: string, index: number) => `option-${index}`)
@@ -1402,6 +1417,7 @@ struct ChatDetailPage {
                     sessionStore.sendQuestionResponse(message.questionId, this.customInputText.trim())
                     message.isQuestionAnswered = true
                     message.selectedAnswer = this.customInputText.trim()
+                    this.messageUpdateCounter++
                     this.showCustomInput = false
                     this.customInputText = ''
                   }
@@ -1419,6 +1435,7 @@ struct ChatDetailPage {
                     sessionStore.sendQuestionResponse(message.questionId, this.customInputText.trim())
                     message.isQuestionAnswered = true
                     message.selectedAnswer = this.customInputText.trim()
+                    this.messageUpdateCounter++
                     this.showCustomInput = false
                     this.customInputText = ''
                   }

@@ -379,7 +379,6 @@ export struct MarkdownRenderer {
               .fontFamily('monospace')
               .fontColor('#BF5AF2')
               .fontWeight(FontWeight.Medium)
-              .textBackgroundStyle({ color: '#3A3A3C', radius: 4 })
           } else if (frag.type === InlineFragmentType.LINK) {
             Span(frag.content)
               .fontSize(15)
@@ -479,7 +478,6 @@ export struct MarkdownRenderer {
             .fontSize(14)
             .fontFamily('monospace')
             .fontColor('#BF5AF2')
-            .textBackgroundStyle({ color: '#3A3A3C', radius: 4 })
         } else if (frag.type === InlineFragmentType.LINK) {
           Span(frag.content)
             .fontSize(15)
