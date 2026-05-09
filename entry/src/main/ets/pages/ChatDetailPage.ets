@@ -93,6 +93,9 @@ struct ChatDetailPage {
   // 复制按钮
   @State activeCopyMessageId: string = ''
 
+  // thinking 自动展开/合上（与 iOS 一致：最新 thinking 自动展开，新工具/内容出现后自动合上）
+  private latestThinkingId: string = ''
+
   // "最新消息"浮动按钮
   @State showNewMessageButton: boolean = false
   @State userIsViewingHistory: boolean = false
@@ -171,7 +174,10 @@ struct ChatDetailPage {
         if (msgs) {
           this.messages = msgs
         }
-        this.scrollToBottom()
+        // 查看历史时不强制滚动，避免打断用户
+        if (!this.userIsViewingHistory) {
+          this.scrollToBottom()
+        }
       }
     }
 
@@ -290,15 +296,21 @@ struct ChatDetailPage {
       case 'content_delta':
         if (this.chatStatus === 'idle' || this.chatStatus === 'completed') {
           this.chatStatus = 'streaming'
+          this.startWorkTimer()
         }
         if (msg.text) {
           this.streamingText += msg.text
+          // 流式文本实时滚动
+          if (!this.userIsViewingHistory) {
+            this.scrollToBottom()
+          }
         }
         break
 
       case 'thinking':
         if (this.chatStatus === 'idle' || this.chatStatus === 'completed') {
           this.chatStatus = 'thinking'
+          this.startWorkTimer()
         }
         if (!this.inThinkingBlock) {
           this.inThinkingBlock = true
@@ -306,6 +318,9 @@ struct ChatDetailPage {
         }
         if (msg.text) {
           this.streamingThinking += msg.text
+          if (!this.userIsViewingHistory) {
+            this.scrollToBottom()
+          }
         }
         break
 
@@ -314,6 +329,8 @@ struct ChatDetailPage {
         this.inTextBlock = false
         this.inThinkingBlock = false
         this.chatStatus = 'tool_executing'
+        // 新工具出现 → 合上最新 thinking（与 iOS 一致）
+        this.collapseLatestThinking()
         break
 
       case 'tool_result':
@@ -331,6 +348,8 @@ struct ChatDetailPage {
         if (!this.userIsViewingHistory) {
           this.scrollToBottom()
         }
+        // 消息完成 → 合上最新 thinking
+        this.collapseLatestThinking()
         break
 
       case 'status':
@@ -370,6 +389,7 @@ struct ChatDetailPage {
   }
 
   private flushStreamingBuffers(): void {
+    // 先 flush 文本：文本出现时合上最新 thinking
     if (this.streamingText) {
       const trimmed = this.streamingText.trim()
       const shouldHide = trimmed.startsWith('[{') &&
@@ -383,18 +403,38 @@ struct ChatDetailPage {
           timestamp: new Date().toISOString()
         }
         sessionStore.addMessage(this.sessionId, textMsg)
+
+        // 文本出现 → 合上最新 thinking（与 iOS 一致）
+        if (this.latestThinkingId) {
+          const newSet = new Set(this.expandedThinkingIds)
+          newSet.delete(this.latestThinkingId)
+          this.expandedThinkingIds = newSet
+          this.latestThinkingId = ''
+        }
       }
       this.streamingText = ''
     }
 
+    // 再 flush thinking：自动展开最新 thinking，合上旧 thinking
     if (this.streamingThinking) {
+      const thinkId = 'thinking-' + Date.now()
       const thinkMsg: Message = {
-        id: 'thinking-' + Date.now(),
+        id: thinkId,
         type: 'thinking',
         content: this.streamingThinking,
         timestamp: new Date().toISOString()
       }
       sessionStore.addMessage(this.sessionId, thinkMsg)
+
+      // 自动展开最新 thinking，同时合上旧的
+      const newSet = new Set(this.expandedThinkingIds)
+      if (this.latestThinkingId) {
+        newSet.delete(this.latestThinkingId)
+      }
+      newSet.add(thinkId)
+      this.expandedThinkingIds = newSet
+      this.latestThinkingId = thinkId
+
       this.streamingThinking = ''
     }
   }
@@ -501,7 +541,21 @@ struct ChatDetailPage {
           }
         }, (message: Message) => message.id)
 
-        // AI 工作状态指示器（左下角吉祥物动画，在最后一条消息后面）
+        // 流式文本实时渲染（AI 逐字输出）
+        if (this.streamingText) {
+          ListItem() {
+            this.StreamingTextBubble()
+          }
+        }
+
+        // 流式思考实时渲染
+        if (this.streamingThinking) {
+          ListItem() {
+            this.StreamingThinkingBubble()
+          }
+        }
+
+        // AI 工作状态指示器（吉祥物动画，在流式内容后面）
         if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
           this.chatStatus === 'tool_executing' || this.chatStatus === 'permission_pending' ||
           this.chatStatus === 'question_pending') {
@@ -824,6 +878,62 @@ struct ChatDetailPage {
     )
   }
 
+  // 流式文本气泡（实时渲染 AI 输出）
+  @Builder
+  StreamingTextBubble() {
+    Row() {
+      Column() {
+        MarkdownRenderer({ content: this.streamingText })
+      }
+      .width('100%')
+      .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+      .backgroundColor('rgba(255,255,255,0.08)')
+      .borderRadius(18)
+    }
+    .width('100%')
+    .margin({ bottom: Theme.SpacingMD })
+  }
+
+  // 流式思考气泡（实时渲染 thinking 输出）
+  @Builder
+  StreamingThinkingBubble() {
+    Row() {
+      Column({ space: 0 }) {
+        Row({ space: 8 }) {
+          SymbolGlyph($r('sys.symbol.lightbulb'))
+            .fontSize(12)
+            .fontColor([Theme.AccentOrange])
+
+          Text('thinking...')
+            .fontSize(11)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Theme.TextSecondary)
+
+          Blank()
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 10, bottom: 6 })
+
+        Scroll() {
+          Text(this.streamingThinking)
+            .fontSize(11)
+            .fontColor(Theme.TextSecondary)
+            .fontFamily('monospace')
+            .width('100%')
+        }
+        .height(Math.max(60, Math.min(200, this.streamingThinking.split('\n').length * 20)))
+        .scrollBar(BarState.Off)
+        .padding({ left: 12, right: 12, bottom: 10 })
+      }
+      .width('100%')
+      .backgroundColor('rgba(255,255,255,0.04)')
+      .borderRadius(10)
+      .border({ width: 0.5, color: 'rgba(255,255,255,0.1)' })
+    }
+    .width('100%')
+    .margin({ bottom: Theme.SpacingMD })
+  }
+
   // 隐藏工具调用 JSON 格式的内容
   private shouldHideContent(content: string): boolean {
     const trimmed = content.trim()
@@ -936,6 +1046,16 @@ struct ChatDetailPage {
       newSet.add(id)
     }
     this.expandedThinkingIds = newSet
+  }
+
+  // 合上最新 thinking（与 iOS 一致：新工具或内容出现后自动合上）
+  private collapseLatestThinking(): void {
+    if (this.latestThinkingId) {
+      const newSet = new Set(this.expandedThinkingIds)
+      newSet.delete(this.latestThinkingId)
+      this.expandedThinkingIds = newSet
+      this.latestThinkingId = ''
+    }
   }
 
   @Builder
@@ -1917,6 +2037,7 @@ struct ChatDetailPage {
     this.streamingThinking = ''
     this.inTextBlock = false
     this.inThinkingBlock = false
+    this.latestThinkingId = ''
 
     this.chatStatus = 'thinking'
     this.startWorkTimer()

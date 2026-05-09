@@ -54,6 +54,10 @@
       {
         "name": "ohos.permission.SYSTEM_FLOAT_WINDOW",
         "reason": "$string:float_window_permission"
+      },
+      {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING",
+        "reason": "$string:background_permission"
       }
     ]
   }

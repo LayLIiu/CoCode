@@ -7,6 +7,7 @@ import { Session, Message, SessionStatus, TaskItem, PermissionMode, WSMessage, O
 import { apiService } from '../services/APIService'
 import { wsService } from '../services/WebSocketService'
 import { storageService } from '../services/StorageService'
+import { notificationHelper } from '../services/NotificationHelper'
 import { authStore } from './AuthStore'
 
 export class SessionStore {
@@ -545,14 +546,16 @@ export class SessionStore {
         break
 
       case 'tool_result':
-        if (msg.toolUseId && msg.content) {
-          this.updateToolResult(sessionId, msg.toolUseId, msg.content)
+        if (msg.toolUseId && msg.content !== undefined && msg.content !== null) {
+          this.updateToolResult(sessionId, msg.toolUseId, msg.content, msg.isError === true)
         }
         break
 
       case 'message_complete':
         console.info(`[SessionStore] Message complete for ${sessionId}`)
         this.updateSessionStatus(sessionId, 'completed')
+        // 后台通知
+        this.notifyIfBackground(sessionId, 'AI 回复完成', msg.text || '')
         break
 
       case 'permission_request':
@@ -570,6 +573,8 @@ export class SessionStore {
           }
           this.addMessage(sessionId, permMessage)
         }
+        // 后台通知
+        this.notifyIfBackground(sessionId, '权限请求', msg.description || msg.toolName || '需要您的确认')
         break
 
       case 'question':
@@ -646,6 +651,8 @@ export class SessionStore {
             timestamp: msg.timestamp || new Date().toISOString()
           }
           this.addMessage(sessionId, userMsg)
+          // 后台通知（桌面端发来的用户消息）
+          this.notifyIfBackground(sessionId, '用户消息', contentString)
         }
         break
 
@@ -671,6 +678,15 @@ export class SessionStore {
   }
 
   // MARK: - 私有方法
+
+  /**
+   * 后台时发送通知
+   */
+  private notifyIfBackground(sessionId: string, title: string, content: string): void {
+    const session = this.sessions.find(s => s.id === sessionId)
+    const sessionTitle = session?.title || title
+    notificationHelper.notifyNewMessage(sessionTitle, content, sessionId)
+  }
 
   private updateSessionStatusFromState(sessionId: string, state: string): void {
     let status: SessionStatus = 'idle'
@@ -720,16 +736,33 @@ export class SessionStore {
     }
   }
 
-  private updateToolResult(sessionId: string, toolUseId: string, content: object | string): void {
+  private updateToolResult(sessionId: string, toolUseId: string, content: object | string, isError: boolean): void {
     const messages = this.messages.get(sessionId)
-    if (!messages) return
+    if (!messages) {
+      console.warn(`[SessionStore] No messages found for session ${sessionId}`)
+      return
+    }
 
     const index = messages.findIndex(m => m.id === toolUseId)
     if (index >= 0) {
       const resultString = typeof content === 'string' ? content : JSON.stringify(content)
       messages[index].toolResult = resultString
-      messages[index].toolStatus = 'completed'
+      messages[index].toolStatus = isError ? 'failed' : 'completed'
       this.notifyMessagesChanged(sessionId)
+      console.info(`[SessionStore] Tool ${toolUseId} updated: ${isError ? 'failed' : 'completed'}`)
+    } else {
+      // 工具消息不存在时（如乱序到达），用 tool_result 创建
+      console.warn(`[SessionStore] Tool ${toolUseId} not found, creating from tool_result`)
+      const resultString = typeof content === 'string' ? content : JSON.stringify(content)
+      const toolMessage: Message = {
+        id: toolUseId,
+        type: 'tool_use',
+        content: '',
+        timestamp: new Date().toISOString(),
+        toolResult: resultString,
+        toolStatus: isError ? 'failed' : 'completed'
+      }
+      this.addMessage(sessionId, toolMessage)
     }
   }
 

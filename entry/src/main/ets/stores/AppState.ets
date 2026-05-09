@@ -11,6 +11,9 @@ export type ThemeMode = 'light' | 'dark' | 'glass'
 export class AppState {
   private static instance: AppState
 
+  // 前后台状态
+  isInForeground: boolean = true
+
   // 主题
   themeMode: ThemeMode = 'dark'
 

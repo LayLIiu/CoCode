@@ -533,6 +533,40 @@ export class WebSocketService {
     }
   }
 
+  // MARK: - 主动重连
+
+  /**
+   * 强制重连所有已订阅的会话（用于 onForeground 恢复连接）
+   */
+  forceReconnectAll(): void {
+    if (!this.serverUrl) {
+      console.info('[WS] forceReconnectAll: no serverUrl, skipping')
+      return
+    }
+
+    console.info(`[WS] forceReconnectAll: ${this.subscribedSessions.size} sessions`)
+
+    this.subscribedSessions.forEach((sessionId) => {
+      // 断开旧连接
+      const conn = this.connections.get(sessionId)
+      if (conn && conn.ws) {
+        try {
+          conn.ws.close()
+        } catch (e) {
+          // ignore close errors
+        }
+      }
+
+      // 清除旧状态并重连
+      this.connections.set(sessionId, new WSSessionConnection())
+      this.connectSession(sessionId)
+    })
+
+    // 重启心跳
+    this.startHeartbeat()
+    this.startCleanup()
+  }
+
   // MARK: - 状态查询
 
   isConnected(sessionId: string): boolean {

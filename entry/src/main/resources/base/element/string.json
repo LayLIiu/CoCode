@@ -21,6 +21,14 @@
       "value": "用于显示悬浮导航栏"
     },
     {
+      "name": "notification_permission",
+      "value": "用于接收新消息通知"
+    },
+    {
+      "name": "background_permission",
+      "value": "用于后台保持连接接收消息"
+    },
+    {
       "name": "tab_claude",
       "value": "Claude"
     },
