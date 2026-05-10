@@ -148,10 +148,11 @@ export struct HdsMiniBarButton {
 
   /**
    * 构建组件 UI
-   * 使用 Row 包裹 HdsTabs 实现浮动按钮效果
+   * 使用 Stack 让点击区域和视觉区域一致
    */
   build() {
-    Row() {
+    Stack() {
+      // 液态玻璃效果层
       HdsTabs() {
         TabContent()
           .tabBar(this.buttonContent())
@@ -160,11 +161,11 @@ export struct HdsMiniBarButton {
       .barHeight(this.barHeight)
       .barOverlap(this.barOverlap)
       .barPosition(this.barPosition)
-      .scrollable(false)  // 禁用滚动
-      .animationDuration(0)  // 禁用动画
+      .scrollable(false)
+      .animationDuration(0)
       .barFloatingStyle({
         gradientMask: {
-          maskColor: 'rgba(0,0,0,0)'  // 完全透明，隐藏方框
+          maskColor: 'rgba(0,0,0,0)'
         },
         barBottomMargin: this.barBottomMargin,
         systemMaterialEffect: this.enableMaterialEffect ? {
@@ -172,28 +173,27 @@ export struct HdsMiniBarButton {
           materialLevel: this.materialLevel
         } : undefined
       })
-      .backgroundColor(Color.Transparent)  // 透明背景
-      .border({ width: 0 })  // 移除边框
-      .shadow({ radius: 0 })  // 移除阴影
-      .onTabBarClick(() => {
-        if (this.onButtonClick) {
-          this.onButtonClick();
-        }
-      })
+      .backgroundColor(Color.Transparent)
+      .border({ width: 0 })
+      .shadow({ radius: 0 })
+      .hitTestBehavior(HitTestMode.Transparent)  // 让点击穿透到外层
+
+      // 透明点击层 - 覆盖整个按钮区域
+      Column()
+        .width(this.barWidth)
+        .height(this.barHeight)
+        .backgroundColor(Color.Transparent)
+        .onClick(() => {
+          if (this.onButtonClick) {
+            this.onButtonClick();
+          }
+        })
     }
     .size(this.getComputedContainerSize())
-    .padding(this.contentPadding)
-    .align(Alignment.TopStart)  // 内容靠上左对齐，底部留出空间
-    .backgroundColor(Color.Transparent)  // 外层容器透明
+    .alignContent(Alignment.Center)
+    .backgroundColor(Color.Transparent)
     .border({ width: 0 })
     .shadow({ radius: 0 })
-    .translate({ y: this.contentPadding })  // 容器往下移动，增加底部空间
-    .clip(false)  // 不裁切，让形变效果完整显示
-    .onClick(() => {
-      // 外层 Row 也响应点击，增加可靠性
-      if (this.onButtonClick) {
-        this.onButtonClick();
-      }
-    })
+    .clip(false)
   }
 }
