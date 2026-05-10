@@ -39,7 +39,7 @@ export class NotificationHelper {
         this.isNotificationEnabled = true
         console.info('[NotificationHelper] Notification already enabled')
       } else {
-        // 请求用户授权（无参版本，由 EntryAbility 调用带 context 版本）
+        // 请求用户授权
         await notificationManager.requestEnableNotification()
         this.isNotificationEnabled = true
         console.info('[NotificationHelper] Notification permission granted')
@@ -60,6 +60,7 @@ export class NotificationHelper {
     if (this.isSlotCreated) return
 
     try {
+      // 创建社交通信类型的通知槽
       await notificationManager.addSlot(notificationManager.SlotType.SOCIAL_COMMUNICATION)
       this.isSlotCreated = true
       console.info('[NotificationHelper] Notification slot created')
@@ -72,9 +73,18 @@ export class NotificationHelper {
    * 发送新消息通知（仅在后台时发送）
    */
   async notifyNewMessage(sessionTitle: string, content: string, sessionId: string): Promise<void> {
+    console.info(`[NotificationHelper] notifyNewMessage called, isInForeground: ${appState.isInForeground}`)
+
     // 前台时不发通知
-    if (appState.isInForeground) return
-    if (!this.context) return
+    if (appState.isInForeground) {
+      console.info('[NotificationHelper] App is in foreground, skip notification')
+      return
+    }
+
+    if (!this.context) {
+      console.warn('[NotificationHelper] No context, skip notification')
+      return
+    }
 
     // 确保已授权
     if (!this.isNotificationEnabled) {
@@ -86,6 +96,7 @@ export class NotificationHelper {
         }
         this.isNotificationEnabled = true
       } catch (e) {
+        console.error(`[NotificationHelper] Check enabled error: ${e}`)
         return
       }
     }
@@ -111,15 +122,12 @@ export class NotificationHelper {
         },
         wantAgent: agent,
         isAlertOnce: false,
-        isStopwatch: false,
-        isCountDown: false,
         showDeliveryTime: true,
-        isUnremovable: false,
         label: 'ChatMessage'
       }
 
       await notificationManager.publish(request)
-      console.info(`[NotificationHelper] Published notification for ${sessionId}`)
+      console.info(`[NotificationHelper] Published notification for ${sessionId}: ${sessionTitle}`)
     } catch (e) {
       console.error(`[NotificationHelper] Publish error: ${e}`)
     }

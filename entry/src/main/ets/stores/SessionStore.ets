@@ -9,6 +9,7 @@ import { wsService } from '../services/WebSocketService'
 import { storageService } from '../services/StorageService'
 import { notificationHelper } from '../services/NotificationHelper'
 import { authStore } from './AuthStore'
+import { appState } from './AppState'
 
 export class SessionStore {
   private static instance: SessionStore
@@ -19,6 +20,9 @@ export class SessionStore {
 
   // 消息存储
   messages: Map<string, Message[]> = new Map()
+
+  // 输入框草稿
+  inputDrafts: Map<string, string> = new Map()
 
   // 会话状态
   sessionStatuses: Map<string, SessionStatus> = new Map()
@@ -643,8 +647,22 @@ export class SessionStore {
       case 'message_complete':
         console.info(`[SessionStore] Message complete for ${sessionId}`)
         this.updateSessionStatus(sessionId, 'completed')
-        // 后台通知
-        this.notifyIfBackground(sessionId, 'AI 回复完成', msg.text || '')
+        // 后台通知 - 从最后一条 AI 消息获取内容
+        {
+          const messages = this.messages.get(sessionId)
+          let lastContent = ''
+          if (messages && messages.length > 0) {
+            // 从后往前找最后一条 assistant 消息
+            for (let i = messages.length - 1; i >= 0; i--) {
+              if (messages[i].type === 'assistant') {
+                lastContent = messages[i].content || ''
+                break
+              }
+            }
+          }
+          const notifyContent = lastContent || '已完成回复'
+          this.notifyIfBackground(sessionId, 'AI 回复完成', notifyContent)
+        }
         break
 
       case 'permission_request':
@@ -789,6 +807,7 @@ export class SessionStore {
    * 后台时发送通知
    */
   private notifyIfBackground(sessionId: string, title: string, content: string): void {
+    console.info(`[SessionStore] notifyIfBackground called for ${sessionId}, isInForeground: ${appState.isInForeground}`)
     const session = this.sessions.find(s => s.id === sessionId)
     const sessionTitle = session?.title || title
     notificationHelper.notifyNewMessage(sessionTitle, content, sessionId)
