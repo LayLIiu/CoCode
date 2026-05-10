@@ -470,6 +470,17 @@ export class SessionStore {
     if (status === 'idle' || status === 'completed') {
       storageService.saveSessionStatuses(this.sessionStatuses)
     }
+
+    // completed 状态 3 秒后自动恢复为 idle，让吉祥物回到睡眠
+    if (status === 'completed') {
+      setTimeout(() => {
+        // 只有当前仍然是 completed 时才恢复（避免覆盖新的工作状态）
+        if (this.sessionStatuses.get(sessionId) === 'completed') {
+          this.updateSessionStatus(sessionId, 'idle')
+        }
+      }, 3000)
+    }
+
     console.info(`[SessionStore] Status updated: ${sessionId} -> ${status}`)
   }
 

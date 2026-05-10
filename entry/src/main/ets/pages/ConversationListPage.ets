@@ -196,9 +196,24 @@ struct SessionItemView {
   @Prop session: Session
   @Prop @Watch('onRefresh') refreshTrigger: number = 0
   @State currentStatus: SessionStatus = 'idle'
+  private statusCheckTimer: number = -1
 
   aboutToAppear(): void {
     this.refreshStatus()
+    // 每 500ms 检查一次状态变化，确保吉祥物实时同步
+    this.statusCheckTimer = setInterval(() => {
+      const latestStatus = sessionStore.getSessionStatus(this.session.id)
+      if (latestStatus !== this.currentStatus) {
+        this.currentStatus = latestStatus
+      }
+    }, 500)
+  }
+
+  aboutToDisappear(): void {
+    if (this.statusCheckTimer !== -1) {
+      clearInterval(this.statusCheckTimer)
+      this.statusCheckTimer = -1
+    }
   }
 
   onRefresh(): void {
