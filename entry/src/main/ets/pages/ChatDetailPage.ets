@@ -11,6 +11,8 @@ import { sessionStore } from '../stores/SessionStore'
 import { apiService } from '../services/APIService'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
+import { HdsMiniBarButton } from '../components/HdsMiniBarButton'
+import { HdsGlassInput } from '../components/HdsGlassInput'
 import router from '@ohos.router'
 import pasteboard from '@ohos.pasteboard'
 
@@ -70,6 +72,8 @@ struct ChatDetailPage {
   @State sessionId: string = ''
   @State chatStatus: SessionStatus = 'idle'
   @State showMenu: boolean = false
+  @State showSheet: boolean = false
+  @State sheetType: string = '' // 'model' or 'slash'
   @State showModelSelector: boolean = false
   @State showSlashCommands: boolean = false
   @State models: ModelInfo[] = []
@@ -149,9 +153,20 @@ struct ChatDetailPage {
     this.getRouterParams()
     this.loadMessages()
     this.setupCallbacks()
+    // 恢复输入框草稿
+    const draft = sessionStore.inputDrafts.get(this.sessionId)
+    if (draft) {
+      this.inputText = draft
+    }
   }
 
   aboutToDisappear(): void {
+    // 保存输入框草稿
+    if (this.inputText) {
+      sessionStore.inputDrafts.set(this.sessionId, this.inputText)
+    } else {
+      sessionStore.inputDrafts.delete(this.sessionId)
+    }
     this.stopWorkTimer()
     this.removeCallbacks()
     sessionStore.setCurrentSession(null)
@@ -258,7 +273,7 @@ struct ChatDetailPage {
     try {
       await apiService.setCurrentModel(modelId)
       this.currentModel = modelId
-      this.showModelSelector = false
+      this.showSheet = false
       this.showMenu = false
     } catch (e) {
       console.error(`[ChatDetailPage] Set model error: ${e}`)
@@ -268,7 +283,7 @@ struct ChatDetailPage {
   // 选择斜杠命令
   private selectSlashCommand(cmd: string): void {
     this.inputText = cmd + ' '
-    this.showSlashCommands = false
+    this.showSheet = false
     this.showMenu = false
   }
 
@@ -671,34 +686,38 @@ struct ChatDetailPage {
       // 任务面板
       this.TaskBarView()
 
-      // "最新消息"悬浮按钮（独立定位，不影响输入框位置）
-      if (this.showNewMessageButton) {
-        Row({ space: 4 }) {
-          SymbolGlyph($r('sys.symbol.star_fill'))
-            .fontSize(14)
-            .fontColor([Theme.AccentOrange])
-            .scale({ x: this.mascotScale, y: this.mascotScale })
-          Text('最新消息')
-            .fontSize(11)
-            .fontColor(Theme.TextPrimary)
+      // 底部悬浮输入框（包含最新消息按钮）
+      Column({ space: 8 }) {
+        // "最新消息"按钮 - 跟随输入框移动
+        if (this.showNewMessageButton) {
+          Row() {
+            HdsMiniBarButton({
+              barWidth: 100,
+              barHeight: 32,
+              contentPadding: 6,
+              maskColor: 'rgba(255,255,255,0.15)',
+              barBottomMargin: 0,
+              onButtonClick: () => {
+                this.showNewMessageButton = false
+                this.userIsViewingHistory = false
+                this.animationProgress = 0
+                this.scrollToBottom()
+              }
+            }) {
+              Row({ space: 4 }) {
+                SymbolGlyph($r('sys.symbol.arrow_down'))
+                  .fontSize(12)
+                  .fontColor([Theme.TextSecondary])
+                Text('最新消息')
+                  .fontSize(11)
+                  .fontColor(Theme.TextPrimary)
+              }
+            }
+          }
+          .justifyContent(FlexAlign.Center)
+          .width('100%')
         }
-        .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-        .backgroundColor('rgba(255,255,255,0.08)')
-        .borderRadius(18)
-        .border({ width: 0.5, color: 'rgba(255,255,255,0.15)' })
-        .position({ x: '50%', y: '100%' })
-        .translate({ x: '-50%', y: -130 })
-        .zIndex(3)
-        .onClick(() => {
-          this.showNewMessageButton = false
-          this.userIsViewingHistory = false
-          this.animationProgress = 0
-          this.scrollToBottom()
-        })
-      }
 
-      // 底部悬浮输入框
-      Column() {
         this.InputAreaContent()
       }
       .width('100%')
@@ -709,26 +728,26 @@ struct ChatDetailPage {
       .zIndex(2)
       .opacity(this.userIsViewingHistory ? 0.7 : 1.0)
       .animation({ duration: 300, curve: Curve.EaseInOut })
+      .clip(false)  // 禁用裁切，让按钮形变效果可以超出边界
 
-    // 弹出菜单
+    // 菜单气泡 - 从按钮左下角扩散
       if (this.showMenu) {
-        this.MenuPopup()
+        this.MenuBubble()
       }
 
-      // 模型选择器
-      if (this.showModelSelector) {
-        this.ModelSelectorPopup()
-      }
-
-      // 斜杠命令
-      if (this.showSlashCommands) {
-        this.SlashCommandsPopup()
-      }
     }
     .width('100%')
     .height('100%')
     .backgroundColor('#121214')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .clip(false)  // 禁用裁切，让按钮形变效果可以超出边界
+    .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.SlashCommandsSheet(), {
+      height: this.sheetType === 'model' ? 480 : 520,
+      backgroundColor: Theme.BackgroundSecondary,
+      dragBar: true,
+      showClose: false,
+      blurStyle: BlurStyle.COMPONENT_THICK
+    })
     .width('100%')
     .height('100%')
   }
@@ -1565,41 +1584,29 @@ struct ChatDetailPage {
   @Builder
   InputAreaContent() {
     Row({ space: 10 }) {
-      // 菜单按钮 - 液态玻璃
-      Column() {
-        SymbolGlyph($r('sys.symbol.plus'))
-          .fontSize(16)
-          .fontColor([Theme.TextSecondary])
-      }
-      .width(36)
-      .height(36)
-      .backgroundColor('#40FFFFFF')
-      .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-      .shadow({ radius: 20, color: '#33000000', offsetX: 0, offsetY: 2 })
-      .borderRadius(18)
-      .borderWidth(1)
-      .borderColor('#80FFFFFF')
-      .outline({ width: 1, color: '#1A000000', radius: 18 })
-      .linearGradient({ angle: 180, colors: [['#10FFFFFF', 0.0], ['#00FFFFFF', 0.3]] })
-      .justifyContent(FlexAlign.Center)
-      .onClick(() => {
-        this.showMenu = !this.showMenu
-        this.showModelSelector = false
-        this.showSlashCommands = false
+      // 菜单按钮 - 沉浸光感浮动按钮
+      HdsMiniBarButton({
+        barWidth: 36,
+        barHeight: 36,
+        contentPadding: 4,
+        iconResource: $r('sys.symbol.plus'),
+        iconSize: 16,
+        iconColor: [Theme.TextSecondary],
+        maskColor: 'rgba(255,255,255,0.15)',
+        barBottomMargin: 0,
+        onButtonClick: () => {
+          this.showMenu = !this.showMenu
+          this.showSheet = false
+        }
       })
 
-      // 输入框 - 液态玻璃，多行自适应高度（往上增长）
+      // 输入框 - 液态玻璃效果
       TextArea({ placeholder: '发送消息...', text: this.inputText })
         .layoutWeight(1)
         .constraintSize({ minHeight: 36, maxHeight: 120 })
-        .backgroundColor('#40FFFFFF')
-        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-        .shadow({ radius: 20, color: '#33000000', offsetX: 0, offsetY: 2 })
+        .backgroundColor('rgba(255,255,255,0.1)')
+        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .borderRadius(18)
-        .borderWidth(1)
-        .borderColor('#80FFFFFF')
-        .outline({ width: 1, color: '#1A000000', radius: 18 })
-        .linearGradient({ angle: 180, colors: [['#10FFFFFF', 0.0], ['#00FFFFFF', 0.3]] })
         .fontColor(Theme.TextPrimary)
         .placeholderColor('rgba(255,255,255,0.3)')
         .fontSize(Theme.FontBody)
@@ -1608,36 +1615,54 @@ struct ChatDetailPage {
           this.inputText = value
         })
 
-      // 发送按钮 - 液态玻璃（无输入时），有输入时高亮
-      Column() {
-        SymbolGlyph($r('sys.symbol.arrow_up'))
-          .fontSize(16)
-          .fontColor([this.inputText ? Theme.TextPrimary : Theme.TextSecondary])
+      // 发送按钮 - 沉浸光感浮动按钮（有输入时高亮）
+      if (this.inputText) {
+        // 有输入：实心高亮按钮
+        HdsMiniBarButton({
+          barWidth: 36,
+          barHeight: 36,
+          contentPadding: 4,
+          iconResource: $r('sys.symbol.arrow_up'),
+          iconSize: 16,
+          iconColor: [Theme.TextOnPrimary],
+          maskColor: Theme.PrimaryColor,
+          barBottomMargin: 0,
+          materialType: hdsMaterial.MaterialType.ADAPTIVE,
+          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+          onButtonClick: () => {
+            this.sendMessage()
+          }
+        })
+      } else {
+        // 无输入：液态玻璃效果
+        HdsMiniBarButton({
+          barWidth: 36,
+          barHeight: 36,
+          contentPadding: 4,
+          iconResource: $r('sys.symbol.arrow_up'),
+          iconSize: 16,
+          iconColor: [Theme.TextSecondary],
+          maskColor: 'rgba(255,255,255,0.15)',
+          barBottomMargin: 0,
+          materialType: hdsMaterial.MaterialType.IMMERSIVE,
+          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+          onButtonClick: () => {
+            this.sendMessage()
+          }
+        })
       }
-      .width(36)
-      .height(36)
-      .backgroundColor(this.inputText ? Theme.PrimaryColor : '#40FFFFFF')
-      .backgroundBlurStyle(this.inputText ? BlurStyle.NONE : BlurStyle.COMPONENT_REGULAR)
-      .shadow({ radius: 20, color: '#33000000', offsetX: 0, offsetY: 2 })
-      .borderRadius(18)
-      .borderWidth(this.inputText ? 0 : 1)
-      .borderColor(this.inputText ? Color.Transparent : '#80FFFFFF')
-      .outline(this.inputText ? undefined : { width: 1, color: '#1A000000', radius: 18 })
-      .linearGradient(this.inputText ? undefined : { angle: 180, colors: [['#10FFFFFF', 0.0], ['#00FFFFFF', 0.3]] })
-      .justifyContent(FlexAlign.Center)
-      .onClick(() => {
-        this.sendMessage()
-      })
     }
     .width('100%')
     .alignItems(VerticalAlign.Bottom)
     .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+    .clip(false)  // 禁用裁切，让按钮形变效果可以超出边界
   }
 
-  // 菜单弹出
+  // 菜单气泡 - 从按钮左下角扩散
   @Builder
-  MenuPopup() {
-    Column() {
+  MenuBubble() {
+    Stack() {
+      // 菜单卡片 - 磨砂背景，靠左下角
       Column({ space: 4 }) {
         // 模型选择器
         Row({ space: 12 }) {
@@ -1663,11 +1688,12 @@ struct ChatDetailPage {
         }
         .width('100%')
         .padding(Theme.SpacingMD)
-        .backgroundColor(Theme.BackgroundSecondary)
+        .backgroundColor(Theme.BackgroundTertiary)
         .borderRadius(12)
         .onClick(() => {
           this.showMenu = false
-          this.showModelSelector = true
+          this.sheetType = 'model'
+          this.showSheet = true
           this.loadModels()
         })
 
@@ -1689,208 +1715,170 @@ struct ChatDetailPage {
         }
         .width('100%')
         .padding(Theme.SpacingMD)
-        .backgroundColor(Theme.BackgroundSecondary)
+        .backgroundColor(Theme.BackgroundTertiary)
         .borderRadius(12)
         .onClick(() => {
           this.showMenu = false
-          this.showSlashCommands = true
+          this.sheetType = 'slash'
+          this.showSheet = true
         })
       }
-      .width(200)
+      .width(220)
       .padding(Theme.SpacingSM)
-      .backgroundColor(Theme.BackgroundPrimary)
+      .backgroundColor(Theme.BackgroundSecondary)
       .borderRadius(16)
-      .shadow({ radius: 20, color: 'rgba(0,0,0,0.15)', offsetY: 4 })
+      .shadow({ radius: 20, color: 'rgba(0,0,0,0.3)', offsetY: 4 })
+      .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+      // 扩散动画：从左下角缩放 + 渐显
+      .transition(TransitionEffect.scale({ x: 0.3, y: 0.3 }).animation({ duration: 250, curve: Curve.FastOutSlowIn })
+        .combine(TransitionEffect.OPACITY.animation({ duration: 250, curve: Curve.FastOutSlowIn })))
     }
     .width('100%')
     .height('100%')
     .backgroundColor('rgba(0,0,0,0.3)')
-    .justifyContent(FlexAlign.End)
-    .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, bottom: 80 })
+    .alignContent(Alignment.BottomStart)
+    .padding({ left: Theme.SpacingLG, bottom: 85 })
+    .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
     .onClick(() => {
       this.showMenu = false
     })
   }
 
-  // 模型选择器弹出
+  // 模型选择器 Sheet（底部弹出）
   @Builder
-  ModelSelectorPopup() {
-    Column() {
-      Column({ space: 12 }) {
-        // 标题栏
-        Row() {
-          SymbolGlyph($r('sys.symbol.chevron_left'))
-            .fontSize(20)
-            .fontColor([Theme.TextPrimary])
-            .onClick(() => {
-              this.showModelSelector = false
-              this.showMenu = true
-            })
-
-          Text('选择模型')
-            .fontSize(Theme.FontHeading)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Theme.TextPrimary)
-            .layoutWeight(1)
-            .textAlign(TextAlign.Center)
-
-          Row().width(20)
-        }
-        .width('100%')
-        .padding({ bottom: Theme.SpacingSM })
-
-        if (this.isLoadingModels) {
-          Column() {
-            LoadingProgress()
-              .width(40)
-              .height(40)
-              .color(Theme.PrimaryColor)
-
-            Text('加载中...')
-              .fontSize(Theme.FontCaption)
-              .fontColor(Theme.TextSecondary)
-              .margin({ top: Theme.SpacingMD })
-          }
-          .width('100%')
-          .height(200)
-          .justifyContent(FlexAlign.Center)
-        } else if (this.models.length === 0) {
-          Column() {
-            Text('暂无可用模型')
-              .fontSize(Theme.FontBody)
-              .fontColor(Theme.TextSecondary)
-          }
-          .width('100%')
-          .height(200)
-          .justifyContent(FlexAlign.Center)
-        } else {
-          List({ space: 8 }) {
-            ForEach(this.models, (model: ModelInfo) => {
-              ListItem() {
-                Row({ space: 12 }) {
-                  Column({ space: 4 }) {
-                    Text(model.name || model.id)
-                      .fontSize(Theme.FontBody)
-                      .fontColor(Theme.TextPrimary)
-
-                    if (model.description) {
-                      Text(model.description)
-                        .fontSize(Theme.FontTiny)
-                        .fontColor(Theme.TextTertiary)
-                        .maxLines(2)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    }
-                  }
-                  .layoutWeight(1)
-                  .alignItems(HorizontalAlign.Start)
-
-                  if (this.currentModel === model.id) {
-                    SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
-                      .fontSize(20)
-                      .fontColor([Theme.PrimaryColor])
-                  }
-                }
-                .width('100%')
-                .padding(Theme.SpacingMD)
-                .backgroundColor(this.currentModel === model.id ? Theme.PrimaryColorLight : Theme.BackgroundSecondary)
-                .borderRadius(12)
-                .onClick(() => {
-                  this.selectModel(model.id)
-                })
-              }
-            }, (model: ModelInfo) => model.id)
-          }
-          .width('100%')
-          .height(Math.min(this.models.length * 80, 300))
-          .scrollBar(BarState.Auto)
-        }
+  ModelSelectorSheet() {
+    Column({ space: 12 }) {
+      // 标题栏
+      Row() {
+        Text('选择模型')
+          .fontSize(Theme.FontHeading)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Theme.TextPrimary)
+          .layoutWeight(1)
+          .textAlign(TextAlign.Center)
       }
-      .width('85%')
-      .padding(Theme.SpacingLG)
-      .backgroundColor(Theme.BackgroundPrimary)
-      .borderRadius(20)
-      .shadow({ radius: 20, color: 'rgba(0,0,0,0.15)', offsetY: 4 })
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor('rgba(0,0,0,0.5)')
-    .justifyContent(FlexAlign.Center)
-    .onClick(() => {
-      this.showModelSelector = false
-    })
-  }
+      .width('100%')
+      .padding({ bottom: Theme.SpacingSM })
 
-  // 斜杠命令弹出
-  @Builder
-  SlashCommandsPopup() {
-    Column() {
-      Column({ space: 12 }) {
-        // 标题栏
-        Row() {
-          SymbolGlyph($r('sys.symbol.chevron_left'))
-            .fontSize(20)
-            .fontColor([Theme.TextPrimary])
-            .onClick(() => {
-              this.showSlashCommands = false
-              this.showMenu = true
-            })
+      if (this.isLoadingModels) {
+        Column() {
+          LoadingProgress()
+            .width(40)
+            .height(40)
+            .color(Theme.PrimaryColor)
 
-          Text('斜杠命令')
-            .fontSize(Theme.FontHeading)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Theme.TextPrimary)
-            .layoutWeight(1)
-            .textAlign(TextAlign.Center)
-
-          Row().width(20)
+          Text('加载中...')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+            .margin({ top: Theme.SpacingMD })
         }
         .width('100%')
-        .padding({ bottom: Theme.SpacingSM })
-
+        .height(200)
+        .justifyContent(FlexAlign.Center)
+      } else if (this.models.length === 0) {
+        Column() {
+          Text('暂无可用模型')
+            .fontSize(Theme.FontBody)
+            .fontColor(Theme.TextSecondary)
+        }
+        .width('100%')
+        .height(200)
+        .justifyContent(FlexAlign.Center)
+      } else {
         List({ space: 8 }) {
-          ForEach(this.slashCommands, (cmd: SlashCommand, index: number) => {
+          ForEach(this.models, (model: ModelInfo) => {
             ListItem() {
               Row({ space: 12 }) {
                 Column({ space: 4 }) {
-                  Text(cmd.name)
+                  Text(model.name || model.id)
                     .fontSize(Theme.FontBody)
-                    .fontWeight(FontWeight.Medium)
                     .fontColor(Theme.TextPrimary)
 
-                  Text(cmd.description)
-                    .fontSize(Theme.FontTiny)
-                    .fontColor(Theme.TextTertiary)
+                  if (model.description) {
+                    Text(model.description)
+                      .fontSize(Theme.FontTiny)
+                      .fontColor(Theme.TextTertiary)
+                      .maxLines(2)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  }
                 }
                 .layoutWeight(1)
                 .alignItems(HorizontalAlign.Start)
+
+                if (this.currentModel === model.id) {
+                  SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
+                    .fontSize(20)
+                    .fontColor([Theme.PrimaryColor])
+                }
               }
               .width('100%')
               .padding(Theme.SpacingMD)
-              .backgroundColor(Theme.BackgroundSecondary)
+              .backgroundColor(this.currentModel === model.id ? Theme.PrimaryColorLight : Theme.BackgroundTertiary)
               .borderRadius(12)
               .onClick(() => {
-                this.selectSlashCommand(cmd.name)
+                this.selectModel(model.id)
               })
             }
-          }, (cmd: SlashCommand, index: number) => `cmd-${index}`)
+          }, (model: ModelInfo) => model.id)
         }
         .width('100%')
-        .height(Math.min(this.slashCommands.length * 70, 350))
+        .layoutWeight(1)
         .scrollBar(BarState.Auto)
       }
-      .width('85%')
-      .padding(Theme.SpacingLG)
-      .backgroundColor(Theme.BackgroundPrimary)
-      .borderRadius(20)
-      .shadow({ radius: 20, color: 'rgba(0,0,0,0.15)', offsetY: 4 })
     }
     .width('100%')
-    .height('100%')
-    .backgroundColor('rgba(0,0,0,0.5)')
-    .justifyContent(FlexAlign.Center)
-    .onClick(() => {
-      this.showSlashCommands = false
-    })
+    .padding(Theme.SpacingLG)
+  }
+
+  // 斜杠命令 Sheet（底部弹出）
+  @Builder
+  SlashCommandsSheet() {
+    Column({ space: 12 }) {
+      // 标题栏
+      Row() {
+        Text('斜杠命令')
+          .fontSize(Theme.FontHeading)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Theme.TextPrimary)
+          .layoutWeight(1)
+          .textAlign(TextAlign.Center)
+      }
+      .width('100%')
+      .padding({ bottom: Theme.SpacingSM })
+
+      List({ space: 8 }) {
+        ForEach(this.slashCommands, (cmd: SlashCommand, index: number) => {
+          ListItem() {
+            Row({ space: 12 }) {
+              Column({ space: 4 }) {
+                Text(cmd.name)
+                  .fontSize(Theme.FontBody)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Theme.TextPrimary)
+
+                Text(cmd.description)
+                  .fontSize(Theme.FontTiny)
+                  .fontColor(Theme.TextTertiary)
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+            }
+            .width('100%')
+            .padding(Theme.SpacingMD)
+            .backgroundColor(Theme.BackgroundTertiary)
+            .borderRadius(12)
+            .onClick(() => {
+              this.selectSlashCommand(cmd.name)
+            })
+          }
+        }, (cmd: SlashCommand, index: number) => `cmd-${index}`)
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .scrollBar(BarState.Auto)
+    }
+    .width('100%')
+    .padding(Theme.SpacingLG)
   }
 
   // MARK: - 任务面板（与 iOS SessionTaskBarView 一致）
@@ -2148,6 +2136,7 @@ struct ChatDetailPage {
 
     const content = this.inputText.trim()
     this.inputText = ''
+    sessionStore.inputDrafts.delete(this.sessionId)
 
     // 去重：记录最近发送的消息
     this.recentlySentMessages.add(content)
