@@ -11,7 +11,7 @@ import { Session, SessionStatus } from '../models/Models'
 import { sessionStore } from '../stores/SessionStore'
 import { storageService } from '../services/StorageService'
 import { SearchBar } from '../components/SearchBar'
-import { PixelMascot, MascotStatus, getMascotColorForSession } from '../components/PixelMascot'
+import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
 import router from '@ohos.router'
 
 // 分组数据结构
@@ -272,7 +272,8 @@ struct SessionItemView {
         PixelMascot({
           mascotSize: 40,
           status: this.getMascotStatus(),
-          bodyColor: getMascotColorForSession(this.session.id)
+          bodyColor: getMascotColorForSession(this.session.id),
+          mascotType: getMascotTypeForProvider(this.session.providerId || '')
         })
 
         Column({ space: 4 }) {

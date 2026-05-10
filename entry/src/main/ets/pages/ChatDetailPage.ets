@@ -4,13 +4,13 @@
  */
 
 import { Theme } from '../common/Theme'
-import { Message, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus } from '../models/Models'
+import { Message, Session, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus } from '../models/Models'
 import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import { sessionStore } from '../stores/SessionStore'
 import { apiService } from '../services/APIService'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
-import { PixelMascot, MascotStatus, getMascotColorForSession } from '../components/PixelMascot'
+import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
 import router from '@ohos.router'
 import pasteboard from '@ohos.pasteboard'
 
@@ -762,7 +762,8 @@ struct ChatDetailPage {
         PixelMascot({
           mascotSize: 27,
           status: this.getMascotStatus(),
-          bodyColor: getMascotColorForSession(this.sessionId)
+          bodyColor: getMascotColorForSession(this.sessionId),
+          mascotType: getMascotTypeForProvider(this.getSessionProviderId())
         })
 
         // 状态文字
@@ -814,6 +815,11 @@ struct ChatDetailPage {
       default:
         return MascotStatus.IDLE
     }
+  }
+
+  private getSessionProviderId(): string {
+    const session = sessionStore.sessions.find((s: Session) => s.id === this.sessionId)
+    return session?.providerId || ''
   }
 
   // 获取可见消息（分页）
