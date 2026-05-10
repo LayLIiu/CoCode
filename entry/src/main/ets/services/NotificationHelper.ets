@@ -158,7 +158,7 @@ export class NotificationHelper {
   private async createWantAgent(sessionId: string): Promise<WantAgent> {
     const wantAgentInfo: wantAgent.WantAgentInfo = {
       wants: [{
-        bundleName: this.bundleName || 'com.example.myapplication',
+        bundleName: this.bundleName || 'com.cocode.app',
         abilityName: 'EntryAbility',
         parameters: {
           sessionId: sessionId,
