@@ -183,6 +183,7 @@ export struct HdsMiniBarButton {
         .width(this.barWidth)
         .height(this.barHeight)
         .backgroundColor(Color.Transparent)
+        .hitTestBehavior(HitTestMode.Block)  // 阻止点击穿透，确保接收所有点击
         .onClick(() => {
           if (this.onButtonClick) {
             this.onButtonClick();
@@ -195,5 +196,11 @@ export struct HdsMiniBarButton {
     .border({ width: 0 })
     .shadow({ radius: 0 })
     .clip(false)
+    .onClick(() => {
+      // 外层 Stack 也响应点击，双重保障
+      if (this.onButtonClick) {
+        this.onButtonClick();
+      }
+    })
   }
 }
