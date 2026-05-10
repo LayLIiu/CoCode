@@ -42,16 +42,17 @@ export struct PixelMascot {
   private readonly kbKeyColor: string = '#9aa8b4'
   private readonly starColor: string = '#fbbf24'
 
-  // 动画状态
+  // ZZZ 动画变量（@State 驱动 Text 组件更新）
   @State private zzzOffset1: number = 0
   @State private zzzOffset2: number = 0
   @State private zzzOffset3: number = 0
-  @State private breatheValue: number = 0
-  @State private bounceValue: number = 0
-  @State private jumpValue: number = 0
-  @State private armWaveValue: number = 0
-  @State private starOpacityValue: number = 0.5
-  @State private animationTime: number = 0  // 动画时间
+  // Canvas 绘制动画变量（普通变量，不触发 UI 重建）
+  private breatheValue: number = 0
+  private bounceValue: number = 0
+  private jumpValue: number = 0
+  private armWaveValue: number = 0
+  private starOpacityValue: number = 0.5
+  private animationTime: number = 0
 
   private settings: RenderingContextSettings = new RenderingContextSettings(true)
   private context: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings)
@@ -148,7 +149,7 @@ export struct PixelMascot {
           this.drawMascot()
         })
 
-      // ZZZ 睡眠符号 - 带动画
+      // ZZZ 睡眠符号 - 带动画（Text 组件实现，保持原有视觉效果）
       if (this.status === MascotStatus.IDLE) {
         this.ZzzAnimatedView()
       }
@@ -363,7 +364,7 @@ export struct PixelMascot {
     return 0
   }
 
-  // ZZZ 动画视图
+  // ZZZ 动画视图（Text 组件实现，保持原有视觉效果）
   @Builder
   ZzzAnimatedView() {
     Stack() {
@@ -401,6 +402,7 @@ export struct PixelMascot {
         })
     }
   }
+
 }
 
 // 获取吉祥物颜色的辅助函数

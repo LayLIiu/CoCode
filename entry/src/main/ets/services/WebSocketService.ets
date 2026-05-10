@@ -120,7 +120,14 @@ export class WebSocketService {
     conn.ws = ws
     conn.status = 'connecting'
     conn.lastActivity = Date.now()
-    conn.reconnectAttempts = 0
+    // 不在此处重置 reconnectAttempts，保持退避计数连续
+    // 如果是新连接（之前不存在），则从0开始
+    const oldConn = this.connections.get(sessionId)
+    if (!oldConn) {
+      conn.reconnectAttempts = 0
+    } else {
+      conn.reconnectAttempts = oldConn.reconnectAttempts
+    }
 
     this.connections.set(sessionId, conn)
 
@@ -132,18 +139,31 @@ export class WebSocketService {
       }
       console.info(`[WS] Connected to ${sessionId}`)
       this.updateConnectionStatus(sessionId, 'connected')
+      // 连接成功后重置重试计数
+      const currentConn = this.connections.get(sessionId)
+      if (currentConn) {
+        currentConn.reconnectAttempts = 0
+      }
       this.startReceiving(sessionId, ws)
     })
 
     ws.on('close', (err, value) => {
       console.info(`[WS] Connection closed: ${sessionId}`)
-      this.handleDisconnect(sessionId)
+      // 只在当前连接未被替换时处理断开（防止旧连接回调影响新连接）
+      const currentConn = this.connections.get(sessionId)
+      if (currentConn && currentConn.ws === ws) {
+        this.handleDisconnect(sessionId)
+      }
     })
 
     ws.on('error', (err) => {
       console.error(`[WS] Error: ${err.message}`)
-      this.updateConnectionStatus(sessionId, 'error')
-      this.scheduleReconnect(sessionId)
+      // 只在当前连接未被替换时更新状态
+      const currentConn = this.connections.get(sessionId)
+      if (currentConn && currentConn.ws === ws) {
+        this.updateConnectionStatus(sessionId, 'error')
+        this.scheduleReconnect(sessionId)
+      }
     })
   }
 
@@ -321,6 +341,7 @@ export class WebSocketService {
     const conn = this.connections.get(sessionId)
     if (conn) {
       conn.lastActivity = Date.now()
+      // 收到消息说明连接正常，重置重试计数
       conn.reconnectAttempts = 0
     }
   }
@@ -394,8 +415,13 @@ export class WebSocketService {
       const conn = this.connections.get(sessionId)
       if (conn) {
         if (conn.status === 'disconnected' || conn.status === 'error' || !conn.ws) {
+          // 如果已达到最大重试次数，不再尝试（避免绕过退避策略）
+          if (conn.reconnectAttempts >= 5) {
+            console.info(`[WS] Heartbeat: ${sessionId} has reached max reconnect attempts, skipping`)
+            return
+          }
           console.info(`[WS] Heartbeat: reconnecting broken connection for ${sessionId}`)
-          this.connectSession(sessionId)
+          this.scheduleReconnect(sessionId)
         }
       } else {
         console.info(`[WS] Heartbeat: creating missing connection for ${sessionId}`)
@@ -547,18 +573,28 @@ export class WebSocketService {
     console.info(`[WS] forceReconnectAll: ${this.subscribedSessions.size} sessions`)
 
     this.subscribedSessions.forEach((sessionId) => {
-      // 断开旧连接
-      const conn = this.connections.get(sessionId)
-      if (conn && conn.ws) {
+      // 先断开旧连接并移除引用，防止旧连接的 close/error 回调影响新连接
+      const oldConn = this.connections.get(sessionId)
+      if (oldConn && oldConn.ws) {
+        // 标记为 disconnecting 防止回调中处理
+        oldConn.status = 'disconnecting'
         try {
-          conn.ws.close()
+          oldConn.ws.close()
         } catch (e) {
           // ignore close errors
         }
+        oldConn.ws = null
+      }
+      // 移除旧连接记录
+      this.connections.delete(sessionId)
+      // 清除重连定时器
+      const timer = this.reconnectTimers.get(sessionId)
+      if (timer) {
+        clearTimeout(timer)
+        this.reconnectTimers.delete(sessionId)
       }
 
-      // 清除旧状态并重连
-      this.connections.set(sessionId, new WSSessionConnection())
+      // 建立新连接
       this.connectSession(sessionId)
     })
 

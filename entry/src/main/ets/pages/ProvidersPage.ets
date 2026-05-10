@@ -7,6 +7,8 @@ import { Theme } from '../common/Theme'
 import { Provider, ProviderPreset, PROVIDER_PRESETS, ProviderInput, NetworkInfo, getBestUrl, getConnectionTypeName } from '../models/Models'
 import { providerStore } from '../stores/ProviderStore'
 import { apiService } from '../services/APIService'
+import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
+import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import router from '@ohos.router'
 
 @Entry
@@ -28,8 +30,22 @@ struct ProvidersPage {
   @State formApiKey: string = ''
   @State formBaseUrl: string = ''
 
+  // HdsNavigation 菜单项
+  private providerMenus: Array<HdsNavigationBadgeIconOptions> = []
+
   aboutToAppear(): void {
+    this.initMenus()
     this.loadProviders()
+  }
+
+  private initMenus(): void {
+    const iconOpts: HdsNavigationBadgeIconOptions = {
+      content: {
+        icon: $r('sys.symbol.plus'),
+        action: () => { this.openAddForm() }
+      }
+    }
+    this.providerMenus = [iconOpts]
   }
 
   private async loadProviders(): Promise<void> {
@@ -145,215 +161,207 @@ struct ProvidersPage {
   }
 
   build() {
-    Column() {
-      // 顶部标题栏
-      Row() {
+    Stack() {
+      HdsNavigation() {
         Column() {
-          SymbolGlyph($r('sys.symbol.chevron_left'))
-            .fontSize(20)
-            .fontColor([Theme.TextPrimary])
-        }
-        .width(36)
-        .height(36)
-        .backgroundColor(Theme.GlassBackground)
-        .borderRadius(18)
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => router.back())
+          // 内容区域
+          Scroll() {
+            Column({ space: 20 }) {
+              // 连接设置
+              Column({ space: 8 }) {
+                Row() {
+                  Text('连接设置')
+                    .fontSize(Theme.FontTiny)
+                    .fontWeight(FontWeight.Bold)
+                    .fontColor(Theme.TextSecondary)
+                }
+                .width('100%')
 
-        Text('服务商')
-          .fontSize(Theme.FontHeading)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TextPrimary)
-          .layoutWeight(1)
-          .textAlign(TextAlign.Center)
-
-        Text('添加')
-          .fontSize(Theme.FontCaption)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.PrimaryColor)
-          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          .backgroundColor(Theme.GlassBackground)
-          .borderRadius(8)
-          .onClick(() => this.openAddForm())
-
-        Row().width(36)
-      }
-      .width('100%')
-      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: 50, bottom: Theme.SpacingMD })
-      .backgroundColor(Theme.BackgroundPrimary)
-
-      // 内容区域
-      Scroll() {
-        Column({ space: 20 }) {
-          // 连接设置
-          Column({ space: 8 }) {
-            Row() {
-              Text('连接设置')
-                .fontSize(Theme.FontTiny)
-                .fontWeight(FontWeight.Bold)
-                .fontColor(Theme.TextSecondary)
-            }
-            .width('100%')
-
-            // 获取网络地址按钮
-            Row({ space: 12 }) {
-              Column({ space: 4 }) {
-                Text('获取网络地址')
-                  .fontSize(Theme.FontCaption)
-                  .fontColor(Theme.TextPrimary)
-                Text('从桌面端获取局域网和公网地址')
-                  .fontSize(Theme.FontTiny)
-                  .fontColor(Theme.TextSecondary)
-              }
-              .layoutWeight(1)
-              .alignItems(HorizontalAlign.Start)
-
-              if (this.isLoadingNetwork) {
-                LoadingProgress()
-                  .width(20)
-                  .height(20)
-                  .color(Theme.PrimaryColor)
-              } else {
-                SymbolGlyph($r('sys.symbol.arrow_clockwise'))
-                  .fontSize(14)
-                  .fontColor([Theme.PrimaryColor])
-              }
-            }
-            .width('100%')
-            .padding(12)
-            .backgroundColor(Theme.BackgroundSecondary)
-            .borderRadius(8)
-            .onClick(() => this.loadNetworkInfo())
-
-            // 网络地址列表
-            if (this.networkInfo) {
-              if (getBestUrl(this.networkInfo)) {
-                this.NetworkInfoRow('最优连接', getBestUrl(this.networkInfo)!,
-                  getConnectionTypeName(this.networkInfo), Theme.AccentGreen)
-              }
-
-              if (this.networkInfo.lanUrl) {
-                this.NetworkInfoRow('局域网地址', this.networkInfo.lanUrl, '', Theme.AccentGreen)
-              }
-
-              if (this.networkInfo.tailscaleUrl) {
-                this.NetworkInfoRow('Tailscale', this.networkInfo.tailscaleUrl, '', Theme.AccentBlue)
-              }
-
-              Column() {
-                Row({ space: 8 }) {
-                  SymbolGlyph($r('sys.symbol.magnifyingglass'))
-                    .fontSize(14)
-                    .fontColor([Theme.AccentOrange])
-
-                  Text('公网隧道')
-                    .fontSize(Theme.FontCaption)
-                    .fontColor(Theme.TextPrimary)
-
-                  Blank()
-
-                  if (this.networkInfo && this.networkInfo.tunnelEnabled) {
-                    Text('已开启')
+                // 获取网络地址按钮
+                Row({ space: 12 }) {
+                  Column({ space: 4 }) {
+                    Text('获取网络地址')
+                      .fontSize(Theme.FontCaption)
+                      .fontColor(Theme.TextPrimary)
+                    Text('从桌面端获取局域网和公网地址')
                       .fontSize(Theme.FontTiny)
-                      .fontColor(Theme.AccentGreen)
+                      .fontColor(Theme.TextSecondary)
+                  }
+                  .layoutWeight(1)
+                  .alignItems(HorizontalAlign.Start)
+
+                  if (this.isLoadingNetwork) {
+                    LoadingProgress()
+                      .width(20)
+                      .height(20)
+                      .color(Theme.PrimaryColor)
                   } else {
-                    Text('点击开启')
-                      .fontSize(Theme.FontTiny)
-                      .fontColor(Theme.PrimaryColor)
+                    SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+                      .fontSize(14)
+                      .fontColor([Theme.PrimaryColor])
                   }
                 }
                 .width('100%')
-
-                if (this.networkInfo.tunnelUrl) {
-                  Text(this.networkInfo.tunnelUrl)
-                    .fontSize(Theme.FontTiny)
-                    .fontColor(Theme.TextSecondary)
-                    .width('100%')
-                }
-              }
-              .width('100%')
-              .padding(12)
-              .backgroundColor(Theme.BackgroundSecondary)
-              .borderRadius(8)
-              .onClick(() => this.toggleTunnel())
-            }
-          }
-
-          // 官方认证
-          Column({ space: 8 }) {
-            Row() {
-              Text('官方认证')
-                .fontSize(Theme.FontTiny)
-                .fontWeight(FontWeight.Bold)
-                .fontColor(Theme.TextSecondary)
-            }
-            .width('100%')
-
-            Row({ space: 12 }) {
-              Column({ space: 4 }) {
-                Text('Claude Official')
-                  .fontSize(Theme.FontBody)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor(Theme.TextPrimary)
-                Text('使用官方 Anthropic 认证')
-                  .fontSize(Theme.FontTiny)
-                  .fontColor(Theme.TextSecondary)
-              }
-              .layoutWeight(1)
-              .alignItems(HorizontalAlign.Start)
-
-              if (!this.activeProviderId) {
-                Text('当前')
-                  .fontSize(Theme.FontTiny)
-                  .fontColor(Theme.TextOnPrimary)
-                  .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-                  .backgroundColor(Theme.PrimaryColor)
-                  .borderRadius(4)
-              }
-            }
-            .width('100%')
-            .padding(12)
-            .backgroundColor(Theme.BackgroundSecondary)
-            .borderRadius(8)
-            .onClick(() => this.activateOfficial())
-          }
-
-          // 自定义服务商
-          Column({ space: 8 }) {
-            Row() {
-              Text('自定义服务商')
-                .fontSize(Theme.FontTiny)
-                .fontWeight(FontWeight.Bold)
-                .fontColor(Theme.TextSecondary)
-            }
-            .width('100%')
-
-            if (this.providers.length === 0) {
-              Text('暂无自定义服务商，点击右上角添加')
-                .fontSize(Theme.FontCaption)
-                .fontColor(Theme.TextSecondary)
-                .width('100%')
-                .textAlign(TextAlign.Center)
                 .padding(12)
                 .backgroundColor(Theme.BackgroundSecondary)
                 .borderRadius(8)
-            } else {
-              ForEach(this.providers, (provider: Provider) => {
-                this.ProviderCard(provider)
-              }, (provider: Provider) => provider.id)
+                .onClick(() => this.loadNetworkInfo())
+
+                // 网络地址列表
+                if (this.networkInfo) {
+                  if (getBestUrl(this.networkInfo)) {
+                    this.NetworkInfoRow('最优连接', getBestUrl(this.networkInfo)!,
+                      getConnectionTypeName(this.networkInfo), Theme.AccentGreen)
+                  }
+
+                  if (this.networkInfo.lanUrl) {
+                    this.NetworkInfoRow('局域网地址', this.networkInfo.lanUrl, '', Theme.AccentGreen)
+                  }
+
+                  if (this.networkInfo.tailscaleUrl) {
+                    this.NetworkInfoRow('Tailscale', this.networkInfo.tailscaleUrl, '', Theme.AccentBlue)
+                  }
+
+                  Column() {
+                    Row({ space: 8 }) {
+                      SymbolGlyph($r('sys.symbol.magnifyingglass'))
+                        .fontSize(14)
+                        .fontColor([Theme.AccentOrange])
+
+                      Text('公网隧道')
+                        .fontSize(Theme.FontCaption)
+                        .fontColor(Theme.TextPrimary)
+
+                      Blank()
+
+                      if (this.networkInfo && this.networkInfo.tunnelEnabled) {
+                        Text('已开启')
+                          .fontSize(Theme.FontTiny)
+                          .fontColor(Theme.AccentGreen)
+                      } else {
+                        Text('点击开启')
+                          .fontSize(Theme.FontTiny)
+                          .fontColor(Theme.PrimaryColor)
+                      }
+                    }
+                    .width('100%')
+
+                    if (this.networkInfo.tunnelUrl) {
+                      Text(this.networkInfo.tunnelUrl)
+                        .fontSize(Theme.FontTiny)
+                        .fontColor(Theme.TextSecondary)
+                        .width('100%')
+                    }
+                  }
+                  .width('100%')
+                  .padding(12)
+                  .backgroundColor(Theme.BackgroundSecondary)
+                  .borderRadius(8)
+                  .onClick(() => this.toggleTunnel())
+                }
+              }
+
+              // 官方认证
+              Column({ space: 8 }) {
+                Row() {
+                  Text('官方认证')
+                    .fontSize(Theme.FontTiny)
+                    .fontWeight(FontWeight.Bold)
+                    .fontColor(Theme.TextSecondary)
+                }
+                .width('100%')
+
+                Row({ space: 12 }) {
+                  Column({ space: 4 }) {
+                    Text('Claude Official')
+                      .fontSize(Theme.FontBody)
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor(Theme.TextPrimary)
+                    Text('使用官方 Anthropic 认证')
+                      .fontSize(Theme.FontTiny)
+                      .fontColor(Theme.TextSecondary)
+                  }
+                  .layoutWeight(1)
+                  .alignItems(HorizontalAlign.Start)
+
+                  if (!this.activeProviderId) {
+                    Text('当前')
+                      .fontSize(Theme.FontTiny)
+                      .fontColor(Theme.TextOnPrimary)
+                      .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+                      .backgroundColor(Theme.PrimaryColor)
+                      .borderRadius(4)
+                  }
+                }
+                .width('100%')
+                .padding(12)
+                .backgroundColor(Theme.BackgroundSecondary)
+                .borderRadius(8)
+                .onClick(() => this.activateOfficial())
+              }
+
+              // 自定义服务商
+              Column({ space: 8 }) {
+                Row() {
+                  Text('自定义服务商')
+                    .fontSize(Theme.FontTiny)
+                    .fontWeight(FontWeight.Bold)
+                    .fontColor(Theme.TextSecondary)
+                }
+                .width('100%')
+
+                if (this.providers.length === 0) {
+                  Text('暂无自定义服务商，点击右上角添加')
+                    .fontSize(Theme.FontCaption)
+                    .fontColor(Theme.TextSecondary)
+                    .width('100%')
+                    .textAlign(TextAlign.Center)
+                    .padding(12)
+                    .backgroundColor(Theme.BackgroundSecondary)
+                    .borderRadius(8)
+                } else {
+                  ForEach(this.providers, (provider: Provider) => {
+                    this.ProviderCard(provider)
+                  }, (provider: Provider) => provider.id)
+                }
+              }
             }
+            .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+            .margin({ top: Theme.SpacingMD })
           }
+          .width('100%')
+          .layoutWeight(1)
+          .scrollBar(BarState.Off)
         }
-        .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
-        .margin({ top: Theme.SpacingMD })
+        .width('100%')
+        .height('100%')
+        .padding({ top: 100 })
       }
-      .width('100%')
-      .layoutWeight(1)
-      .scrollBar(BarState.Off)
+      .titleBar({
+        content: {
+          title: { mainTitle: '服务商' },
+          menu: { value: this.providerMenus },
+        },
+        style: {
+          scrollEffectOpts: {
+            enableScrollEffect: false,
+            scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
+          },
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.ADAPTIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+          },
+        },
+        avoidLayoutSafeArea: true,
+        enableComponentSafeArea: false,
+      })
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .hideBackButton(false)
+      .backgroundColor(Theme.BackgroundPrimary)
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(Theme.BackgroundPrimary)
     .bindContentCover(this.showForm, this.ProviderFormSheet(), {
       modalTransition: ModalTransition.NONE,
       backgroundColor: Color.Transparent,

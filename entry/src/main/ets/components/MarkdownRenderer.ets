@@ -100,10 +100,14 @@ class MDNode {
 
 @Component
 export struct MarkdownRenderer {
-  @Prop content: string = ''
+  @Prop @Watch('onContentChange') content: string = ''
   @State private nodes: MDNode[] = []
 
   aboutToAppear(): void {
+    this.nodes = this.parseMarkdown(this.content)
+  }
+
+  onContentChange(): void {
     this.nodes = this.parseMarkdown(this.content)
   }
 

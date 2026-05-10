@@ -26,9 +26,9 @@ export class AuthStore {
     return AuthStore.instance
   }
 
-  setContext(context: Context): void {
+  async setContext(context: Context): Promise<void> {
     this.context = context
-    this.loadSavedData()
+    await this.loadSavedData()
   }
 
   private async loadSavedData(): Promise<void> {

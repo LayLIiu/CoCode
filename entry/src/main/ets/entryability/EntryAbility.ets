@@ -14,6 +14,8 @@ import { notificationHelper } from '../services/NotificationHelper'
 const DOMAIN = 0x0000
 
 export default class EntryAbility extends UIAbility {
+  private isBackgroundTaskRunning: boolean = false
+
   async onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): Promise<void> {
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET)
@@ -23,7 +25,7 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate')
 
     // 初始化 Store
-    authStore.setContext(this.context)
+    await authStore.setContext(this.context)
     notificationHelper.setContext(this.context)
 
     // 初始化本地存储
@@ -40,7 +42,6 @@ export default class EntryAbility extends UIAbility {
     } catch (e) {
       hilog.error(DOMAIN, 'testTag', 'Notification permission error: %{public}s', JSON.stringify(e))
     }
-    await notificationHelper.requestNotificationPermission()
     hilog.info(DOMAIN, 'testTag', 'Notification helper initialized')
   }
 
@@ -107,6 +108,9 @@ export default class EntryAbility extends UIAbility {
       // 可能本来就没有在运行后台任务
     }
 
+    // 停止后台任务后清除标志
+    this.isBackgroundTaskRunning = false
+
     // 重连 WebSocket
     if (authStore.serverUrl) {
       wsService.setServerUrl(authStore.serverUrl)
@@ -131,6 +135,10 @@ export default class EntryAbility extends UIAbility {
     appState.isInForeground = false
 
     // 申请后台长时任务，保持 WebSocket 连接
+    if (this.isBackgroundTaskRunning) {
+      return  // 已有后台任务在运行，不重复申请
+    }
+
     try {
       const wantAgentInfo: wantAgent.WantAgentInfo = {
         wants: [{
@@ -146,6 +154,7 @@ export default class EntryAbility extends UIAbility {
       await backgroundTaskManager.startBackgroundRunning(this.context,
         backgroundTaskManager.BackgroundMode.DATA_TRANSFER, agent)
       hilog.info(DOMAIN, 'testTag', 'Background task started for WebSocket keepalive')
+      this.isBackgroundTaskRunning = true
     } catch (e) {
       hilog.error(DOMAIN, 'testTag', 'Background task start error: %{public}s', JSON.stringify(e))
     }

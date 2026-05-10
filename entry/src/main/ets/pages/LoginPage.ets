@@ -279,11 +279,21 @@ export struct LoginPage {
       serverAddr = parts[0].trim()
       code = parts.length > 1 ? parts[1].toUpperCase() : ''
     } else if (input.startsWith('https://') || input.startsWith('http://')) {
-      // 格式: https://xxx.trycloudflare.com:ABC123
+      // 格式: https://xxx.trycloudflare.com:ABC123 或 https://xxx.com:8080:ABC123
       const lastColonIndex = input.lastIndexOf(':')
       if (lastColonIndex > 8) {
-        serverAddr = input.substring(0, lastColonIndex)
-        code = input.substring(lastColonIndex + 1).toUpperCase()
+        const possibleCode = input.substring(lastColonIndex + 1)
+        // 配对码通常是 4-10 位字母数字，不含 /
+        if (/^[A-Za-z0-9]{4,10}$/.test(possibleCode) && !possibleCode.includes('/')) {
+          serverAddr = input.substring(0, lastColonIndex)
+          code = possibleCode.toUpperCase()
+        } else {
+          // 最后一个冒号后不是有效配对码，整个输入作为地址
+          serverAddr = input
+          this.errorMessage = '未找到配对码，请使用 地址:配对码 格式'
+          this.isConnecting = false
+          return
+        }
       } else {
         this.errorMessage = '公网地址格式错误'
         this.isConnecting = false

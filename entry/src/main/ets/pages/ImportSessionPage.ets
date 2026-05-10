@@ -8,21 +8,27 @@ import { Session } from '../models/Models'
 import { sessionStore } from '../stores/SessionStore'
 import { apiService } from '../services/APIService'
 import { TabType } from '../viewmodel/ConversationModel'
+import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
+import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import router from '@ohos.router'
-
-// 液态玻璃颜色
-const GLASS_LIGHT = 'rgba(255, 255, 255, 0.05)'
-const GLASS_CARD = 'rgba(255, 255, 255, 0.03)'
-const GLASS_INPUT = 'rgba(255, 255, 255, 0.08)'
 
 @Entry
 @Component
 struct ImportSessionPage {
   @State sessions: Session[] = []
-  @State selectedIds: Set<string> = new Set()
+  @State selectedIds: string[] = []
   @State isLoading: boolean = true
   @State isImporting: boolean = false
   @State tabType: TabType = TabType.CLAUDE
+
+  private importMenus: Array<HdsNavigationBadgeIconOptions> = [
+    {
+      content: {
+        icon: $r('sys.symbol.checkmark_circle'),
+        action: () => { this.selectAll() }
+      }
+    }
+  ]
 
   aboutToAppear(): void {
     // 从路由参数获取 tabType
@@ -78,35 +84,31 @@ struct ImportSessionPage {
   }
 
   private toggleSelection(sessionId: string): void {
-    if (this.selectedIds.has(sessionId)) {
-      this.selectedIds.delete(sessionId)
+    if (this.selectedIds.includes(sessionId)) {
+      this.selectedIds = this.selectedIds.filter(i => i !== sessionId)
     } else {
-      this.selectedIds.add(sessionId)
+      this.selectedIds = [...this.selectedIds, sessionId]
     }
-    // 强制刷新
-    this.sessions = [...this.sessions]
   }
 
   private selectAll(): void {
     const notImported = this.getNotImportedSessions()
-    if (this.selectedIds.size === notImported.length) {
+    if (this.selectedIds.length === notImported.length) {
       // 已全选，取消全选
-      this.selectedIds.clear()
+      this.selectedIds = []
     } else {
       // 全选
-      this.selectedIds.clear()
-      notImported.forEach((s: Session) => this.selectedIds.add(s.id))
+      this.selectedIds = notImported.map((s: Session) => s.id)
     }
-    this.sessions = [...this.sessions]
   }
 
   private async importSelected(): Promise<void> {
-    if (this.selectedIds.size === 0) return
+    if (this.selectedIds.length === 0) return
 
     this.isImporting = true
 
     // 将选中的会话添加到本地列表
-    const selectedSessions = this.sessions.filter((s: Session) => this.selectedIds.has(s.id))
+    const selectedSessions = this.sessions.filter((s: Session) => this.selectedIds.includes(s.id))
 
     // 合并到本地
     for (let i = 0; i < selectedSessions.length; i++) {
@@ -134,122 +136,110 @@ struct ImportSessionPage {
   }
 
   build() {
-    Column() {
-      // 导航栏
-      Row() {
+    Stack() {
+      HdsNavigation() {
         Column() {
-          SymbolGlyph($r('sys.symbol.chevron_left'))
-            .fontSize(20)
-            .fontColor([Theme.TextPrimary])
-        }
-        .width(36)
-        .height(36)
-        .backgroundColor(GLASS_LIGHT)
-        .borderRadius(18)
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => {
-          router.back()
-        })
-
-        Text('导入会话')
-          .fontSize(18)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TextPrimary)
-          .layoutWeight(1)
-          .textAlign(TextAlign.Center)
-
-        // 全选按钮
-        Column() {
-          Text(this.selectedIds.size === this.getNotImportedSessions().length ? '取消' : '全选')
+          // 提示
+          Text(`共 ${this.getNotImportedSessions().length} 个会话可导入，已选择 ${this.selectedIds.length} 个`)
             .fontSize(14)
-            .fontColor(Theme.PrimaryColor)
-        }
-        .height(36)
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => {
-          this.selectAll()
-        })
-      }
-      .width('100%')
-      .height(80)
-      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: 56 })
-      .alignItems(VerticalAlign.Center)
-
-      // 提示
-      Text(`共 ${this.getNotImportedSessions().length} 个会话可导入，已选择 ${this.selectedIds.size} 个`)
-        .fontSize(14)
-        .fontColor(Theme.TextSecondary)
-        .width('100%')
-        .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: Theme.SpacingMD, bottom: Theme.SpacingMD })
-
-      if (this.isLoading) {
-        Column() {
-          LoadingProgress()
-            .width(40)
-            .height(40)
-            .color(Theme.PrimaryColor)
-
-          Text('加载中...')
-            .fontSize(Theme.FontBody)
             .fontColor(Theme.TextSecondary)
-            .margin({ top: Theme.SpacingMD })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else if (this.getNotImportedSessions().length === 0) {
-        Column() {
-          SymbolGlyph($r('sys.symbol.checkmark_circle'))
-            .fontSize(60)
-            .fontColor([Theme.SuccessColor])
-            .margin({ bottom: Theme.SpacingLG })
-
-          Text('所有会话已导入')
-            .fontSize(Theme.FontHeading)
-            .fontColor(Theme.TextPrimary)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Center)
-      } else {
-        List({ space: 0 }) {
-          ForEach(this.getNotImportedSessions(), (session: Session) => {
-            ListItem() {
-              this.SessionItemView(session)
-            }
-          }, (session: Session) => session.id)
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
-      }
-
-      // 底部导入按钮
-      if (this.selectedIds.size > 0) {
-        Column() {
-          Button(`导入 ${this.selectedIds.size} 个会话`)
             .width('100%')
-            .height(50)
-            .fontSize(16)
-            .fontColor(Theme.TextOnPrimary)
-            .backgroundColor(Theme.PrimaryColor)
-            .borderRadius(12)
-            .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-            .enabled(!this.isImporting)
-            .onClick(() => {
-              this.importSelected()
-            })
+            .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: Theme.SpacingMD, bottom: Theme.SpacingMD })
+
+          if (this.isLoading) {
+            Column() {
+              LoadingProgress()
+                .width(40)
+                .height(40)
+                .color(Theme.PrimaryColor)
+
+              Text('加载中...')
+                .fontSize(Theme.FontBody)
+                .fontColor(Theme.TextSecondary)
+                .margin({ top: Theme.SpacingMD })
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .justifyContent(FlexAlign.Center)
+          } else if (this.getNotImportedSessions().length === 0) {
+            Column() {
+              SymbolGlyph($r('sys.symbol.checkmark_circle'))
+                .fontSize(60)
+                .fontColor([Theme.SuccessColor])
+                .margin({ bottom: Theme.SpacingLG })
+
+              Text('所有会话已导入')
+                .fontSize(Theme.FontHeading)
+                .fontColor(Theme.TextPrimary)
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .justifyContent(FlexAlign.Center)
+          } else {
+            List({ space: 0 }) {
+              ForEach(this.getNotImportedSessions(), (session: Session) => {
+                ListItem() {
+                  this.SessionItemView(session)
+                }
+              }, (session: Session) => session.id)
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+            .scrollBar(BarState.Off)
+            .edgeEffect(EdgeEffect.Spring)
+          }
+
+          // 底部导入按钮
+          if (this.selectedIds.length > 0) {
+            Column() {
+              Button(`导入 ${this.selectedIds.length} 个会话`)
+                .width('100%')
+                .height(50)
+                .fontSize(16)
+                .fontColor(Theme.TextOnPrimary)
+                .backgroundColor(Theme.PrimaryColor)
+                .borderRadius(12)
+                .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+                .enabled(!this.isImporting)
+                .onClick(() => {
+                  this.importSelected()
+                })
+            }
+            .width('100%')
+            .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: Theme.SpacingMD, bottom: Theme.SpacingXL })
+            .backgroundColor(Theme.BackgroundPrimary)
+          }
         }
         .width('100%')
-        .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: Theme.SpacingMD, bottom: Theme.SpacingXL })
-        .backgroundColor(Theme.BackgroundPrimary)
+        .height('100%')
+        .padding({ top: 100 })
       }
+      .titleBar({
+        content: {
+          title: { mainTitle: '导入会话' },
+          menu: { value: this.importMenus },
+        },
+        style: {
+          scrollEffectOpts: {
+            enableScrollEffect: false,
+            scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
+          },
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.ADAPTIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+          },
+        },
+        avoidLayoutSafeArea: true,
+        enableComponentSafeArea: false,
+      })
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .hideBackButton(false)
+      .backgroundColor(Theme.BackgroundPrimary)
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
     .width('100%')
     .height('100%')
-    .backgroundColor(Theme.BackgroundPrimary)
   }
 
   @Builder
@@ -257,7 +247,7 @@ struct ImportSessionPage {
     Row() {
       // 选择框
       Column() {
-        if (this.selectedIds.has(session.id)) {
+        if (this.selectedIds.includes(session.id)) {
           SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
             .fontSize(24)
             .fontColor([Theme.PrimaryColor])
@@ -295,7 +285,7 @@ struct ImportSessionPage {
     }
     .width('100%')
     .padding(Theme.SpacingMD)
-    .backgroundColor(GLASS_CARD)
+    .backgroundColor(Theme.GlassBackground)
     .borderRadius(Theme.RadiusMedium)
     .margin({ bottom: Theme.SpacingSM })
     .onClick(() => {

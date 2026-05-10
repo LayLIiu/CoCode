@@ -7,6 +7,11 @@ import { MessageModel, MessageType, ToolStatus } from '../viewmodel/MessageModel
 @Component
 export struct MessageItem {
   @Prop message: MessageModel
+  @Prop @Watch('onRefresh') refreshTrigger: number = 0
+
+  onRefresh(): void {
+    // refreshTrigger 变化时触发组件重新渲染，解决 @Prop 深拷贝不更新问题
+  }
 
   build() {
     Column() {

@@ -329,6 +329,8 @@ export struct ConversationListPage {
   @State showNewSessionDialog: boolean = false
 
   private scroller: Scroller = new Scroller()
+  private sessionsChangedListener: () => void = () => {}
+  private statusChangedListener: (sessionId: string, status: SessionStatus) => void = () => {}
 
   private subIcon: HdsNavigationBadgeIconOptions = {
     content: {
@@ -351,16 +353,18 @@ export struct ConversationListPage {
       this.sessions = []
     }
 
-    sessionStore.onSessionsChanged = () => {
+    this.sessionsChangedListener = () => {
       this.sessions = sessionStore.sessions || []
       this.isLoading = sessionStore.isLoading
       this.refreshTrigger = Date.now()
     }
+    sessionStore.addSessionsChangedListener(this.sessionsChangedListener)
 
-    sessionStore.onStatusChanged = (sessionId: string, status: SessionStatus) => {
+    this.statusChangedListener = (sessionId: string, status: SessionStatus) => {
       console.info(`[ConversationListPage] Status changed: ${sessionId} -> ${status}`)
       this.refreshTrigger = Date.now()
     }
+    sessionStore.addStatusChangedListener(this.statusChangedListener)
 
     if (sessionStore.sessions && sessionStore.sessions.length > 0) {
       this.sessions = sessionStore.sessions
@@ -368,6 +372,11 @@ export struct ConversationListPage {
     } else {
       this.loadSessions()
     }
+  }
+
+  aboutToDisappear(): void {
+    sessionStore.removeSessionsChangedListener(this.sessionsChangedListener)
+    sessionStore.removeStatusChangedListener(this.statusChangedListener)
   }
 
   private async loadSessions(): Promise<void> {
@@ -564,7 +573,7 @@ export struct ConversationListPage {
                   ListItem() {
                     SessionItemView({ session: session, refreshTrigger: this.refreshTrigger })
                   }
-                }, (session: Session) => `${session.id}-${this.refreshTrigger}`)
+                }, (session: Session) => session.id)
               }
             }, (group: SessionGroup) => group.groupName)
           } else {

@@ -7,6 +7,8 @@ import { authStore } from '../stores/AuthStore'
 import { appState, ThemeMode } from '../stores/AppState'
 import { sessionStore } from '../stores/SessionStore'
 import { ModelInfo, ServerMode, PermissionMode, getPermissionModeDisplayName, getPermissionModeDescription } from '../models/Models'
+import { HdsNavigation, ScrollEffectType, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
+import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import router from '@ohos.router'
 import http from '@ohos.net.http'
 
@@ -32,9 +34,17 @@ export struct SettingsPage {
 
   private readonly appVersion: string = '1.0.0'
   private readonly buildTime: string = '2026-05-08'
+  private modelsChangedListener: (() => void) | null = null
 
   aboutToAppear(): void {
     this.loadSettings()
+  }
+
+  aboutToDisappear(): void {
+    if (this.modelsChangedListener) {
+      appState.removeModelsChangedListener(this.modelsChangedListener)
+      this.modelsChangedListener = null
+    }
   }
 
   private loadSettings(): void {
@@ -48,142 +58,161 @@ export struct SettingsPage {
     this.userName = '用户' // 可以从服务器获取
     this.themeMode = appState.themeMode
 
-    // 设置回调
-    appState.onModelsChanged = () => {
+    // 注册监听
+    this.modelsChangedListener = () => {
       this.models = appState.models
       this.currentModel = appState.currentModel
     }
+    appState.addModelsChangedListener(this.modelsChangedListener)
   }
 
   build() {
-    Column() {
-      // 顶部标题
-      Text('设置')
-        .fontSize(28)
-        .fontColor(Theme.TextPrimary)
-        .fontWeight(FontWeight.Bold)
+    Stack() {
+      HdsNavigation() {
+        List({ space: Theme.SpacingMD }) {
+          // 顶部留白
+          ListItem() {
+            Row().width('100%').height(100)
+          }
+
+          // 账户
+          ListItem() {
+            this.SettingSection('账户')
+          }
+
+          ListItem() {
+            this.AccountItem()
+          }
+
+          // 连接设置
+          ListItem() {
+            this.SettingSection('连接')
+          }
+
+          ListItem() {
+            this.ConnectionItem()
+          }
+
+          // 模型设置
+          if (this.isLoggedIn) {
+            ListItem() {
+              this.SettingSection('模型')
+            }
+
+            ListItem() {
+              this.ModelItem()
+            }
+
+            // 思考强度
+            ListItem() {
+              this.SettingSection('思考强度')
+            }
+
+            ListItem() {
+              this.EffortItem()
+            }
+
+            // 服务商管理
+            ListItem() {
+              this.SettingSection('服务商')
+            }
+
+            ListItem() {
+              this.ProviderManageItem()
+            }
+
+            // 权限模式
+            ListItem() {
+              this.SettingSection('权限模式')
+            }
+
+            ListItem() {
+              this.PermissionModeItem()
+            }
+          }
+
+          // 外观设置
+          ListItem() {
+            this.SettingSection('外观')
+          }
+
+          ListItem() {
+            this.ThemeItem()
+          }
+
+          // 数据管理
+          if (this.isLoggedIn) {
+            ListItem() {
+              this.SettingSection('数据管理')
+            }
+
+            ListItem() {
+              this.DataManageItem()
+            }
+          }
+
+          // 关于
+          ListItem() {
+            this.SettingSection('关于')
+          }
+
+          ListItem() {
+            this.VersionItem()
+          }
+
+          ListItem() {
+            this.BuildTimeItem()
+          }
+
+          // 退出登录
+          if (this.isLoggedIn) {
+            ListItem() {
+              this.LogoutButton()
+            }
+          }
+
+          // 底部信息
+          ListItem() {
+            this.FooterView()
+          }
+        }
         .width('100%')
-        .textAlign(TextAlign.Center)
-        .padding({ top: 56, bottom: Theme.SpacingLG })
-
-      List({ space: Theme.SpacingMD }) {
-        // 账户
-        ListItem() {
-          this.SettingSection('账户')
-        }
-
-        ListItem() {
-          this.AccountItem()
-        }
-
-        // 连接设置
-        ListItem() {
-          this.SettingSection('连接')
-        }
-
-        ListItem() {
-          this.ConnectionItem()
-        }
-
-        // 模型设置
-        if (this.isLoggedIn) {
-          ListItem() {
-            this.SettingSection('模型')
-          }
-
-          ListItem() {
-            this.ModelItem()
-          }
-
-          // 思考强度
-          ListItem() {
-            this.SettingSection('思考强度')
-          }
-
-          ListItem() {
-            this.EffortItem()
-          }
-
-          // 服务商管理
-          ListItem() {
-            this.SettingSection('服务商')
-          }
-
-          ListItem() {
-            this.ProviderManageItem()
-          }
-
-          // 权限模式
-          ListItem() {
-            this.SettingSection('权限模式')
-          }
-
-          ListItem() {
-            this.PermissionModeItem()
-          }
-        }
-
-        // 外观设置
-        ListItem() {
-          this.SettingSection('外观')
-        }
-
-        ListItem() {
-          this.ThemeItem()
-        }
-
-        // 数据管理
-        if (this.isLoggedIn) {
-          ListItem() {
-            this.SettingSection('数据管理')
-          }
-
-          ListItem() {
-            this.DataManageItem()
-          }
-        }
-
-        // 关于
-        ListItem() {
-          this.SettingSection('关于')
-        }
-
-        ListItem() {
-          this.VersionItem()
-        }
-
-        ListItem() {
-          this.BuildTimeItem()
-        }
-
-        // 退出登录
-        if (this.isLoggedIn) {
-          ListItem() {
-            this.LogoutButton()
-          }
-        }
-
-        // 底部信息
-        ListItem() {
-          this.FooterView()
-        }
+        .layoutWeight(1)
+        .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
       }
-      .width('100%')
-      .layoutWeight(1)
-      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring)
+      .titleBar({
+        content: {
+          title: { mainTitle: '设置' },
+        },
+        style: {
+          scrollEffectOpts: {
+            enableScrollEffect: true,
+            scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
+          },
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.ADAPTIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+          },
+        },
+        avoidLayoutSafeArea: true,
+        enableComponentSafeArea: false,
+      })
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .hideBackButton(true)
+      .linearGradient({
+        angle: 180,
+        colors: [
+          [Theme.BackgroundGradientStart, 0.0],
+          [Theme.BackgroundGradientMiddle, 0.5],
+          [Theme.BackgroundGradientEnd, 1.0]
+        ]
+      })
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
     .width('100%')
     .height('100%')
-    .linearGradient({
-      angle: 180,
-      colors: [
-        [Theme.BackgroundGradientStart, 0.0],
-        [Theme.BackgroundGradientMiddle, 0.5],
-        [Theme.BackgroundGradientEnd, 1.0]
-      ]
-    })
     .bindSheet($$this.showLanEdit, this.LanEditSheet(), {
       height: 280,
       backgroundColor: Theme.GlassBackground,
@@ -841,8 +870,8 @@ export struct SettingsPage {
     this.testingLatency = true
     this.latency = 0
 
+    const httpRequest = http.createHttp()
     try {
-      const httpRequest = http.createHttp()
       const url = this.currentUrl + '/api/sessions'
 
       const startTime = Date.now()
@@ -861,10 +890,10 @@ export struct SettingsPage {
       } else {
         this.latency = -1 * response.responseCode
       }
-
-      httpRequest.destroy()
     } catch (e) {
       this.latency = -1
+    } finally {
+      httpRequest.destroy()
     }
 
     this.testingLatency = false
@@ -893,7 +922,7 @@ export struct SettingsPage {
     sessionStore.disconnectAllSessions()
 
     // 跳转到登录页面
-    router.pushUrl({
+    router.replaceUrl({
       url: 'pages/Index'
     })
   }

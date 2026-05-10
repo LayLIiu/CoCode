@@ -11,6 +11,31 @@ export struct InputArea {
   @State sendButtonScale: number = 1.0
   @State addButtonScale: number = 1.0
 
+  // 追踪所有 setTimeout，组件销毁时清理
+  private pendingTimers: number[] = []
+  private isDestroyed: boolean = false
+
+  aboutToDisappear(): void {
+    this.isDestroyed = true
+    this.pendingTimers.forEach(id => clearTimeout(id))
+    this.pendingTimers = []
+  }
+
+  private scheduleTimer(callback: () => void, delay: number): void {
+    const id = setTimeout(() => {
+      // 从追踪列表中移除已触发的 timer
+      const idx = this.pendingTimers.indexOf(id)
+      if (idx >= 0) {
+        this.pendingTimers.splice(idx, 1)
+      }
+      // 组件已销毁则不执行回调
+      if (!this.isDestroyed) {
+        callback()
+      }
+    }, delay)
+    this.pendingTimers.push(id)
+  }
+
   build() {
     Row() {
       // 加号按钮 - 圆形液态玻璃胶囊
@@ -41,9 +66,9 @@ export struct InputArea {
       })
       .onClick(() => {
         this.addButtonScale = 0.85
-        setTimeout(() => {
+        this.scheduleTimer(() => {
           this.addButtonScale = 1.1
-          setTimeout(() => {
+          this.scheduleTimer(() => {
             this.addButtonScale = 1.0
             this.onAddClick()
           }, 100)
@@ -113,9 +138,9 @@ export struct InputArea {
       .onClick(() => {
         if (this.inputText.trim().length > 0) {
           this.sendButtonScale = 0.85
-          setTimeout(() => {
+          this.scheduleTimer(() => {
             this.sendButtonScale = 1.15
-            setTimeout(() => {
+            this.scheduleTimer(() => {
               this.sendButtonScale = 1.0
               this.sendMessage()
             }, 100)

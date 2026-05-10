@@ -120,6 +120,8 @@ struct ChatDetailPage {
   // 分页加载
   @State displayedMessageCount: number = 50
   @State isLoadingMore: boolean = false
+  @State isMessagesLoaded: boolean = false
+  @State isListReady: boolean = false
 
   // 标题栏动态模糊（滚动时背景渐变透明）
   @State scrollOffset: number = 0
@@ -151,6 +153,7 @@ struct ChatDetailPage {
 
   aboutToDisappear(): void {
     this.stopWorkTimer()
+    this.removeCallbacks()
     sessionStore.setCurrentSession(null)
   }
 
@@ -172,41 +175,54 @@ struct ChatDetailPage {
     const msgs = sessionStore.messages.get(this.sessionId)
     if (msgs) {
       this.messages = msgs
+      // 初始显示最后100条
+      this.displayedMessageCount = Math.min(100, this.messages.length)
     }
-    this.scrollToBottom()
+    // 倒序列表默认就在最新消息位置，无需scrollTo
+    this.isMessagesLoaded = true
+    this.isListReady = true
+  }
+
+  private messagesChangedListener = (sid: string) => {
+    if (sid === this.sessionId) {
+      const msgs = sessionStore.messages.get(this.sessionId)
+      if (msgs) {
+        this.messages = msgs
+      }
+      // 查看历史时不强制滚动，避免打断用户
+      if (!this.userIsViewingHistory) {
+        this.scrollToBottom()
+      }
+    }
+  }
+
+  private statusChangedListener = (sid: string, status: SessionStatus) => {
+    if (sid === this.sessionId) {
+      this.chatStatus = status
+    }
+  }
+
+  private rawMessageListener = (sid: string, msg: WSMessage) => {
+    if (sid === this.sessionId) {
+      this.handleStreamingMessage(msg)
+    }
   }
 
   private setupCallbacks(): void {
-    sessionStore.onMessagesChanged = (sid: string) => {
-      if (sid === this.sessionId) {
-        const msgs = sessionStore.messages.get(this.sessionId)
-        if (msgs) {
-          this.messages = msgs
-        }
-        // 查看历史时不强制滚动，避免打断用户
-        if (!this.userIsViewingHistory) {
-          this.scrollToBottom()
-        }
-      }
-    }
+    sessionStore.addMessagesChangedListener(this.messagesChangedListener)
+    sessionStore.addStatusChangedListener(this.statusChangedListener)
+    sessionStore.addRawMessageListener(this.rawMessageListener)
+  }
 
-    sessionStore.onStatusChanged = (sid: string, status: SessionStatus) => {
-      if (sid === this.sessionId) {
-        this.chatStatus = status
-      }
-    }
-
-    sessionStore.onRawMessage = (sid: string, msg: WSMessage) => {
-      if (sid === this.sessionId) {
-        this.handleStreamingMessage(msg)
-      }
-    }
+  private removeCallbacks(): void {
+    sessionStore.removeMessagesChangedListener(this.messagesChangedListener)
+    sessionStore.removeStatusChangedListener(this.statusChangedListener)
+    sessionStore.removeRawMessageListener(this.rawMessageListener)
   }
 
   private scrollToBottom(): void {
-    setTimeout(() => {
-      this.scroller.scrollEdge(Edge.Bottom)
-    }, 100)
+    // 倒序列表：最新消息在顶部（视觉底部），scrollEdge(Top) 就是回到最新消息
+    this.scroller.scrollEdge(Edge.Top)
   }
 
   // 标题栏动态模糊：根据滚动位置计算背景透明度
@@ -410,7 +426,30 @@ struct ChatDetailPage {
   }
 
   private flushStreamingBuffers(): void {
-    // 先 flush 文本：文本出现时合上最新 thinking
+    // 先 flush thinking：自动展开最新 thinking，合上旧 thinking
+    if (this.streamingThinking) {
+      const thinkId = 'thinking-' + Date.now()
+      const thinkMsg: Message = {
+        id: thinkId,
+        type: 'thinking',
+        content: this.streamingThinking,
+        timestamp: new Date().toISOString()
+      }
+      sessionStore.addMessage(this.sessionId, thinkMsg)
+
+      // 自动展开最新 thinking，同时合上旧的
+      const newSet = new Set(this.expandedThinkingIds)
+      if (this.latestThinkingId) {
+        newSet.delete(this.latestThinkingId)
+      }
+      newSet.add(thinkId)
+      this.expandedThinkingIds = newSet
+      this.latestThinkingId = thinkId
+
+      this.streamingThinking = ''
+    }
+
+    // 再 flush 文本：thinking 应在 text 之前
     if (this.streamingText) {
       const trimmed = this.streamingText.trim()
       const shouldHide = trimmed.startsWith('[{') &&
@@ -435,29 +474,6 @@ struct ChatDetailPage {
       }
       this.streamingText = ''
     }
-
-    // 再 flush thinking：自动展开最新 thinking，合上旧 thinking
-    if (this.streamingThinking) {
-      const thinkId = 'thinking-' + Date.now()
-      const thinkMsg: Message = {
-        id: thinkId,
-        type: 'thinking',
-        content: this.streamingThinking,
-        timestamp: new Date().toISOString()
-      }
-      sessionStore.addMessage(this.sessionId, thinkMsg)
-
-      // 自动展开最新 thinking，同时合上旧的
-      const newSet = new Set(this.expandedThinkingIds)
-      if (this.latestThinkingId) {
-        newSet.delete(this.latestThinkingId)
-      }
-      newSet.add(thinkId)
-      this.expandedThinkingIds = newSet
-      this.latestThinkingId = thinkId
-
-      this.streamingThinking = ''
-    }
   }
 
   // HdsNavigation 菜单项
@@ -475,134 +491,130 @@ struct ChatDetailPage {
   build() {
     Stack() {
       HdsNavigation() {
-        // 消息列表
+        // 消息列表 — 倒序+翻转：默认就在"底部"（最新消息），无需scrollTo
         List({ scroller: this.scroller }) {
-          // 顶部占位
+          // 顶部留白（翻转后视觉在底部，给悬浮输入框留空间）
           ListItem() {
-            Row().width('100%').height(8)
+            Row().width('100%').height(120)
+          }
+          .rotate({ angle: 180 })
+
+          // 流式文本实时渲染（翻转后视觉在消息列表最前面=最新位置）
+          if (this.streamingText) {
+            ListItem() {
+              this.StreamingTextBubble()
+            }
+            .rotate({ angle: 180 })
           }
 
-        // 查看历史时：加载更多 + 消息计数（在列表顶部）
-        if (this.hasMoreMessages()) {
-          ListItem() {
-            Column({ space: 2 }) {
-              Row({ space: 8 }) {
-                if (this.isLoadingMore) {
+          // 流式思考实时渲染
+          if (this.streamingThinking) {
+            ListItem() {
+              this.StreamingThinkingBubble()
+            }
+            .rotate({ angle: 180 })
+          }
+
+          // AI 工作状态指示器（吉祥物动画）
+          if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
+            this.chatStatus === 'tool_executing' || this.chatStatus === 'permission_pending' ||
+            this.chatStatus === 'question_pending') {
+            ListItem() {
+              this.StreamingIndicator()
+            }
+            .rotate({ angle: 180 })
+          }
+
+          // 消息倒序排列（最新在前=视觉底部）
+          ForEach(this.getVisibleMessages().reverse(), (message: Message) => {
+            ListItem() {
+              this.MessageBubble(message)
+            }
+            .rotate({ angle: 180 })
+          }, (message: Message) => {
+            if (message.type === 'permission_request') {
+              return message.id + '_' + (message.isPermissionHandled ? 'done' : 'pending')
+            }
+            if (message.type === 'question') {
+              return message.id + '_' + (message.isQuestionAnswered ? 'done' : 'pending')
+            }
+            return message.id
+          })
+
+          // 加载更多历史提示（翻转后视觉在顶部）
+          if (this.hasMoreMessages()) {
+            ListItem() {
+              Column({ space: 2 }) {
+                Row({ space: 8 }) {
                   LoadingProgress()
                     .width(14)
                     .height(14)
                     .color(Theme.TextSecondary)
-                } else {
-                  SymbolGlyph($r('sys.symbol.arrow_up'))
-                    .fontSize(10)
-                    .fontColor([Theme.TextSecondary])
+                  Text('下滑加载更早消息')
+                    .fontSize(12)
+                    .fontColor(Theme.TextSecondary)
                 }
-                Text('加载更早消息')
-                  .fontSize(12)
-                  .fontColor(Theme.TextSecondary)
-              }
-              .width('100%')
-              .justifyContent(FlexAlign.Center)
-              .padding({ left: 8, right: 8, top: 8, bottom: 4 })
-              .onClick(() => {
-                this.loadMoreMessages()
-              })
-
-              Text(`已显示 ${this.displayedMessageCount}/${this.messages.length} 条`)
-                .fontSize(10)
-                .fontColor(Theme.TextTertiary)
                 .width('100%')
-                .textAlign(TextAlign.Center)
-                .padding({ top: 2, bottom: 8 })
+                .justifyContent(FlexAlign.Center)
+                .padding({ left: 8, right: 8, top: 8, bottom: 4 })
+
+                Text(`已显示 ${this.displayedMessageCount}/${this.messages.length} 条`)
+                  .fontSize(10)
+                  .fontColor(Theme.TextTertiary)
+                  .width('100%')
+                  .textAlign(TextAlign.Center)
+                  .padding({ top: 2, bottom: 8 })
+              }
+            }
+            .rotate({ angle: 180 })
+          }
+
+          // 底部占位（翻转后视觉在顶部）
+          ListItem() {
+            Row().width('100%').height(8)
+          }
+          .rotate({ angle: 180 })
+        }
+        .width('100%')
+        .height('100%')
+        .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+        .rotate({ angle: 180 })  // 整体翻转，使列表默认在最新消息位置
+        .onScrollIndex((start: number, end: number) => {
+          // 滚动时关闭复制按钮
+          if (this.activeCopyMessageId) {
+            this.activeCopyMessageId = ''
+          }
+          // 翻转后：滚到底部=视觉顶部=加载更多历史
+          const totalItems = this.getListItemCount()
+          if (end >= totalItems - 1 && this.hasMoreMessages() && !this.isLoadingMore) {
+            this.loadMoreMessages()
+          }
+          // 翻转后：start=0 表示在列表顶部=视觉底部=最新消息
+          if (start === 0) {
+            // 在最新消息位置
+            if (this.showNewMessageButton) {
+              this.showNewMessageButton = false
+              this.userIsViewingHistory = false
+              this.animationProgress = 0
+            }
+          } else {
+            // 向上滚动查看历史
+            if (!this.showNewMessageButton && start > 2) {
+              this.showNewMessageButton = true
+              this.userIsViewingHistory = true
             }
           }
-        }
-
-        ForEach(this.getVisibleMessages(), (message: Message) => {
-          ListItem() {
-            this.MessageBubble(message)
-          }
-        }, (message: Message) => {
-          // key 包含交互状态，确保权限/问答操作后 ForEach 重建组件
-          if (message.type === 'permission_request') {
-            return message.id + '_' + (message.isPermissionHandled ? 'done' : 'pending')
-          }
-          if (message.type === 'question') {
-            return message.id + '_' + (message.isQuestionAnswered ? 'done' : 'pending')
-          }
-          return message.id
         })
-
-        // 流式文本实时渲染（AI 逐字输出）
-        if (this.streamingText) {
-          ListItem() {
-            this.StreamingTextBubble()
+        .onDidScroll((xOffset: number, yOffset: number) => {
+          // 翻转后滚动方向反转
+          if (-yOffset !== this.scrollOffset) {
+            this.scrollOffset = -yOffset
           }
+        })
         }
-
-        // 流式思考实时渲染
-        if (this.streamingThinking) {
-          ListItem() {
-            this.StreamingThinkingBubble()
-          }
-        }
-
-        // AI 工作状态指示器（吉祥物动画，在流式内容后面）
-        if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
-          this.chatStatus === 'tool_executing' || this.chatStatus === 'permission_pending' ||
-          this.chatStatus === 'question_pending') {
-          ListItem() {
-            this.StreamingIndicator()
-          }
-        }
-
-        // 底部留白（给悬浮输入框留空间，消息可滚入输入框下方）
-        ListItem() {
-          Row().width('100%').height(120)
-        }
-      }
-      .width('100%')
-      .height('100%')
-      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
-      .scrollBar(BarState.Off)
-      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
-      .onScrollIndex((start: number, end: number) => {
-        // 滚动时关闭复制按钮
-        if (this.activeCopyMessageId) {
-          this.activeCopyMessageId = ''
-        }
-        // 与 iOS 一致：判断用户是否在最新消息位置
-        // iOS 在倒序列表顶部放 anchor 检测，非倒序列表中检查最后一条消息是否可见
-        const visibleMsgs = this.getVisibleMessages()
-        const beforeMsgCount = (this.hasMoreMessages() ? 1 : 0) +
-          ((this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
-            this.chatStatus === 'tool_executing' || this.chatStatus === 'permission_pending' ||
-            this.chatStatus === 'question_pending') ? 1 : 0)
-        const lastMsgIndex = beforeMsgCount + (visibleMsgs.length > 0 ? visibleMsgs.length - 1 : 0)
-        // 结尾留白 2 项（消息数量提示 + 底部留白），给一点余量
-        const totalItems = beforeMsgCount + visibleMsgs.length + 2
-
-        if (end >= lastMsgIndex || end >= totalItems - 2) {
-          // 用户看到了最后一条消息 → 在最新消息位置
-          if (this.showNewMessageButton) {
-            this.showNewMessageButton = false
-            this.userIsViewingHistory = false
-            this.animationProgress = 0
-          }
-        } else {
-          // 用户向上滚动查看历史
-          if (!this.showNewMessageButton) {
-            this.showNewMessageButton = true
-            this.userIsViewingHistory = true
-          }
-        }
-      })
-      .onDidScroll((xOffset: number, yOffset: number) => {
-        if (yOffset !== this.scrollOffset) {
-          this.scrollOffset = yOffset
-        }
-      })
-      }
+        .opacity(this.isMessagesLoaded ? 1.0 : 0.0)
       .titleBar({
         content: {
           title: {
@@ -690,7 +702,7 @@ struct ChatDetailPage {
         this.InputAreaContent()
       }
       .width('100%')
-      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, bottom: Theme.SpacingLG })
+      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, bottom: 28 })
       .backgroundColor(Color.Transparent)
       .position({ x: 0, y: '100%' })
       .translate({ y: '-100%' })
@@ -816,11 +828,24 @@ struct ChatDetailPage {
     return this.messages.length > this.displayedMessageCount
   }
 
+  // 计算 List 总项数（用于 onScrollIndex）
+  private getListItemCount(): number {
+    let count = 2 // 顶部留白 + 底部占位
+    count += this.getVisibleMessages().length
+    if (this.streamingText) count++
+    if (this.streamingThinking) count++
+    if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
+      this.chatStatus === 'tool_executing' || this.chatStatus === 'permission_pending' ||
+      this.chatStatus === 'question_pending') count++
+    if (this.hasMoreMessages()) count++
+    return count
+  }
+
   private loadMoreMessages(): void {
     if (this.isLoadingMore) return
     this.isLoadingMore = true
     setTimeout(() => {
-      const increment = 30
+      const increment = 100
       const newCount = Math.min(this.displayedMessageCount + increment, this.messages.length)
       this.displayedMessageCount = newCount
       this.isLoadingMore = false
@@ -2051,7 +2076,7 @@ struct ChatDetailPage {
   }
 
   private startWorkTimer(): void {
-    if (this.workTimer >= 0) return
+    if (this.workTimer !== -1) return
     this.elapsedSeconds = 0
     this.workTimer = setInterval(() => {
       this.elapsedSeconds++
@@ -2069,7 +2094,7 @@ struct ChatDetailPage {
   }
 
   private stopWorkTimer(): void {
-    if (this.workTimer >= 0) {
+    if (this.workTimer !== -1) {
       clearInterval(this.workTimer)
       this.workTimer = -1
     }
@@ -2120,6 +2145,11 @@ struct ChatDetailPage {
 
     // 去重：记录最近发送的消息
     this.recentlySentMessages.add(content)
+    if (this.recentlySentMessages.size > 100) {
+      // 清除旧条目：转数组去前50个再转回Set
+      const arr = Array.from(this.recentlySentMessages)
+      this.recentlySentMessages = new Set(arr.slice(-50))
+    }
     this.userIsViewingHistory = false
 
     sessionStore.sendMessage(content)

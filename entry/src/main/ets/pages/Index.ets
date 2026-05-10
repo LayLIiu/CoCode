@@ -14,8 +14,9 @@ struct Index {
   @State isLoggedIn: boolean = false
   @State isInitialized: boolean = false
 
-  aboutToAppear(): void {
-    // 检查登录状态
+  async aboutToAppear(): Promise<void> {
+    // 等待 authStore 初始化完成后再判断登录状态
+    await authStore.setContext(getContext(this) as Context)
     this.isLoggedIn = authStore.isLoggedIn
     this.isInitialized = true
 

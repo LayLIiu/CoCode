@@ -12,6 +12,7 @@ export class NotificationHelper {
   private context: Context | null = null
   private isNotificationEnabled: boolean = false
   private isSlotCreated: boolean = false
+  private bundleName: string = ''
 
   static getInstance(): NotificationHelper {
     if (!NotificationHelper.instance) {
@@ -22,6 +23,7 @@ export class NotificationHelper {
 
   setContext(context: Context): void {
     this.context = context
+    this.bundleName = context.applicationInfo.name
   }
 
   /**
@@ -148,7 +150,7 @@ export class NotificationHelper {
   private async createWantAgent(sessionId: string): Promise<WantAgent> {
     const wantAgentInfo: wantAgent.WantAgentInfo = {
       wants: [{
-        bundleName: this.context!.applicationInfo.name,
+        bundleName: this.bundleName || 'com.example.myapplication',
         abilityName: 'EntryAbility',
         parameters: {
           sessionId: sessionId,

@@ -5,7 +5,9 @@
 
 import { Theme } from '../common/Theme'
 import { sessionStore } from '../stores/SessionStore'
-import { HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@kit.UIDesignKit'
+import { storageService } from '../services/StorageService'
+import { HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@hms.hds.hdsBaseComponent'
+import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import { LengthMetrics } from '@kit.ArkUI'
 import router from '@ohos.router'
 import preferences from '@ohos.data.preferences'
@@ -80,12 +82,12 @@ struct StorageManagementPage {
   }
 
   build() {
-    Stack({ alignContent: Alignment.Top }) {
+    Stack() {
       HdsNavigation() {
         List({ space: Theme.SpacingMD, scroller: this.scroller }) {
           // 顶部留白
           ListItem() {
-            Row().width('100%').height(20)
+            Row().width('100%').height(100)
           }
 
           // 存储概览
@@ -120,76 +122,38 @@ struct StorageManagementPage {
         .edgeEffect(EdgeEffect.Spring)
         .clip(false)
       }
-    .titleBar({
-      enableComponentSafeArea: false,
-      style: {
-        scrollEffectOpts: {
-          enableScrollEffect: true,
-          scrollEffectType: ScrollEffectType.COMMON_BLUR,
-          blurEffectiveStartOffset: LengthMetrics.vp(0),
-          blurEffectiveEndOffset: LengthMetrics.vp(50)
+      .titleBar({
+        content: {
+          title: { mainTitle: '存储管理' },
         },
-        originalStyle: {
-          backgroundStyle: {
-            backgroundColor: Color.Transparent
-          }
+        style: {
+          scrollEffectOpts: {
+            enableScrollEffect: true,
+            scrollEffectType: ScrollEffectType.GRADIENT_BLUR,
+          },
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.ADAPTIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+          },
         },
-        scrollEffectStyle: {
-          backgroundStyle: {
-            backgroundColor: 'rgba(0, 0, 0, 0.6)'
-          }
-        }
-      }
-    })
-    .bindToScrollable([this.scroller])
-    .titleMode(HdsNavigationTitleMode.MINI)
-    .hideTitleBar(true)
-
-      // 自定义导航栏按钮 - 叠加在 HdsNavigation 上
-      Row() {
-        // 返回按钮
-        Column() {
-          SymbolGlyph($r('sys.symbol.chevron_left'))
-            .fontSize(20)
-            .fontColor([Theme.TextPrimary])
-        }
-        .width(36)
-        .height(36)
-        .backgroundColor('rgba(255, 255, 255, 0.08)')
-        .borderRadius(18)
-        .justifyContent(FlexAlign.Center)
-        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-        .onClick(() => {
-          router.back()
-        })
-
-        Blank()
-
-        Text('存储管理')
-          .fontSize(Theme.FontTitle)
-          .fontColor(Theme.TextPrimary)
-          .fontWeight(FontWeight.Bold)
-
-        Blank()
-
-        // 占位
-        Row().width(36).height(36)
-      }
-      .width('100%')
-      .height(100)
-      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: 50 })
+        avoidLayoutSafeArea: true,
+        enableComponentSafeArea: false,
+      })
+      .bindToScrollable([this.scroller])
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .hideBackButton(false)
+      .linearGradient({
+        angle: 180,
+        colors: [
+          [Theme.BackgroundGradientStart, 0.0],
+          [Theme.BackgroundGradientMiddle, 0.5],
+          [Theme.BackgroundGradientEnd, 1.0]
+        ]
+      })
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
     .width('100%')
     .height('100%')
-    .linearGradient({
-      angle: 180,
-      colors: [
-        [Theme.BackgroundGradientStart, 0.0],
-        [Theme.BackgroundGradientMiddle, 0.5],
-        [Theme.BackgroundGradientEnd, 1.0]
-      ]
-    })
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .bindSheet($$this.showClearCacheConfirm, this.ClearCacheConfirmSheet(), {
       height: 200,
       backgroundColor: Theme.GlassBackground,
@@ -611,9 +575,18 @@ struct StorageManagementPage {
   }
 
   private async clearCache(): Promise<void> {
-    // 清除缓存逻辑
-    await new Promise<void>(resolve => setTimeout(resolve, 1000))
-    this.storageInfo.cacheSize = Math.round(this.storageInfo.cacheSize * 0.5)
+    try {
+      // 清除 preferences 中的缓存数据（非核心认证数据）
+      const prefs = await preferences.getPreferences(getContext(this), 'claude_prefs')
+      await prefs.clear()
+      await prefs.flush()
+
+      // 重新计算缓存大小
+      await this.loadStorageInfo()
+      console.info('[StorageManagementPage] Cache cleared')
+    } catch (e) {
+      console.error(`[StorageManagementPage] Clear cache error: ${e}`)
+    }
   }
 
   private async deleteAllSessions(): Promise<void> {

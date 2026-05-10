@@ -41,11 +41,41 @@ export class SessionStore {
   // WebSocket 状态
   private wsSubscribed: boolean = false
 
-  // 状态变更回调
-  onSessionsChanged?: () => void
-  onMessagesChanged?: (sessionId: string) => void
-  onStatusChanged?: (sessionId: string, status: SessionStatus) => void
-  onRawMessage?: (sessionId: string, msg: WSMessage) => void
+  // 状态变更回调（多监听者列表）
+  private sessionsChangedListeners: Array<() => void> = []
+  private messagesChangedListeners: Array<(sessionId: string) => void> = []
+  private statusChangedListeners: Array<(sessionId: string, status: SessionStatus) => void> = []
+  private rawMessageListeners: Array<(sessionId: string, msg: WSMessage) => void> = []
+
+  // completed→idle 定时器追踪
+  private completedTimers: Map<string, number> = new Map()
+
+  // MARK: - 监听者注册
+
+  addSessionsChangedListener(listener: () => void): void {
+    this.sessionsChangedListeners.push(listener)
+  }
+  removeSessionsChangedListener(listener: () => void): void {
+    this.sessionsChangedListeners = this.sessionsChangedListeners.filter(l => l !== listener)
+  }
+  addMessagesChangedListener(listener: (sessionId: string) => void): void {
+    this.messagesChangedListeners.push(listener)
+  }
+  removeMessagesChangedListener(listener: (sessionId: string) => void): void {
+    this.messagesChangedListeners = this.messagesChangedListeners.filter(l => l !== listener)
+  }
+  addStatusChangedListener(listener: (sessionId: string, status: SessionStatus) => void): void {
+    this.statusChangedListeners.push(listener)
+  }
+  removeStatusChangedListener(listener: (sessionId: string, status: SessionStatus) => void): void {
+    this.statusChangedListeners = this.statusChangedListeners.filter(l => l !== listener)
+  }
+  addRawMessageListener(listener: (sessionId: string, msg: WSMessage) => void): void {
+    this.rawMessageListeners.push(listener)
+  }
+  removeRawMessageListener(listener: (sessionId: string, msg: WSMessage) => void): void {
+    this.rawMessageListeners = this.rawMessageListeners.filter(l => l !== listener)
+  }
 
   static getInstance(): SessionStore {
     if (!SessionStore.instance) {
@@ -212,6 +242,14 @@ export class SessionStore {
       this.sessions = this.sessions.filter(s => s.id !== sessionId)
       this.messages.delete(sessionId)
       this.sessionStatuses.delete(sessionId)
+
+      // 清除 completed→idle 定时器
+      const timer = this.completedTimers.get(sessionId)
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        this.completedTimers.delete(sessionId)
+      }
+
       wsService.disconnectSession(sessionId)
 
       // 删除本地数据
@@ -230,6 +268,13 @@ export class SessionStore {
     this.sessions = this.sessions.filter(s => s.id !== sessionId)
     this.messages.delete(sessionId)
     this.sessionStatuses.delete(sessionId)
+
+    // 清除 completed→idle 定时器
+    const timer = this.completedTimers.get(sessionId)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      this.completedTimers.delete(sessionId)
+    }
 
     // 删除本地数据
     await storageService.deleteMessages(sessionId)
@@ -287,50 +332,78 @@ export class SessionStore {
   // MARK: - 消息操作
 
   async loadMessages(sessionId: string): Promise<void> {
-    // 先加载本地缓存
+    // 先加载本地缓存（快速展示）
     const localMessages = await storageService.loadMessages(sessionId)
     if (localMessages.length > 0) {
       this.messages.set(sessionId, localMessages)
       this.notifyMessagesChanged(sessionId)
     }
 
-    // 后台同步服务器消息
+    // 后台静默同步服务器消息（不阻塞页面渲染）
+    this.syncMessagesFromServer(sessionId)
+  }
+
+  // 后台同步服务器消息
+  private async syncMessagesFromServer(sessionId: string): Promise<void> {
     try {
       const serverMessages = await apiService.getMessages(sessionId)
 
-      // 合并消息
-      let existingIds: Set<string> = new Set()
-      let existingContents: Set<string> = new Set()
-      let mergedMessages = this.messages.get(sessionId) || []
+      // 智能合并：服务器消息为主，保留本地独有的消息（如 thinking/tool_use）
+      const localMsgs = this.messages.get(sessionId) || []
+      const merged = this.mergeMessages(localMsgs, serverMessages)
 
-      for (let i = 0; i < mergedMessages.length; i++) {
-        existingIds.add(mergedMessages[i].id)
-        existingContents.add(`${mergedMessages[i].type}-${mergedMessages[i].content}`)
-      }
-
-      for (let i = 0; i < serverMessages.length; i++) {
-        const msg = serverMessages[i]
-        const contentKey = `${msg.type}-${msg.content}`
-        if (!existingIds.has(msg.id) && !existingContents.has(contentKey)) {
-          mergedMessages.push(msg)
-          existingIds.add(msg.id)
-          existingContents.add(contentKey)
-        }
-      }
-
-      // 按时间排序
-      mergedMessages.sort((a, b) => {
-        return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      })
-
-      this.messages.set(sessionId, mergedMessages)
+      this.messages.set(sessionId, merged)
       this.notifyMessagesChanged(sessionId)
 
       // 保存到本地
-      await storageService.saveMessages(sessionId, mergedMessages)
+      await storageService.saveMessages(sessionId, merged)
     } catch (e) {
-      console.error(`[SessionStore] Load messages error: ${e}`)
+      console.error(`[SessionStore] Sync messages error: ${e}`)
     }
+  }
+
+  // 智能合并消息：服务器消息为主，保留本地独有的消息
+  private mergeMessages(localMessages: Message[], serverMessages: Message[]): Message[] {
+    // 用 content+type 作为去重键（因为 id 格式可能不同）
+    const serverKeys: Set<string> = new Set()
+    for (let i = 0; i < serverMessages.length; i++) {
+      const msg = serverMessages[i]
+      const key = msg.type + ':' + this.messageContentKey(msg)
+      serverKeys.add(key)
+    }
+
+    // 先添加服务器消息
+    const result: Message[] = [...serverMessages]
+
+    // 再检查本地消息中是否有服务器没有的（如 thinking、tool_use）
+    for (let i = 0; i < localMessages.length; i++) {
+      const msg = localMessages[i]
+      const key = msg.type + ':' + this.messageContentKey(msg)
+      if (!serverKeys.has(key)) {
+        result.push(msg)
+      }
+    }
+
+    // 按时间排序
+    result.sort((a, b) => {
+      return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    })
+
+    return result
+  }
+
+  // 生成消息内容去重键
+  private messageContentKey(msg: Message): string {
+    if (msg.type === 'tool_use') {
+      return (msg.toolName || '') + ':' + (msg.toolResult || '').substring(0, 100)
+    } else if (msg.type === 'thinking') {
+      return (msg.content || '').substring(0, 100)
+    } else if (msg.type === 'user') {
+      return (msg.content || '').substring(0, 100)
+    } else if (msg.type === 'assistant') {
+      return (msg.content || '').substring(0, 100)
+    }
+    return msg.id
   }
 
   addMessage(sessionId: string, message: Message): void {
@@ -342,9 +415,7 @@ export class SessionStore {
     // 去重
     let exists = false
     for (let i = 0; i < sessionMessages.length; i++) {
-      const m = sessionMessages[i]
-      if (m.id === message.id ||
-        (m.type === message.type && m.content === message.content && message.content)) {
+      if (sessionMessages[i].id === message.id) {
         exists = true
         break
       }
@@ -473,12 +544,19 @@ export class SessionStore {
 
     // completed 状态 3 秒后自动恢复为 idle，让吉祥物回到睡眠
     if (status === 'completed') {
-      setTimeout(() => {
+      // 清除之前的 timer
+      const oldTimer = this.completedTimers.get(sessionId)
+      if (oldTimer !== undefined) {
+        clearTimeout(oldTimer)
+      }
+      const timer = setTimeout(() => {
+        this.completedTimers.delete(sessionId)
         // 只有当前仍然是 completed 时才恢复（避免覆盖新的工作状态）
         if (this.sessionStatuses.get(sessionId) === 'completed') {
           this.updateSessionStatus(sessionId, 'idle')
         }
       }, 3000)
+      this.completedTimers.set(sessionId, timer)
     }
 
     console.info(`[SessionStore] Status updated: ${sessionId} -> ${status}`)
@@ -495,8 +573,8 @@ export class SessionStore {
     console.info(`[SessionStore] WS msg: ${msg.type} for ${sessionId}`)
 
     // 转发原始消息给 ChatDetailPage（用于流式缓冲等本地处理）
-    if (this.onRawMessage) {
-      this.onRawMessage(sessionId, msg)
+    for (const listener of this.rawMessageListeners) {
+      listener(sessionId, msg)
     }
 
     // 忽略 connected 消息
@@ -655,15 +733,32 @@ export class SessionStore {
             }
           }
 
-          const userMsg: Message = {
-            id: msg.id || 'user-' + Date.now(),
-            type: 'user',
-            content: contentString,
-            timestamp: msg.timestamp || new Date().toISOString()
+          // 去重：检查是否已有相同内容的用户消息（sendMessage 已添加本地消息）
+          const existingMessages = this.messages.get(sessionId)
+          let isDuplicate = false
+          if (existingMessages) {
+            for (let i = existingMessages.length - 1; i >= 0; i--) {
+              const m = existingMessages[i]
+              if (m.type === 'user' && m.content === contentString) {
+                isDuplicate = true
+                break
+              }
+              // 只检查最近的消息，避免全量扫描
+              if (existingMessages.length - i > 10) break
+            }
           }
-          this.addMessage(sessionId, userMsg)
-          // 后台通知（桌面端发来的用户消息）
-          this.notifyIfBackground(sessionId, '用户消息', contentString)
+
+          if (!isDuplicate) {
+            const userMsg: Message = {
+              id: msg.id || 'user-' + Date.now(),
+              type: 'user',
+              content: contentString,
+              timestamp: msg.timestamp || new Date().toISOString()
+            }
+            this.addMessage(sessionId, userMsg)
+            // 后台通知（桌面端发来的用户消息）
+            this.notifyIfBackground(sessionId, '用户消息', contentString)
+          }
         }
         break
 
@@ -780,20 +875,20 @@ export class SessionStore {
   // MARK: - 通知
 
   private notifySessionsChanged(): void {
-    if (this.onSessionsChanged) {
-      this.onSessionsChanged()
+    for (const listener of this.sessionsChangedListeners) {
+      listener()
     }
   }
 
   private notifyMessagesChanged(sessionId: string): void {
-    if (this.onMessagesChanged) {
-      this.onMessagesChanged(sessionId)
+    for (const listener of this.messagesChangedListeners) {
+      listener(sessionId)
     }
   }
 
   private notifyStatusChanged(sessionId: string, status: SessionStatus): void {
-    if (this.onStatusChanged) {
-      this.onStatusChanged(sessionId, status)
+    for (const listener of this.statusChangedListeners) {
+      listener(sessionId, status)
     }
   }
 
@@ -845,6 +940,10 @@ export class SessionStore {
     this.sessionStatuses.clear()
     this.sessionTasks.clear()
     this.currentSessionId = null
+
+    // 清除所有 completed→idle 定时器
+    this.completedTimers.forEach((timer) => clearTimeout(timer))
+    this.completedTimers.clear()
 
     // 清除本地存储
     await storageService.saveSessions([])

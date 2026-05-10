@@ -11,6 +11,14 @@ export struct ConversationItem {
   @Prop conversation: ConversationModel
   @State scaleValue: number = 1.0
   @State pressed: boolean = false
+  private touchTimer: number = -1
+
+  aboutToDisappear(): void {
+    if (this.touchTimer !== -1) {
+      clearTimeout(this.touchTimer)
+      this.touchTimer = -1
+    }
+  }
 
   build() {
     Row() {
@@ -68,9 +76,13 @@ export struct ConversationItem {
         this.scaleValue = 0.95
         this.pressed = true
       } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        setTimeout(() => {
+        if (this.touchTimer !== -1) {
+          clearTimeout(this.touchTimer)
+        }
+        this.touchTimer = setTimeout(() => {
           this.scaleValue = 1.0
           this.pressed = false
+          this.touchTimer = -1
         }, 100)
       }
     })

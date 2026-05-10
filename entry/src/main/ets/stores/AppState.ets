@@ -37,9 +37,25 @@ export class AppState {
   // 加载状态
   isLoadingModels: boolean = false
 
-  // 状态变更回调
-  onThemeChanged?: () => void
-  onModelsChanged?: () => void
+  // 状态变更监听者列表
+  private themeChangedListeners: Array<() => void> = []
+  private modelsChangedListeners: Array<() => void> = []
+
+  addThemeChangedListener(listener: () => void): void {
+    this.themeChangedListeners.push(listener)
+  }
+
+  removeThemeChangedListener(listener: () => void): void {
+    this.themeChangedListeners = this.themeChangedListeners.filter(l => l !== listener)
+  }
+
+  addModelsChangedListener(listener: () => void): void {
+    this.modelsChangedListeners.push(listener)
+  }
+
+  removeModelsChangedListener(listener: () => void): void {
+    this.modelsChangedListeners = this.modelsChangedListeners.filter(l => l !== listener)
+  }
 
   static getInstance(): AppState {
     if (!AppState.instance) {
@@ -50,9 +66,7 @@ export class AppState {
 
   setThemeMode(mode: ThemeMode): void {
     this.themeMode = mode
-    if (this.onThemeChanged) {
-      this.onThemeChanged()
-    }
+    for (const l of this.themeChangedListeners) { l() }
   }
 
   setEffortLevel(level: string): void {
@@ -74,9 +88,7 @@ export class AppState {
           this.currentModel = this.models[0]
         }
       }
-      if (this.onModelsChanged) {
-        this.onModelsChanged()
-      }
+      for (const l of this.modelsChangedListeners) { l() }
     } catch (e) {
       console.error(`[AppState] Fetch models error: ${e}`)
     } finally {
@@ -88,9 +100,7 @@ export class AppState {
     try {
       const model = await apiService.getCurrentModel()
       this.currentModel = model
-      if (this.onModelsChanged) {
-        this.onModelsChanged()
-      }
+      for (const l of this.modelsChangedListeners) { l() }
     } catch (e) {
       console.error(`[AppState] Get current model error: ${e}`)
     }
@@ -102,9 +112,7 @@ export class AppState {
       const model = this.models.find(m => m.id === modelId)
       if (model) {
         this.currentModel = model
-        if (this.onModelsChanged) {
-          this.onModelsChanged()
-        }
+        for (const l of this.modelsChangedListeners) { l() }
       }
     } catch (e) {
       console.error(`[AppState] Set current model error: ${e}`)

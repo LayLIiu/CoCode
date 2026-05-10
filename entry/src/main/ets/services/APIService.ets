@@ -352,22 +352,27 @@ export class APIService {
 
     const httpRequest = http.createHttp()
 
-    let httpMethod = http.RequestMethod.GET
+    let httpMethod: http.RequestMethod = http.RequestMethod.GET
     if (method === 'POST') {
       httpMethod = http.RequestMethod.POST
     } else if (method === 'PUT') {
       httpMethod = http.RequestMethod.PUT
     } else if (method === 'PATCH') {
-      httpMethod = http.RequestMethod.PUT // 鸿蒙没有 PATCH，用 PUT 替代
+      httpMethod = http.RequestMethod.PUT // 鸿蒙 http.RequestMethod 不包含 PATCH，用 PUT + X-HTTP-Method-Override
     } else if (method === 'DELETE') {
       httpMethod = http.RequestMethod.DELETE
     }
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    }
+    if (method === 'PATCH') {
+      headers['X-HTTP-Method-Override'] = 'PATCH'
+    }
+
     const options: http.HttpRequestOptions = {
       method: httpMethod,
-      header: {
-        'Content-Type': 'application/json'
-      },
+      header: headers,
       connectTimeout: 30000,
       readTimeout: 30000
     }
@@ -380,7 +385,7 @@ export class APIService {
       const response = await httpRequest.request(url, options)
       console.info(`[APIService] Response code: ${response.responseCode}`)
 
-      if (response.responseCode === 200 || response.responseCode === 201) {
+      if (response.responseCode >= 200 && response.responseCode < 300) {
         const result = response.result as string
         return JSON.parse(result) as T
       } else if (response.responseCode === 401) {
@@ -453,6 +458,23 @@ export class APIService {
         if (msg.content) {
           if (typeof msg.content === 'object' && Array.isArray(msg.content)) {
             const blocks = msg.content as ContentBlock[]
+            // 先遍历 thinking 块（确保思考过程在回复文本之前）
+            for (let blockIdx = 0; blockIdx < blocks.length; blockIdx++) {
+              const block = blocks[blockIdx]
+              if (block.type === 'thinking') {
+                const thinkingText = (block.text || '').trim()
+                if (thinkingText) {
+                  const thinkingMsg: Message = {
+                    id: msgId + '-thinking-' + blockIdx,
+                    type: 'thinking',
+                    content: thinkingText,
+                    timestamp: timestamp
+                  }
+                  result.push(thinkingMsg)
+                }
+              }
+            }
+            // 再遍历 text 和 tool_use 块
             for (let blockIdx = 0; blockIdx < blocks.length; blockIdx++) {
               const block = blocks[blockIdx]
 
@@ -478,18 +500,6 @@ export class APIService {
                   toolStatus: 'completed'
                 }
                 result.push(toolMsg)
-              } else if (block.type === 'thinking') {
-                // 处理内容块中的 thinking
-                const thinkingText = (block.text || '').trim()
-                if (thinkingText) {
-                  const thinkingMsg: Message = {
-                    id: msgId + '-thinking-' + blockIdx,
-                    type: 'thinking',
-                    content: thinkingText,
-                    timestamp: timestamp
-                  }
-                  result.push(thinkingMsg)
-                }
               }
             }
           } else if (typeof msg.content === 'string') {
