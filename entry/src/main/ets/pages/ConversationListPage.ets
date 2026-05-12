@@ -200,7 +200,6 @@ struct SessionItemView {
 
   aboutToAppear(): void {
     this.refreshStatus()
-    // 每 500ms 检查一次状态变化，确保吉祥物实时同步
     this.statusCheckTimer = setInterval(() => {
       const latestStatus = sessionStore.getSessionStatus(this.session.id)
       if (latestStatus !== this.currentStatus) {
@@ -310,7 +309,7 @@ struct SessionItemView {
       .padding(Theme.SpacingMD)
     }
     .width('100%')
-    .backgroundColor(Theme.BackgroundSecondary)
+    .backgroundColor('#1C1C1E')
     .borderRadius(Theme.RadiusMedium)
     .margin({ bottom: Theme.SpacingSM })
     .onClick(() => {
@@ -551,6 +550,25 @@ export struct ConversationListPage {
     return result
   }
 
+  // 侧滑删除按钮
+  @Builder
+  SwipeDeleteButton(sessionId: string) {
+    Button() {
+      SymbolGlyph($r('sys.symbol.trash'))
+        .fontSize(20)
+        .fontColor([Color.White])
+    }
+    .width(50)
+    .height(50)
+    .borderRadius(25)
+    .backgroundColor('#FF3B30')
+    .margin({ right: 8 })
+    .onClick(() => {
+      // 直接调用删除
+      sessionStore.deleteLocalSession(sessionId)
+    })
+  }
+
   build() {
     Stack() {
       HdsNavigation() {
@@ -572,11 +590,18 @@ export struct ConversationListPage {
               }) {
                 ForEach(group.sessions, (session: Session) => {
                   ListItem() {
-                    SessionItemView({ session: session, refreshTrigger: this.refreshTrigger })
+                    SessionItemView({
+                      session: session,
+                      refreshTrigger: this.refreshTrigger
+                    })
                   }
-                }, (session: Session) => session.id)
+                  .swipeAction({
+                    end: this.SwipeDeleteButton(session.id),
+                    edgeEffect: SwipeEdgeEffect.Spring
+                  })
+                }, (session: Session) => `${session.id}_${this.refreshTrigger}`)
               }
-            }, (group: SessionGroup) => group.groupName)
+            }, (group: SessionGroup) => `${group.groupName}_${this.refreshTrigger}`)
           } else {
             ListItem() {
               this.EmptyState()

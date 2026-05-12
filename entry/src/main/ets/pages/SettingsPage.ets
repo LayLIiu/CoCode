@@ -28,6 +28,8 @@ export struct SettingsPage {
   @State latency: number = 0
   @State showLanEdit: boolean = false
   @State showTunnelEdit: boolean = false
+  @State editType: string = '' // 'lan' or 'tunnel'
+  @State showEditSheet: boolean = false
   @State showThemeSheet: boolean = false
   @State editUrl: string = ''
   @State themeMode: ThemeMode = 'dark'
@@ -210,19 +212,16 @@ export struct SettingsPage {
         ]
       })
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+      .bindSheet($$this.showEditSheet, this.editType === 'lan' ? this.LanEditSheet() : this.TunnelEditSheet(), {
+        height: 280,
+        backgroundColor: Theme.BackgroundSecondary,
+        dragBar: true,
+        showClose: false,
+        blurStyle: BlurStyle.COMPONENT_THICK
+      })
     }
     .width('100%')
     .height('100%')
-    .bindSheet($$this.showLanEdit, this.LanEditSheet(), {
-      height: 280,
-      backgroundColor: Theme.GlassBackground,
-      dragBar: true
-    })
-    .bindSheet($$this.showTunnelEdit, this.TunnelEditSheet(), {
-      height: 280,
-      backgroundColor: Theme.GlassBackground,
-      dragBar: true
-    })
   }
 
   @Builder
@@ -316,7 +315,8 @@ export struct SettingsPage {
           .fontColor(Theme.PrimaryColor)
           .onClick(() => {
             this.editUrl = this.lanUrl
-            this.showLanEdit = true
+            this.editType = 'lan'
+            this.showEditSheet = true
           })
       }
       .width('100%')
@@ -342,7 +342,8 @@ export struct SettingsPage {
           .fontColor(Theme.PrimaryColor)
           .onClick(() => {
             this.editUrl = this.tunnelUrl
-            this.showTunnelEdit = true
+            this.editType = 'tunnel'
+            this.showEditSheet = true
           })
       }
       .width('100%')
@@ -752,7 +753,7 @@ export struct SettingsPage {
           .borderRadius(8)
           .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
           .onClick(() => {
-            this.showLanEdit = false
+            this.showEditSheet = false
           })
 
         Button('保存')
@@ -766,7 +767,7 @@ export struct SettingsPage {
           .onClick(() => {
             this.lanUrl = this.editUrl
             authStore.setLanUrl(this.editUrl)
-            this.showLanEdit = false
+            this.showEditSheet = false
           })
       }
       .width('100%')
@@ -815,7 +816,7 @@ export struct SettingsPage {
           .borderRadius(8)
           .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
           .onClick(() => {
-            this.showTunnelEdit = false
+            this.showEditSheet = false
           })
 
         Button('保存')
@@ -829,7 +830,7 @@ export struct SettingsPage {
           .onClick(() => {
             this.tunnelUrl = this.editUrl
             authStore.setTunnelUrl(this.editUrl)
-            this.showTunnelEdit = false
+            this.showEditSheet = false
           })
       }
       .width('100%')
@@ -872,7 +873,7 @@ export struct SettingsPage {
 
     const httpRequest = http.createHttp()
     try {
-      const url = this.currentUrl + '/api/sessions'
+      const url = this.currentUrl + '/api/status'
 
       const startTime = Date.now()
 

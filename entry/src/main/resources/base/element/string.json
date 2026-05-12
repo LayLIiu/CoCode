@@ -29,6 +29,10 @@
       "value": "用于后台保持连接接收消息"
     },
     {
+      "name": "vibrate_permission",
+      "value": "用于权限请求和提问时振动提醒"
+    },
+    {
       "name": "tab_claude",
       "value": "Claude"
     },

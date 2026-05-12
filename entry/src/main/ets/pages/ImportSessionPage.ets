@@ -124,6 +124,8 @@ struct ImportSessionPage {
       if (!exists) {
         sessionStore.sessions.push(session)
       }
+      // 从已删除列表中移除（恢复会话）
+      await sessionStore.restoreSessionFromDeleted(session.id)
     }
 
     // 保存到本地

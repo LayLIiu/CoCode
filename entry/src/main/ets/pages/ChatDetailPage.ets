@@ -15,6 +15,7 @@ import { HdsMiniBarButton } from '../components/HdsMiniBarButton'
 import { HdsGlassInput } from '../components/HdsGlassInput'
 import router from '@ohos.router'
 import pasteboard from '@ohos.pasteboard'
+import vibrator from '@ohos.vibrator'
 
 // 斜杠命令定义
 class SlashCommand {
@@ -109,6 +110,9 @@ struct ChatDetailPage {
   @State showNewMessageButton: boolean = false
   @State userIsViewingHistory: boolean = false
 
+  // 用户触控追踪：手指在屏幕上时不自动滚动
+  @State isUserTouchingList: boolean = false
+
   // 输入栏收缩动画
   @State animationProgress: number = 0
 
@@ -132,6 +136,10 @@ struct ChatDetailPage {
   private readonly blurThreshold: number = 30
 
   private scroller: Scroller = new Scroller()
+
+  // 流式 thinking 自动滚动
+  private streamingThinkingScroller: Scroller = new Scroller()
+  private thinkingScrollTimer: number = -1
 
   // 斜杠命令列表
   private slashCommands: SlashCommand[] = [
@@ -168,6 +176,10 @@ struct ChatDetailPage {
       sessionStore.inputDrafts.delete(this.sessionId)
     }
     this.stopWorkTimer()
+    if (this.thinkingScrollTimer !== -1) {
+      clearTimeout(this.thinkingScrollTimer)
+      this.thinkingScrollTimer = -1
+    }
     this.removeCallbacks()
     sessionStore.setCurrentSession(null)
   }
@@ -204,8 +216,8 @@ struct ChatDetailPage {
       if (msgs) {
         this.messages = msgs
       }
-      // 查看历史时不强制滚动，避免打断用户
-      if (!this.userIsViewingHistory) {
+      // 查看历史或用户触控时不强制滚动，避免打断用户
+      if (!this.userIsViewingHistory && !this.isUserTouchingList) {
         this.scrollToBottom()
       }
     }
@@ -352,8 +364,8 @@ struct ChatDetailPage {
         }
         if (msg.text) {
           this.streamingText += msg.text
-          // 流式文本实时滚动
-          if (!this.userIsViewingHistory) {
+          // 流式文本实时滚动：仅当用户未查看历史且未触控时
+          if (!this.userIsViewingHistory && !this.isUserTouchingList) {
             this.scrollToBottom()
           }
         }
@@ -370,8 +382,12 @@ struct ChatDetailPage {
         }
         if (msg.text) {
           this.streamingThinking += msg.text
-          if (!this.userIsViewingHistory) {
+          if (!this.userIsViewingHistory && !this.isUserTouchingList) {
             this.scrollToBottom()
+          }
+          // 流式 thinking 自动滚动到底部（根据内容长度控制速度）
+          if (!this.isUserTouchingList) {
+            this.scheduleThinkingScroll(msg.text.length)
           }
         }
         break
@@ -397,7 +413,7 @@ struct ChatDetailPage {
         if (msg.used) {
           this.tokenUsage = msg.used
         }
-        if (!this.userIsViewingHistory) {
+        if (!this.userIsViewingHistory && !this.isUserTouchingList) {
           this.scrollToBottom()
         }
         // 消息完成 → 合上最新 thinking
@@ -410,12 +426,14 @@ struct ChatDetailPage {
       case 'permission_request':
         this.flushStreamingBuffers()
         this.chatStatus = 'permission_pending'
+        this.vibrateAlert()
         break
 
       case 'question':
       case 'questions':
         this.flushStreamingBuffers()
         this.chatStatus = 'question_pending'
+        this.vibrateAlert()
         break
 
       case 'user_message_echo':
@@ -597,10 +615,6 @@ struct ChatDetailPage {
         .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
         .rotate({ angle: 180 })  // 整体翻转，使列表默认在最新消息位置
         .onScrollIndex((start: number, end: number) => {
-          // 滚动时关闭复制按钮
-          if (this.activeCopyMessageId) {
-            this.activeCopyMessageId = ''
-          }
           // 翻转后：滚到底部=视觉顶部=加载更多历史
           const totalItems = this.getListItemCount()
           if (end >= totalItems - 1 && this.hasMoreMessages() && !this.isLoadingMore) {
@@ -626,6 +640,16 @@ struct ChatDetailPage {
           // 翻转后滚动方向反转
           if (-yOffset !== this.scrollOffset) {
             this.scrollOffset = -yOffset
+          }
+        })
+        .onTouch((event: TouchEvent) => {
+          if (event.type === TouchType.Down) {
+            this.isUserTouchingList = true
+          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+            // 手指抬起后延迟重置，等惯性滑动结束
+            setTimeout(() => {
+              this.isUserTouchingList = false
+            }, 600)
           }
         })
         }
@@ -1033,7 +1057,7 @@ struct ChatDetailPage {
         .width('100%')
         .padding({ left: 12, right: 12, top: 10, bottom: 6 })
 
-        Scroll() {
+        Scroll(this.streamingThinkingScroller) {
           Text(this.streamingThinking)
             .fontSize(11)
             .fontColor(Theme.TextSecondary)
@@ -1165,6 +1189,29 @@ struct ChatDetailPage {
       newSet.add(id)
     }
     this.expandedThinkingIds = newSet
+  }
+
+  // 流式 thinking 自动滚动（根据新增内容长度控制速度）
+  private scheduleThinkingScroll(deltaLength: number): void {
+    if (this.thinkingScrollTimer !== -1) {
+      clearTimeout(this.thinkingScrollTimer)
+    }
+    // 速度策略：内容少时快速跟随，内容多时稍慢让用户能阅读
+    // deltaLength 越大 → 延迟越长（给渲染时间）
+    // 整体内容越长 → 滚动间隔稍长
+    const totalLength = this.streamingThinking.length
+    const baseDelay = Math.max(30, Math.min(150, deltaLength * 2))
+    const contentFactor = Math.max(1, Math.min(3, totalLength / 2000))
+    const delay = Math.round(baseDelay * contentFactor)
+
+    this.thinkingScrollTimer = setTimeout(() => {
+      try {
+        this.streamingThinkingScroller.scrollEdge(Edge.Bottom)
+      } catch (e) {
+        // scroller 可能尚未绑定，忽略
+      }
+      this.thinkingScrollTimer = -1
+    }, delay)
   }
 
   // 合上最新 thinking（与 iOS 一致：新工具或内容出现后自动合上）
@@ -2085,6 +2132,21 @@ struct ChatDetailPage {
     }, () => {
       this.mascotScale = 1.15
     })
+  }
+
+  // 等待用户操作时振动提醒
+  private vibrateAlert(): void {
+    try {
+      vibrator.startVibration({
+        type: 'time',
+        duration: 300
+      }, {
+        id: 0,
+        usage: 'alarm'
+      })
+    } catch (e) {
+      // 振动失败忽略，不影响功能
+    }
   }
 
   private stopWorkTimer(): void {

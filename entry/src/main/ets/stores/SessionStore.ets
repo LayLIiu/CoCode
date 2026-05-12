@@ -45,6 +45,10 @@ export class SessionStore {
   // WebSocket 状态
   private wsSubscribed: boolean = false
 
+  // 本地删除的会话ID集合（不从服务器重新加载）
+  private locallyDeletedSessionIds: Set<string> = new Set()
+  private isLocalDataLoaded: boolean = false
+
   // 状态变更回调（多监听者列表）
   private sessionsChangedListeners: Array<() => void> = []
   private messagesChangedListeners: Array<(sessionId: string) => void> = []
@@ -102,6 +106,20 @@ export class SessionStore {
 
   private async loadLocalData(): Promise<void> {
     try {
+      // 加载本地已删除的会话ID列表
+      const deletedIds = await storageService.loadString('locally_deleted_session_ids')
+      if (deletedIds) {
+        try {
+          const ids: string[] = JSON.parse(deletedIds)
+          for (let i = 0; i < ids.length; i++) {
+            this.locallyDeletedSessionIds.add(ids[i])
+          }
+          console.info(`[SessionStore] Loaded ${this.locallyDeletedSessionIds.size} locally deleted session IDs`)
+        } catch (e) {
+          console.error(`[SessionStore] Parse deleted session IDs error: ${e}`)
+        }
+      }
+
       // 加载本地会话
       const localSessions = await storageService.loadSessions()
       if (localSessions.length > 0) {
@@ -130,14 +148,22 @@ export class SessionStore {
         this.notifySessionsChanged()
         console.info(`[SessionStore] Loaded ${localSessions.length} sessions from local, ${savedStatuses.size} statuses`)
       }
+
+      this.isLocalDataLoaded = true
     } catch (e) {
       console.error(`[SessionStore] Load local data error: ${e}`)
+      this.isLocalDataLoaded = true
     }
   }
 
   // MARK: - 会话操作
 
   async fetchSessions(): Promise<void> {
+    // 等待本地数据加载完成
+    while (!this.isLocalDataLoaded) {
+      await new Promise<void>(resolve => setTimeout(resolve, 50))
+    }
+
     this.isLoading = true
     this.error = null
     this.notifySessionsChanged()
@@ -145,13 +171,16 @@ export class SessionStore {
     try {
       const serverSessions = await apiService.getSessions()
 
+      // 过滤掉本地已删除的会话
+      const filteredServerSessions = serverSessions.filter(s => !this.locallyDeletedSessionIds.has(s.id))
+
       // 合并本地修改时间（避免被服务器旧数据覆盖）
       const localModifiedMap: Map<string, string> = new Map()
       for (let i = 0; i < this.sessions.length; i++) {
         localModifiedMap.set(this.sessions[i].id, this.sessions[i].modifiedAt)
       }
 
-      this.sessions = serverSessions.map(serverSession => {
+      this.sessions = filteredServerSessions.map(serverSession => {
         const localTime = localModifiedMap.get(serverSession.id)
         if (localTime) {
           const localDate = new Date(localTime).getTime()
@@ -280,6 +309,12 @@ export class SessionStore {
       this.completedTimers.delete(sessionId)
     }
 
+    // 记录到本地已删除列表，防止从服务器重新加载
+    this.locallyDeletedSessionIds.add(sessionId)
+    const deletedIdsArray: string[] = []
+    this.locallyDeletedSessionIds.forEach(id => deletedIdsArray.push(id))
+    await storageService.saveString('locally_deleted_session_ids', JSON.stringify(deletedIdsArray))
+
     // 删除本地数据
     await storageService.deleteMessages(sessionId)
     await storageService.saveSessions(this.sessions)
@@ -290,6 +325,15 @@ export class SessionStore {
 
     this.notifySessionsChanged()
     console.info(`[SessionStore] Deleted local session: ${sessionId}`)
+  }
+
+  // 从已删除列表中移除（用于导入会话时恢复）
+  async restoreSessionFromDeleted(sessionId: string): Promise<void> {
+    this.locallyDeletedSessionIds.delete(sessionId)
+    const deletedIdsArray: string[] = []
+    this.locallyDeletedSessionIds.forEach(id => deletedIdsArray.push(id))
+    await storageService.saveString('locally_deleted_session_ids', JSON.stringify(deletedIdsArray))
+    console.info(`[SessionStore] Restored session from deleted list: ${sessionId}`)
   }
 
   async renameSession(sessionId: string, title: string): Promise<void> {

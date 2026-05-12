@@ -66,20 +66,16 @@ export struct PixelMascot {
   private readonly kbKeyColor: string = '#9aa8b4'
   private readonly starColor: string = '#fbbf24'
 
-  // Dex (Codex) 配色
-  private readonly DEX_CLOUD: string = '#EBEBEC'
-  private readonly DEX_CLOUD_DARK: string = '#B3B3B8'
+  // Dex (Codex) 配色 - 基础色调会被 bodyColor 替换
   private readonly DEX_PROMPT: string = '#000000'
   private readonly DEX_ALERT_C: string = '#FF8800'
   private readonly DEX_KB_BASE: string = '#2E2E32'
   private readonly DEX_KB_KEY: string = '#66666A'
   private readonly DEX_KB_HI: string = '#FFFFFF'
 
-  // OpBot (OpenCode) 配色
-  private readonly OC_BODY: string = '#38383D'
-  private readonly OC_FRAME: string = '#8C8C91'
-  private readonly OC_FACE: string = '#D9D9DE'
-  private readonly OC_LEG: string = '#59595E'
+  // OpBot (OpenCode) 配色 - 基础色调会被 bodyColor 替换
+  private readonly OC_FRAME: string = '#000000'
+  private readonly OC_FACE: string = '#000000'
   private readonly OC_ALERT_C: string = '#FF8800'
   private readonly OC_KB_BASE: string = '#1E1E24'
   private readonly OC_KB_KEY: string = '#4D4D52'
@@ -650,7 +646,7 @@ export struct PixelMascot {
       rh = rh * squashY
 
       const rect = this.dexRect(v, rx, ry, rw, rh, dy)
-      this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.DEX_CLOUD)
+      this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.bodyColor)
     }
   }
 
@@ -683,9 +679,9 @@ export struct PixelMascot {
   // 绘制小短腿
   private drawDexLegs(v: DexV): void {
     let rect = this.dexRect(v, 5, 14.5, 1, 1.5)
-    this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.DEX_CLOUD_DARK)
+    this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.bodyColor)
     rect = this.dexRect(v, 9, 14.5, 1, 1.5)
-    this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.DEX_CLOUD_DARK)
+    this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.bodyColor)
   }
 
   // ── Dex 睡眠：浮动 + 光标慢闪 ──
@@ -903,7 +899,7 @@ export struct PixelMascot {
       let ry = row[0] * squashY + (1 - squashY) * 10
       let rh = 1 * squashY
       const rect = this.dexRect(v, rx, ry, rw, rh, dy)
-      this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.OC_BODY)
+      this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.bodyColor)
     }
 
     // 内边框 — 顶部和底部
@@ -916,10 +912,8 @@ export struct PixelMascot {
       let rw = row[2] * squashX
       let ry = row[0] * squashY + (1 - squashY) * 10
       let rh = 0.7 * squashY
-      this.context.globalAlpha = 0.6
       const rect = this.dexRect(v, rx, ry, rw, rh, dy)
       this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.OC_FRAME)
-      this.context.globalAlpha = 1
     }
 
     // 内边框 — 左右
@@ -927,12 +921,10 @@ export struct PixelMascot {
       let lx = cx + (3 - cx) * squashX
       let rx = cx + (11.3 - cx) * squashX
       let ry = y * squashY + (1 - squashY) * 10
-      this.context.globalAlpha = 0.4
       let rect = this.dexRect(v, lx, ry, 0.7 * squashX, 1 * squashY, dy)
       this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.OC_FRAME)
       rect = this.dexRect(v, rx, ry, 0.7 * squashX, 1 * squashY, dy)
       this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.OC_FRAME)
-      this.context.globalAlpha = 1
     }
   }
 
@@ -955,10 +947,8 @@ export struct PixelMascot {
 
     // 中间圆点光标
     if (eyeScale > 0.5) {
-      this.context.globalAlpha = 0.8
       rect = this.dexRect(v, 7.1, 9.2, 0.8, 0.8, dy)
       this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.OC_FACE)
-      this.context.globalAlpha = 1
     }
   }
 
@@ -972,9 +962,9 @@ export struct PixelMascot {
   // OC 小短腿
   private drawOCLegs(v: DexV): void {
     let rect = this.dexRect(v, 4, 13.5, 1, 1.5)
-    this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.OC_LEG)
+    this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.bodyColor)
     rect = this.dexRect(v, 10, 13.5, 1, 1.5)
-    this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.OC_LEG)
+    this.drawPixelRect(rect[0], rect[1], rect[2], rect[3], this.bodyColor)
   }
 
   // ── OC 睡眠：浮动 + 半闭眼 ──
