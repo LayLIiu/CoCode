@@ -791,7 +791,7 @@ struct ChatDetailPage {
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .clip(false)  // 禁用裁切，让按钮形变效果可以超出边界
     .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.sheetType === 'attachment' ? this.AttachmentActionSheet() : this.SlashCommandsSheet(), {
-      height: this.sheetType === 'model' ? 480 : this.sheetType === 'attachment' ? 200 : 520,
+      height: this.sheetType === 'model' || this.sheetType === 'slash' ? 480 : 200,
       backgroundColor: Theme.BackgroundSecondary,
       dragBar: true,
       showClose: false,
@@ -2042,7 +2042,7 @@ struct ChatDetailPage {
     .padding(Theme.SpacingLG)
   }
 
-  // 斜杠命令 Sheet（底部弹出）
+  // 斜杠命令 Sheet（底部弹出）— 与模型选择器完全一致的布局
   @Builder
   SlashCommandsSheet() {
     Column({ space: 12 }) {
@@ -2071,15 +2071,23 @@ struct ChatDetailPage {
                 Text(cmd.description)
                   .fontSize(Theme.FontTiny)
                   .fontColor(Theme.TextTertiary)
+                  .maxLines(2)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
               }
               .layoutWeight(1)
               .alignItems(HorizontalAlign.Start)
+
+              SymbolGlyph($r('sys.symbol.chevron_right'))
+                .fontSize(14)
+                .fontColor([Theme.TextTertiary])
             }
             .width('100%')
             .padding(Theme.SpacingMD)
             .backgroundColor(Theme.BackgroundTertiary)
             .borderRadius(12)
             .onClick(() => {
+              this.showSheet = false
+              this.showMenu = false
               this.selectSlashCommand(cmd.name)
             })
           }
