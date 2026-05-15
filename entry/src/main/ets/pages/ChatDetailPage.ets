@@ -792,7 +792,7 @@ struct ChatDetailPage {
     .clip(false)  // 禁用裁切，让按钮形变效果可以超出边界
     .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.sheetType === 'attachment' ? this.AttachmentActionSheet() : this.SlashCommandsSheet(), {
       height: this.sheetType === 'attachment' ? 200 : 480,
-      backgroundColor: Theme.BackgroundSecondary,
+      backgroundColor: '#1C1C1E',
       dragBar: true,
       showClose: false,
       blurStyle: BlurStyle.COMPONENT_THICK
