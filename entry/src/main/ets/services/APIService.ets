@@ -325,8 +325,12 @@ export class APIService {
 
   // MARK: - 模型 API
 
-  async getModels(): Promise<ModelsResponse> {
-    return await this.request<ModelsResponse>('/api/models', 'GET', '')
+  async getModels(providerId?: string): Promise<ModelsResponse> {
+    let path = '/api/models'
+    if (providerId) {
+      path += '?providerId=' + encodeURIComponent(providerId)
+    }
+    return await this.request<ModelsResponse>(path, 'GET', '')
   }
 
   async getCurrentModel(): Promise<ModelInfo> {

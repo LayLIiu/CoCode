@@ -278,7 +278,9 @@ struct ChatDetailPage {
 
     this.isLoadingModels = true
     try {
-      const response = await apiService.getModels()
+      // 根据当前会话的 AI 工具类型获取对应模型列表
+      const providerId = this.getSessionProviderId()
+      const response = await apiService.getModels(providerId || undefined)
       this.models = response.models || []
       const current = await apiService.getCurrentModel()
       this.currentModel = current.id
