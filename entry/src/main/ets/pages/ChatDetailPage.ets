@@ -2095,7 +2095,6 @@ struct ChatDetailPage {
         }, (cmd: SlashCommand, index: number) => `cmd-${index}`)
       }
       .width('100%')
-      .layoutWeight(1)
       .scrollBar(BarState.Auto)
     }
     .width('100%')
