@@ -604,7 +604,7 @@ export class SessionStore {
         if (this.sessionStatuses.get(sessionId) === 'completed') {
           this.updateSessionStatus(sessionId, 'idle')
         }
-      }, 3000)
+      }, 8000)
       this.completedTimers.set(sessionId, timer)
     }
 

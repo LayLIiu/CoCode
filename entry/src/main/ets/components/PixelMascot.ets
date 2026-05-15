@@ -338,15 +338,15 @@ export struct PixelMascot {
     const sz = this.mascotSize
     const v = new DexV(sz, 16, 11, 5.5)
     const dy = this.bounceValue
-    const breathe = Math.sin(this.animationTime * 2 * Math.PI / 5000)
+    const breathe = Math.sin(this.animationTime * 2 * Math.PI / 3200)
 
     // 手臂命中判断
-    const armLRaw = Math.sin(this.animationTime * 2 * Math.PI / 250)
-    const armRRaw = Math.sin(this.animationTime * 2 * Math.PI / 200)
+    const armLRaw = Math.sin(this.animationTime * 2 * Math.PI / 150)
+    const armRRaw = Math.sin(this.animationTime * 2 * Math.PI / 120)
     const leftHit = armLRaw > 0.3
     const rightHit = armRRaw > 0.3
-    const leftKeyCol = Math.floor(this.animationTime / 250) % 3
-    const rightKeyCol = 3 + Math.floor(this.animationTime / 200) % 3
+    const leftKeyCol = Math.floor(this.animationTime / 150) % 3
+    const rightKeyCol = 3 + Math.floor(this.animationTime / 120) % 3
 
     // 影子
     const shadowW = 9 - Math.abs(dy) * 0.3
