@@ -2042,7 +2042,7 @@ struct ChatDetailPage {
     .padding(Theme.SpacingLG)
   }
 
-  // 斜杠命令 Sheet（底部弹出）— 与模型选择器完全一致的布局
+  // 斜杠命令 Sheet — 与模型选择器完全一致的布局
   @Builder
   SlashCommandsSheet() {
     Column({ space: 12 }) {
@@ -2062,6 +2062,10 @@ struct ChatDetailPage {
         ForEach(this.slashCommands, (cmd: SlashCommand, index: number) => {
           ListItem() {
             Row({ space: 12 }) {
+              SymbolGlyph($r('sys.symbol.square_and_pencil'))
+                .fontSize(18)
+                .fontColor([Theme.AccentPurple])
+
               Column({ space: 4 }) {
                 Text(cmd.name)
                   .fontSize(Theme.FontBody)
@@ -2076,10 +2080,6 @@ struct ChatDetailPage {
               }
               .layoutWeight(1)
               .alignItems(HorizontalAlign.Start)
-
-              SymbolGlyph($r('sys.symbol.chevron_right'))
-                .fontSize(14)
-                .fontColor([Theme.TextTertiary])
             }
             .width('100%')
             .padding(Theme.SpacingMD)
@@ -2087,14 +2087,13 @@ struct ChatDetailPage {
             .borderRadius(12)
             .onClick(() => {
               this.showSheet = false
-              this.showMenu = false
               this.selectSlashCommand(cmd.name)
             })
           }
         }, (cmd: SlashCommand, index: number) => `cmd-${index}`)
       }
       .width('100%')
-      .constraintSize({ maxHeight: 380 })
+      .layoutWeight(1)
       .scrollBar(BarState.Auto)
     }
     .width('100%')
