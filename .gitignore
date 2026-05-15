@@ -10,3 +10,19 @@
 /.clang-tidy
 **/.test
 /.appanalyzer
+
+# macOS
+.DS_Store
+
+# Generated / Dev artifacts
+.codex/
+.mcp.json
+
+# # AppGallery Connect credentials
+agconnect-services.json
+
+# Screenshots & preview images
+screenshot_*
+icon_*
+crop_*
+*.preview.png

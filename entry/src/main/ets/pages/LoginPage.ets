@@ -7,6 +7,7 @@ import router from '@ohos.router'
 import { Theme } from '../common/Theme'
 import { authStore } from '../stores/AuthStore'
 import { apiService } from '../services/APIService'
+import { wsService } from '../services/WebSocketService'
 import { User } from '../models/Models'
 
 type ConnectionMode = 'pairing' | 'manual'
@@ -322,6 +323,7 @@ export struct LoginPage {
 
     try {
       apiService.setBaseUrl(serverAddr)
+      wsService.setServerUrl(serverAddr)
 
       const success = await apiService.pair(code)
 
@@ -375,6 +377,7 @@ export struct LoginPage {
 
     try {
       apiService.setBaseUrl(url)
+      wsService.setServerUrl(url)
 
       // 测试服务器连通性
       await apiService.getSessions()

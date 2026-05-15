@@ -5,6 +5,7 @@
 import preferences from '@ohos.data.preferences'
 import { User, ServerMode } from '../models/Models'
 import { apiService } from '../services/APIService'
+import { wsService } from '../services/WebSocketService'
 
 export class AuthStore {
   private static instance: AuthStore
@@ -110,6 +111,7 @@ export class AuthStore {
     const url = this.serverUrl
     if (url) {
       apiService.setBaseUrl(url)
+      wsService.setServerUrl(url)
     }
   }
 
