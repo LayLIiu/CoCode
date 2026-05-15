@@ -2059,14 +2059,12 @@ struct ChatDetailPage {
       .padding({ bottom: Theme.SpacingSM })
 
       List({ space: 8 }) {
-        ForEach(this.slashCommands, (cmd: SlashCommand, index: number) => {
+        ForEach(this.slashCommands, (cmd: SlashCommand) => {
           ListItem() {
             Row({ space: 12 }) {
-
               Column({ space: 4 }) {
                 Text(cmd.name)
                   .fontSize(Theme.FontBody)
-                  .fontWeight(FontWeight.Medium)
                   .fontColor(Theme.TextPrimary)
 
                 Text(cmd.description)
@@ -2089,6 +2087,7 @@ struct ChatDetailPage {
         }, (cmd: SlashCommand) => cmd.name)
       }
       .width('100%')
+      .layoutWeight(1)
       .scrollBar(BarState.Auto)
     }
     .width('100%')
