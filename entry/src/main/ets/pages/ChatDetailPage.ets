@@ -685,10 +685,10 @@ struct ChatDetailPage {
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.sheetType === 'slash' ? this.SlashCommandsSheet() : this.AttachmentActionSheet(), {
         height: this.sheetType === 'attachment' ? 200 : 480,
-        backgroundColor: '#1C1C1E',
+        backgroundColor: Theme.BackgroundSecondary,
         dragBar: true,
         showClose: false,
-        blurStyle: BlurStyle.NONE
+        blurStyle: BlurStyle.COMPONENT_THICK
       })
 
       // 工作状态行 & 连接指示器（标题栏下方独立浮动容器）
