@@ -683,6 +683,13 @@ struct ChatDetailPage {
       .hideBackButton(false)
       .backgroundColor('#121214')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+      .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.sheetType === 'slash' ? this.SlashCommandsSheet() : this.AttachmentActionSheet(), {
+        height: this.sheetType === 'attachment' ? 200 : 480,
+        backgroundColor: '#1C1C1E',
+        dragBar: true,
+        showClose: false,
+        blurStyle: BlurStyle.NONE
+      })
 
       // 工作状态行 & 连接指示器（标题栏下方独立浮动容器）
       Column() {
@@ -786,14 +793,7 @@ struct ChatDetailPage {
     .height('100%')
     .backgroundColor('#121214')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-    .clip(false)  // 禁用裁切，让按钮形变效果可以超出边界
-    .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.sheetType === 'slash' ? this.SlashCommandsSheet() : this.AttachmentActionSheet(), {
-      height: this.sheetType === 'attachment' ? 200 : 480,
-      backgroundColor: '#1C1C1E',
-      dragBar: true,
-      showClose: false,
-      blurStyle: BlurStyle.NONE
-    })
+    .clip(false)
     .width('100%')
     .height('100%')
   }
