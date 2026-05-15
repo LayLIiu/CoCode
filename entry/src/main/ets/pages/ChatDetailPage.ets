@@ -2064,9 +2064,6 @@ struct ChatDetailPage {
         ForEach(this.slashCommands, (cmd: SlashCommand, index: number) => {
           ListItem() {
             Row({ space: 12 }) {
-              SymbolGlyph($r('sys.symbol.square_and_pencil'))
-                .fontSize(18)
-                .fontColor([Theme.AccentPurple])
 
               Column({ space: 4 }) {
                 Text(cmd.name)
@@ -2088,13 +2085,13 @@ struct ChatDetailPage {
             .backgroundColor(Theme.BackgroundTertiary)
             .borderRadius(12)
             .onClick(() => {
-              this.showSheet = false
               this.selectSlashCommand(cmd.name)
             })
           }
-        }, (cmd: SlashCommand, index: number) => `cmd-${index}`)
+        }, (cmd: SlashCommand) => cmd.name)
       }
       .width('100%')
+      .layoutWeight(1)
       .scrollBar(BarState.Auto)
     }
     .width('100%')
