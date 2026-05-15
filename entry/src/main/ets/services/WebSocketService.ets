@@ -4,7 +4,7 @@
  */
 
 import webSocket from '@ohos.net.webSocket'
-import { WSMessage, OutgoingMessage, QuestionItem, TaskStatus, WSMessageType } from '../models/Models'
+import { WSMessage, OutgoingMessage, QuestionItem, TaskStatus, WSMessageType, AttachmentRef } from '../models/Models'
 
 export class WSSessionConnection {
   ws: webSocket.WebSocket | null = null
@@ -253,10 +253,13 @@ export class WebSocketService {
     return true
   }
 
-  sendUserMessage(sessionId: string, content: string): boolean {
+  sendUserMessage(sessionId: string, content: string, attachments?: AttachmentRef[]): boolean {
     const message: OutgoingMessage = {
       type: 'user_message',
       content: content
+    }
+    if (attachments && attachments.length > 0) {
+      message.attachments = attachments
     }
     return this.send(sessionId, message)
   }

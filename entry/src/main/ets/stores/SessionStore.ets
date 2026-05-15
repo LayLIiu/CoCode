@@ -3,7 +3,7 @@
  * 支持状态持久化和 WebSocket 实时更新
  */
 
-import { Session, Message, SessionStatus, TaskItem, PermissionMode, WSMessage, OutgoingMessage, RecentProject } from '../models/Models'
+import { Session, Message, SessionStatus, TaskItem, PermissionMode, WSMessage, OutgoingMessage, RecentProject, AttachmentRef } from '../models/Models'
 import { apiService } from '../services/APIService'
 import { wsService } from '../services/WebSocketService'
 import { storageService } from '../services/StorageService'
@@ -526,7 +526,7 @@ export class SessionStore {
     wsService.disconnectAll()
   }
 
-  sendMessage(content: string): void {
+  sendMessage(content: string, attachments?: AttachmentRef[]): void {
     if (!this.currentSessionId) return
 
     // 添加用户消息
@@ -539,7 +539,7 @@ export class SessionStore {
     this.addMessage(this.currentSessionId, userMessage)
 
     // 发送到服务器
-    wsService.sendUserMessage(this.currentSessionId, content)
+    wsService.sendUserMessage(this.currentSessionId, content, attachments)
 
     // 更新状态
     this.updateSessionStatus(this.currentSessionId, 'thinking')
@@ -725,7 +725,7 @@ export class SessionStore {
           this.addMessage(sessionId, permMessage)
         }
         // 后台通知
-        this.notifyIfBackground(sessionId, '权限请求', msg.description || msg.toolName || '需要您的确认')
+        this.notifyIfBackground(sessionId, '权限请求', msg.toolName || '', 'permission')
         break
 
       case 'question':
@@ -765,6 +765,11 @@ export class SessionStore {
           options: options
         }
         this.addMessage(sessionId, qMessage)
+
+        // 后台通知
+        if (questionText) {
+          this.notifyIfBackground(sessionId, '问题', questionText, 'question')
+        }
         break
 
       case 'user_message_echo':
@@ -850,11 +855,22 @@ export class SessionStore {
   /**
    * 后台时发送通知
    */
-  private notifyIfBackground(sessionId: string, title: string, content: string): void {
-    console.info(`[SessionStore] notifyIfBackground called for ${sessionId}, isInForeground: ${appState.isInForeground}`)
+  private notifyIfBackground(sessionId: string, title: string, content: string, notifyType?: string): void {
+    console.info(`[SessionStore] notifyIfBackground: ${sessionId}, type=${notifyType || 'default'}`)
     const session = this.sessions.find(s => s.id === sessionId)
     const sessionTitle = session?.title || title
-    notificationHelper.notifyNewMessage(sessionTitle, content, sessionId)
+
+    switch (notifyType) {
+      case 'permission':
+        notificationHelper.notifyPermissionRequest(sessionTitle, content, sessionId)
+        break
+      case 'question':
+        notificationHelper.notifyQuestion(sessionTitle, content, sessionId)
+        break
+      default:
+        notificationHelper.notifyNewMessage(sessionTitle, content, sessionId)
+        break
+    }
   }
 
   private updateSessionStatusFromState(sessionId: string, state: string): void {

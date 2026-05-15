@@ -73,14 +73,62 @@ export class NotificationHelper {
    * 发送新消息通知（仅在后台时发送）
    */
   async notifyNewMessage(sessionTitle: string, content: string, sessionId: string): Promise<void> {
-    console.info(`[NotificationHelper] notifyNewMessage called, isInForeground: ${appState.isInForeground}`)
+    if (!this.shouldNotify()) return
+    await this.publishNotification({
+      id: this.hashSessionId(sessionId),
+      title: sessionTitle || '新消息',
+      text: content.length > 100 ? content.substring(0, 97) + '...' : content,
+      label: 'ChatMessage',
+      sessionId: sessionId
+    })
+  }
 
-    // 前台时不发通知
+  /**
+   * 发送权限请求通知
+   */
+  async notifyPermissionRequest(sessionTitle: string, toolName: string, sessionId: string): Promise<void> {
+    if (!this.shouldNotify()) return
+    await this.publishNotification({
+      id: this.hashSessionId(sessionId) + 10000,
+      title: `🔐 权限请求 - ${sessionTitle}`,
+      text: `工具 "${toolName}" 需要您的授权`,
+      label: 'PermissionRequest',
+      sessionId: sessionId
+    })
+  }
+
+  /**
+   * 发送问题通知
+   */
+  async notifyQuestion(sessionTitle: string, text: string, sessionId: string): Promise<void> {
+    if (!this.shouldNotify()) return
+    await this.publishNotification({
+      id: this.hashSessionId(sessionId) + 20000,
+      title: `❓ 问题 - ${sessionTitle}`,
+      text: text.length > 100 ? text.substring(0, 97) + '...' : text,
+      label: 'Question',
+      sessionId: sessionId
+    })
+  }
+
+  /**
+   * 统一的发送前检查：前台/授权/渠道
+   */
+  private shouldNotify(): boolean {
     if (appState.isInForeground) {
       console.info('[NotificationHelper] App is in foreground, skip notification')
-      return
+      return false
     }
+    return true
+  }
 
+  private async publishNotification(params: {
+    id: number
+    title: string
+    text: string
+    label: string
+    sessionId: string
+  }): Promise<void> {
     if (!this.context) {
       console.warn('[NotificationHelper] No context, skip notification')
       return
@@ -107,27 +155,26 @@ export class NotificationHelper {
     }
 
     try {
-      const agent = await this.createWantAgent(sessionId)
-      const notificationId = this.hashSessionId(sessionId)
+      const agent = await this.createWantAgent(params.sessionId)
 
       const request: notificationManager.NotificationRequest = {
-        id: notificationId,
+        id: params.id,
         notificationSlotType: notificationManager.SlotType.SOCIAL_COMMUNICATION,
         content: {
           notificationContentType: notificationManager.ContentType.NOTIFICATION_CONTENT_BASIC_TEXT,
           normal: {
-            title: sessionTitle || '新消息',
-            text: content.length > 100 ? content.substring(0, 97) + '...' : content
+            title: params.title,
+            text: params.text
           }
         },
         wantAgent: agent,
-        isAlertOnce: false,
+        isAlertOnce: true,
         showDeliveryTime: true,
-        label: 'ChatMessage'
+        label: params.label
       }
 
       await notificationManager.publish(request)
-      console.info(`[NotificationHelper] Published notification for ${sessionId}: ${sessionTitle}`)
+      console.info(`[NotificationHelper] Published notification: ${params.title}`)
     } catch (e) {
       console.error(`[NotificationHelper] Publish error: ${e}`)
     }

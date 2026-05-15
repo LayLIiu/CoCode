@@ -4,10 +4,11 @@
  */
 
 import { Theme } from '../common/Theme'
-import { Message, Session, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus } from '../models/Models'
+import { Message, Session, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus, AttachmentRef } from '../models/Models'
 import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import { sessionStore } from '../stores/SessionStore'
+import { authStore } from '../stores/AuthStore'
 import { apiService } from '../services/APIService'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
@@ -16,6 +17,9 @@ import { HdsGlassInput } from '../components/HdsGlassInput'
 import router from '@ohos.router'
 import pasteboard from '@ohos.pasteboard'
 import vibrator from '@ohos.vibrator'
+import { photoViewPicker } from '@ohos.file.picker'
+import fileIo from '@ohos.file.fs'
+import { util } from '@ohos.util'
 
 // 斜杠命令定义
 class SlashCommand {
@@ -87,6 +91,10 @@ struct ChatDetailPage {
   @State showCustomInput: boolean = false
   @State customInputText: string = ''
   @State activeQuestionMessageId: string = ''
+
+  // 附件（图片发送）
+  @State pendingAttachments: AttachmentRef[] = []
+  @State showAttachmentActionSheet: boolean = false
 
   // 流式文本本地缓冲（与 iOS 端一致）
   @State streamingText: string = ''
@@ -679,33 +687,50 @@ struct ChatDetailPage {
       .backgroundColor('#121214')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
-      // 工作状态行（标题栏下方独立浮动容器）
-      if (this.chatStatus !== 'idle' && this.chatStatus !== 'completed') {
-        Row({ space: 6 }) {
-          LoadingProgress()
-            .width(10)
-            .height(10)
-            .color(this.getStatusColor())
-          Text(this.getStatusText())
-            .fontSize(11)
-            .fontColor(this.getStatusColor())
-          if (this.elapsedSeconds > 0) {
-            Text(this.formatElapsed(this.elapsedSeconds))
-              .fontSize(10)
-              .fontColor(Theme.TextTertiary)
-          }
-          if (this.contextUsage > 0) {
-            Text(`(${this.contextUsage}%)`)
-              .fontSize(9)
-              .fontColor(Theme.TextTertiary)
-          }
+      // 工作状态行 & 连接指示器（标题栏下方独立浮动容器）
+      Column() {
+        // 连接方式指示
+        Row({ space: 4 }) {
+          SymbolGlyph(this.getConnectionIcon())
+            .fontSize(9)
+            .fontColor([this.getConnectionColor()])
+          Text(this.getConnectionLabel())
+            .fontSize(9)
+            .fontColor(Theme.TextTertiary)
         }
         .width('100%')
         .justifyContent(FlexAlign.Center)
-        .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
-        .position({ x: 0, y: 90 })
-        .zIndex(5)
+        .padding({ top: 0 })
+
+        // 工作状态
+        if (this.chatStatus !== 'idle' && this.chatStatus !== 'completed') {
+          Row({ space: 6 }) {
+            LoadingProgress()
+              .width(10)
+              .height(10)
+              .color(this.getStatusColor())
+            Text(this.getStatusText())
+              .fontSize(11)
+              .fontColor(this.getStatusColor())
+            if (this.elapsedSeconds > 0) {
+              Text(this.formatElapsed(this.elapsedSeconds))
+                .fontSize(10)
+                .fontColor(Theme.TextTertiary)
+            }
+            if (this.contextUsage > 0) {
+              Text(`(${this.contextUsage}%)`)
+                .fontSize(9)
+                .fontColor(Theme.TextTertiary)
+            }
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+        }
       }
+      .width('100%')
+      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+      .position({ x: 0, y: 88 })
+      .zIndex(5)
 
       // 任务面板
       this.TaskBarView()
@@ -767,6 +792,13 @@ struct ChatDetailPage {
     .clip(false)  // 禁用裁切，让按钮形变效果可以超出边界
     .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.SlashCommandsSheet(), {
       height: this.sheetType === 'model' ? 480 : 520,
+      backgroundColor: Theme.BackgroundSecondary,
+      dragBar: true,
+      showClose: false,
+      blurStyle: BlurStyle.COMPONENT_THICK
+    })
+    .bindSheet($$this.showAttachmentActionSheet, this.AttachmentActionSheet(), {
+      height: 200,
       backgroundColor: Theme.BackgroundSecondary,
       dragBar: true,
       showClose: false,
@@ -1630,79 +1662,208 @@ struct ChatDetailPage {
 
   @Builder
   InputAreaContent() {
-    Row({ space: 10 }) {
-      // 菜单按钮 - 沉浸光感浮动按钮
-      HdsMiniBarButton({
-        barWidth: 36,
-        barHeight: 36,
-        contentPadding: 4,
-        iconResource: $r('sys.symbol.plus'),
-        iconSize: 16,
-        iconColor: [Theme.TextSecondary],
-        maskColor: 'rgba(255,255,255,0.15)',
-        barBottomMargin: 0,
-        onButtonClick: () => {
-          this.showMenu = !this.showMenu
-          this.showSheet = false
-        }
-      })
+    Column({ space: 8 }) {
+      // 附件预览 - 水平滚动缩略图
+      if (this.pendingAttachments.length > 0) {
+        this.AttachmentPreviewRow()
+      }
 
-      // 输入框 - 液态玻璃效果
-      TextArea({ placeholder: '发送消息...', text: this.inputText })
-        .layoutWeight(1)
-        .constraintSize({ minHeight: 36, maxHeight: 120 })
-        .backgroundColor('rgba(255,255,255,0.1)')
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-        .borderRadius(18)
-        .fontColor(Theme.TextPrimary)
-        .placeholderColor('rgba(255,255,255,0.3)')
-        .fontSize(Theme.FontBody)
-        .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-        .onChange((value: string) => {
-          this.inputText = value
-        })
-
-      // 发送按钮 - 沉浸光感浮动按钮（有输入时高亮）
-      if (this.inputText) {
-        // 有输入：实心高亮按钮
+      Row({ space: 8 }) {
+        // 菜单按钮 - 沉浸光感浮动按钮
         HdsMiniBarButton({
           barWidth: 36,
           barHeight: 36,
           contentPadding: 4,
-          iconResource: $r('sys.symbol.arrow_up'),
-          iconSize: 16,
-          iconColor: [Theme.TextOnPrimary],
-          maskColor: Theme.PrimaryColor,
-          barBottomMargin: 0,
-          materialType: hdsMaterial.MaterialType.ADAPTIVE,
-          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
-          onButtonClick: () => {
-            this.sendMessage()
-          }
-        })
-      } else {
-        // 无输入：液态玻璃效果
-        HdsMiniBarButton({
-          barWidth: 36,
-          barHeight: 36,
-          contentPadding: 4,
-          iconResource: $r('sys.symbol.arrow_up'),
+          iconResource: $r('sys.symbol.plus'),
           iconSize: 16,
           iconColor: [Theme.TextSecondary],
           maskColor: 'rgba(255,255,255,0.15)',
           barBottomMargin: 0,
-          materialType: hdsMaterial.MaterialType.IMMERSIVE,
-          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
           onButtonClick: () => {
-            this.sendMessage()
+            this.showMenu = !this.showMenu
+            this.showSheet = false
           }
         })
+
+        // 附件按钮 - 选图/拍照
+        HdsMiniBarButton({
+          barWidth: 36,
+          barHeight: 36,
+          contentPadding: 4,
+          iconResource: $r('sys.symbol.photo'),
+          iconSize: 16,
+          iconColor: [Theme.AccentBlue],
+          maskColor: 'rgba(10,132,255,0.15)',
+          barBottomMargin: 0,
+          onButtonClick: () => {
+            this.showAttachmentActionSheet = true
+          }
+        })
+
+        // 输入框 - 液态玻璃效果
+        TextArea({ placeholder: this.pendingAttachments.length > 0 ? '添加描述或直接发送...' : '发送消息...', text: this.inputText })
+          .layoutWeight(1)
+          .constraintSize({ minHeight: 36, maxHeight: 120 })
+          .backgroundColor('rgba(255,255,255,0.1)')
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+          .borderRadius(18)
+          .fontColor(Theme.TextPrimary)
+          .placeholderColor('rgba(255,255,255,0.3)')
+          .fontSize(Theme.FontBody)
+          .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+          .onChange((value: string) => {
+            this.inputText = value
+          })
+
+        // 发送按钮 - 沉浸光感浮动按钮
+        if (this.inputText || this.pendingAttachments.length > 0) {
+          // 有内容：实心高亮按钮
+          HdsMiniBarButton({
+            barWidth: 36,
+            barHeight: 36,
+            contentPadding: 4,
+            iconResource: $r('sys.symbol.arrow_up'),
+            iconSize: 16,
+            iconColor: [Theme.TextOnPrimary],
+            maskColor: Theme.PrimaryColor,
+            barBottomMargin: 0,
+            materialType: hdsMaterial.MaterialType.ADAPTIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+            onButtonClick: () => {
+              this.sendMessage()
+            }
+          })
+        } else {
+          // 无内容：液态玻璃效果
+          HdsMiniBarButton({
+            barWidth: 36,
+            barHeight: 36,
+            contentPadding: 4,
+            iconResource: $r('sys.symbol.arrow_up'),
+            iconSize: 16,
+            iconColor: [Theme.TextSecondary],
+            maskColor: 'rgba(255,255,255,0.15)',
+            barBottomMargin: 0,
+            materialType: hdsMaterial.MaterialType.IMMERSIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+            onButtonClick: () => {
+              this.sendMessage()
+            }
+          })
+        }
       }
+      .width('100%')
+      .alignItems(VerticalAlign.Bottom)
+      .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+      .clip(false)
     }
     .width('100%')
-    .alignItems(VerticalAlign.Bottom)
-    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
-    .clip(false)  // 禁用裁切，让按钮形变效果可以超出边界
+  }
+
+  @Builder
+  AttachmentPreviewRow() {
+    Scroll() {
+      Row({ space: 8 }) {
+        ForEach(this.pendingAttachments, (attachment: AttachmentRef, index: number) => {
+          Stack() {
+            // 缩略图
+            Image('data:' + (attachment.mimeType || 'image/jpeg') + ';base64,' + attachment.data)
+              .width(64)
+              .height(64)
+              .borderRadius(10)
+              .objectFit(ImageFit.Cover)
+
+            // 删除按钮
+            Column() {
+              SymbolGlyph($r('sys.symbol.xmark'))
+                .fontSize(8)
+                .fontColor([Color.White])
+            }
+            .width(18)
+            .height(18)
+            .backgroundColor('rgba(0,0,0,0.6)')
+            .borderRadius(9)
+            .justifyContent(FlexAlign.Center)
+            .alignItems(HorizontalAlign.Center)
+            .position({ x: 0, y: 0 })
+            .margin({ left: -4, top: -4 })
+            .onClick(() => {
+              const newList = [...this.pendingAttachments]
+              newList.splice(index, 1)
+              this.pendingAttachments = newList
+            })
+
+            // 文件名标签
+            if (attachment.name) {
+              Text(attachment.name)
+                .fontSize(8)
+                .fontColor(Color.White)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .width(56)
+                .textAlign(TextAlign.Center)
+                .position({ x: 0, y: 0 })
+                .margin({ left: 4, bottom: 4 })
+            }
+          }
+          .width(64)
+          .height(64)
+        })
+      }
+      .width('100%')
+      .padding({ left: 4, right: 4 })
+    }
+    .height(76)
+    .scrollBar(BarState.Off)
+    .width('100%')
+  }
+
+  @Builder
+  AttachmentActionSheet() {
+    Column({ space: 0 }) {
+      // 标题
+      Text('发送图片')
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(Theme.TextPrimary)
+        .width('100%')
+        .textAlign(TextAlign.Center)
+        .padding({ top: Theme.SpacingLG, bottom: Theme.SpacingLG })
+
+      // 从相册选择
+      Row({ space: 12 }) {
+        SymbolGlyph($r('sys.symbol.photo_on_rectangle'))
+          .fontSize(22)
+          .fontColor([Theme.AccentBlue])
+
+        Column({ space: 2 }) {
+          Text('从相册选择')
+            .fontSize(Theme.FontBody)
+            .fontColor(Theme.TextPrimary)
+
+          Text('选择手机中的图片发送给 AI')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(14)
+          .fontColor([Theme.TextTertiary])
+      }
+      .width('100%')
+      .padding(Theme.SpacingMD)
+      .backgroundColor(Theme.GlassBackground)
+      .borderRadius(Theme.RadiusMedium)
+      .border({ width: 0.5, color: Theme.GlassBorder })
+      .onClick(() => {
+        this.showAttachmentActionSheet = false
+        this.pickPhotoFromGallery()
+      })
+    }
+    .width('100%')
+    .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
   }
 
   // 菜单气泡 - 从按钮左下角扩散
@@ -2193,23 +2354,63 @@ struct ChatDetailPage {
     }
   }
 
-  private sendMessage(): void {
-    if (!this.inputText.trim()) return
+  // MARK: - 连接指示
 
-    const content = this.inputText.trim()
+  private getConnectionIcon(): Resource {
+    const profile = authStore.activeProfile
+    if (!profile) return $r('sys.symbol.questionmark_circle')
+    switch (profile.type) {
+      case 'lan': return $r('sys.symbol.wifi')
+      case 'pgy': return $r('sys.symbol.globe')
+      case 'tunnel': return $r('sys.symbol.cloud')
+      default: return $r('sys.symbol.questionmark_circle')
+    }
+  }
+
+  private getConnectionLabel(): string {
+    const profile = authStore.activeProfile
+    if (!profile) return '未连接'
+    switch (profile.type) {
+      case 'lan': return `${profile.name} · 局域网`
+      case 'pgy': return `${profile.name} · 蒲公英`
+      case 'tunnel': return `${profile.name} · 隧道`
+      default: return profile.name
+    }
+  }
+
+  private getConnectionColor(): ResourceColor {
+    const profile = authStore.activeProfile
+    if (!profile) return Theme.ErrorColor
+    switch (profile.type) {
+      case 'lan': return Theme.AccentGreen
+      case 'pgy': return Theme.AccentBlue
+      case 'tunnel': return Theme.AccentOrange
+      default: return Theme.TextSecondary
+    }
+  }
+
+  private sendMessage(): void {
+    const hasAttachments = this.pendingAttachments.length > 0
+    if (!this.inputText.trim() && !hasAttachments) return
+
+    const content = this.inputText.trim() || (hasAttachments ? ' ' : '')
+    const attachments = hasAttachments ? [...this.pendingAttachments] : undefined
+    this.pendingAttachments = []
     this.inputText = ''
     sessionStore.inputDrafts.delete(this.sessionId)
 
     // 去重：记录最近发送的消息
-    this.recentlySentMessages.add(content)
-    if (this.recentlySentMessages.size > 100) {
-      // 清除旧条目：转数组去前50个再转回Set
-      const arr = Array.from(this.recentlySentMessages)
-      this.recentlySentMessages = new Set(arr.slice(-50))
+    if (content.trim()) {
+      this.recentlySentMessages.add(content)
+      if (this.recentlySentMessages.size > 100) {
+        // 清除旧条目：转数组去前50个再转回Set
+        const arr = Array.from(this.recentlySentMessages)
+        this.recentlySentMessages = new Set(arr.slice(-50))
+      }
     }
     this.userIsViewingHistory = false
 
-    sessionStore.sendMessage(content)
+    sessionStore.sendMessage(content, attachments)
 
     // 重置流式缓冲区
     this.streamingText = ''
@@ -2222,5 +2423,84 @@ struct ChatDetailPage {
     this.startWorkTimer()
 
     this.scrollToBottom()
+  }
+
+  // MARK: - 附件处理
+
+  /**
+   * 从相册选择图片
+   */
+  private async pickPhotoFromGallery(): Promise<void> {
+    try {
+      const picker = new photoViewPicker.PhotoViewPicker()
+      const result = await picker.select({
+        maxSelectCount: 1
+      })
+      if (result.photoUris && result.photoUris.length > 0) {
+        await this.loadAttachmentFromUri(result.photoUris[0])
+      }
+    } catch (e) {
+      console.error(`[ChatDetailPage] Pick photo error: ${e}`)
+    }
+  }
+
+  /**
+   * 从 URI 读取图片文件并转为 base64 附件
+   */
+  private async loadAttachmentFromUri(uri: string): Promise<void> {
+    try {
+      const file = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY)
+      const stat = file.statSync()
+
+      // 限制 10MB
+      if (stat.size > 10 * 1024 * 1024) {
+        console.error('[ChatDetailPage] File too large, max 10MB')
+        return
+      }
+
+      const buf = new ArrayBuffer(stat.size)
+      fileIo.readSync(file.fd, buf)
+      fileIo.closeSync(file)
+
+      const helper = new util.Base64Helper()
+      const base64 = helper.encodeToStringSync(new Uint8Array(buf))
+
+      const name = uri.split('/').pop() || 'photo.jpg'
+      const mimeType = this.guessMimeType(name)
+
+      this.pendingAttachments = [...this.pendingAttachments, {
+        type: 'image',
+        name: name,
+        data: base64,
+        mimeType: mimeType
+      }]
+    } catch (e) {
+      console.error(`[ChatDetailPage] Load attachment error: ${e}`)
+    }
+  }
+
+  /**
+   * 根据文件名猜测 MIME 类型
+   */
+  private guessMimeType(fileName: string): string {
+    const ext = fileName.toLowerCase().split('.').pop() || ''
+    switch (ext) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg'
+      case 'png':
+        return 'image/png'
+      case 'gif':
+        return 'image/gif'
+      case 'webp':
+        return 'image/webp'
+      case 'heic':
+      case 'heif':
+        return 'image/heic'
+      case 'bmp':
+        return 'image/bmp'
+      default:
+        return 'image/jpeg'
+    }
   }
 }

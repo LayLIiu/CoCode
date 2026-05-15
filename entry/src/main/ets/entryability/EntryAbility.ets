@@ -97,6 +97,11 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground')
     appState.isInForeground = true
 
+    // 已登录且开启生物识别 → 锁定应用
+    if (authStore.isLoggedIn && authStore.biometricEnabled) {
+      authStore.lock()
+    }
+
     // 取消所有通知（用户已回到应用）
     await notificationHelper.cancelAll()
 

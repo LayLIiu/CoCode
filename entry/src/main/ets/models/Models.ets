@@ -185,6 +185,16 @@ export interface QuestionOption {
   description?: string
 }
 
+// MARK: - 附件
+
+export interface AttachmentRef {
+  type: 'file' | 'image'
+  name?: string
+  path?: string
+  data?: string  // base64 编码的图片数据
+  mimeType?: string
+}
+
 // MARK: - 发送消息类型
 
 export interface OutgoingMessage {
@@ -196,6 +206,7 @@ export interface OutgoingMessage {
   questionId?: string
   answer?: string
   mode?: string
+  attachments?: AttachmentRef[]
 }
 
 // MARK: - 会话状态
@@ -243,6 +254,14 @@ export function getConnectionTypeName(info: NetworkInfo): string {
 // MARK: - 服务器模式
 
 export type ServerMode = 'lan' | 'tunnel'
+
+export interface ServerProfile {
+  id: string
+  name: string        // "家里", "办公室" 等
+  url: string
+  type: 'lan' | 'pgy' | 'tunnel'
+  lastUsed: number    // 时间戳
+}
 
 // MARK: - 最近项目
 

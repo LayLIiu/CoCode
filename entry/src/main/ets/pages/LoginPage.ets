@@ -328,12 +328,8 @@ export struct LoginPage {
       const success = await apiService.pair(code)
 
       if (success) {
-        // 保存服务器地址
-        if (serverAddr.startsWith('https://')) {
-          await authStore.setTunnelUrl(serverAddr)
-        } else {
-          await authStore.setLanUrl(serverAddr)
-        }
+        // 保存到多服务器配置
+        await authStore.addFromLogin(serverAddr)
 
         // 登录成功
         const user: User = { id: '1', name: '用户', email: '' }
@@ -382,12 +378,8 @@ export struct LoginPage {
       // 测试服务器连通性
       await apiService.getSessions()
 
-      // 保存服务器地址
-      if (url.startsWith('https://')) {
-        await authStore.setTunnelUrl(url)
-      } else {
-        await authStore.setLanUrl(url)
-      }
+      // 保存到多服务器配置
+      await authStore.addFromLogin(url)
 
       // 登录成功
       const user: User = { id: '1', name: '用户', email: '' }

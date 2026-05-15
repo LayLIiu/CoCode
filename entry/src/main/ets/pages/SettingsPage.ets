@@ -6,7 +6,7 @@ import { Theme } from '../common/Theme'
 import { authStore } from '../stores/AuthStore'
 import { appState, ThemeMode } from '../stores/AppState'
 import { sessionStore } from '../stores/SessionStore'
-import { ModelInfo, ServerMode, PermissionMode, getPermissionModeDisplayName, getPermissionModeDescription } from '../models/Models'
+import { ModelInfo, ServerMode, PermissionMode, getPermissionModeDisplayName, getPermissionModeDescription, ServerProfile } from '../models/Models'
 import { HdsNavigation, ScrollEffectType, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import router from '@ohos.router'
@@ -34,6 +34,18 @@ export struct SettingsPage {
   @State editUrl: string = ''
   @State themeMode: ThemeMode = 'dark'
 
+  // 生物识别
+  @State biometricEnabled: boolean = true
+
+  // 多服务器配置
+  @State serverProfiles: ServerProfile[] = []
+  @State activeProfileId: string = ''
+  @State showAddProfileSheet: boolean = false
+  @State newProfileUrl: string = ''
+  @State newProfileName: string = ''
+  @State showDeleteConfirm: boolean = false
+  @State deleteProfileId: string = ''
+
   private readonly appVersion: string = '1.0.0'
   private readonly buildTime: string = '2026-05-08'
   private modelsChangedListener: (() => void) | null = null
@@ -59,6 +71,13 @@ export struct SettingsPage {
     this.currentModel = appState.currentModel
     this.userName = '用户' // 可以从服务器获取
     this.themeMode = appState.themeMode
+
+    // 加载多服务器配置
+    this.serverProfiles = [...authStore.serverProfiles]
+    this.activeProfileId = authStore.activeProfileId
+
+    // 加载生物识别设置
+    this.biometricEnabled = authStore.biometricEnabled
 
     // 注册监听
     this.modelsChangedListener = () => {
@@ -142,6 +161,17 @@ export struct SettingsPage {
             this.ThemeItem()
           }
 
+          // 安全与隐私
+          if (this.isLoggedIn) {
+            ListItem() {
+              this.SettingSection('安全与隐私')
+            }
+
+            ListItem() {
+              this.BiometricItem()
+            }
+          }
+
           // 数据管理
           if (this.isLoggedIn) {
             ListItem() {
@@ -219,6 +249,13 @@ export struct SettingsPage {
         showClose: false,
         blurStyle: BlurStyle.COMPONENT_THICK
       })
+      .bindSheet($$this.showAddProfileSheet, this.AddProfileSheet(), {
+        height: 320,
+        backgroundColor: Theme.BackgroundSecondary,
+        dragBar: true,
+        showClose: false,
+        blurStyle: BlurStyle.COMPONENT_THICK
+      })
     }
     .width('100%')
     .height('100%')
@@ -257,125 +294,33 @@ export struct SettingsPage {
 
   @Builder
   ConnectionItem() {
-    Column({ space: Theme.SpacingMD }) {
-      // 网络模式切换
-      Row() {
-        Text('当前网络')
-          .fontSize(Theme.FontBody)
-          .fontColor(Theme.TextPrimary)
-
-        Blank()
-
-        Row({ space: 8 }) {
-          Button('局域网')
-            .fontSize(Theme.FontTiny)
-            .fontColor(this.serverMode === 'lan' ? Theme.TextOnPrimary : Theme.TextSecondary)
-            .backgroundColor(this.serverMode === 'lan' ? Theme.PrimaryColor : Theme.GlassBackground)
-            .borderRadius(8)
-            .height(28)
-            .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-            .enabled(this.lanUrl.length > 0)
-            .onClick(() => {
-              this.setServerMode('lan')
-            })
-
-          Button('公网')
-            .fontSize(Theme.FontTiny)
-            .fontColor(this.serverMode === 'tunnel' ? Theme.TextOnPrimary : Theme.TextSecondary)
-            .backgroundColor(this.serverMode === 'tunnel' ? Theme.PrimaryColor : Theme.GlassBackground)
-            .borderRadius(8)
-            .height(28)
-            .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-            .enabled(this.tunnelUrl.length > 0)
-            .onClick(() => {
-              this.setServerMode('tunnel')
-            })
-        }
-      }
-      .width('100%')
-
-      Divider().color(Theme.GlassBorder)
-
-      // 局域网地址
+    Column({ space: Theme.SpacingSM }) {
+      // 当前连接状态
       Row() {
         Column({ space: 2 }) {
-          Text('局域网地址')
+          Text('当前连接')
             .fontSize(Theme.FontBody)
             .fontColor(Theme.TextPrimary)
 
-          Text(this.lanUrl.length > 0 ? this.lanUrl : '未设置')
-            .fontSize(Theme.FontCaption)
-            .fontColor(Theme.TextSecondary)
+          if (this.currentUrl) {
+            Row({ space: 6 }) {
+              Text('●')
+                .fontSize(8)
+                .fontColor(Theme.SuccessColor)
+              Text(this.getProfileDisplayName())
+                .fontSize(Theme.FontCaption)
+                .fontColor(Theme.SuccessColor)
+            }
+          } else {
+            Text('未连接')
+              .fontSize(Theme.FontCaption)
+              .fontColor(Theme.ErrorColor)
+          }
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
 
-        Text('编辑')
-          .fontSize(Theme.FontCaption)
-          .fontColor(Theme.PrimaryColor)
-          .onClick(() => {
-            this.editUrl = this.lanUrl
-            this.editType = 'lan'
-            this.showEditSheet = true
-          })
-      }
-      .width('100%')
-
-      Divider().color(Theme.GlassBorder)
-
-      // 公网地址
-      Row() {
-        Column({ space: 2 }) {
-          Text('公网地址')
-            .fontSize(Theme.FontBody)
-            .fontColor(Theme.TextPrimary)
-
-          Text(this.tunnelUrl.length > 0 ? this.tunnelUrl : '未设置')
-            .fontSize(Theme.FontCaption)
-            .fontColor(Theme.TextSecondary)
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-
-        Text('编辑')
-          .fontSize(Theme.FontCaption)
-          .fontColor(Theme.PrimaryColor)
-          .onClick(() => {
-            this.editUrl = this.tunnelUrl
-            this.editType = 'tunnel'
-            this.showEditSheet = true
-          })
-      }
-      .width('100%')
-
-      Divider().color(Theme.GlassBorder)
-
-      // 当前地址
-      Row() {
-        Text('当前地址')
-          .fontSize(Theme.FontBody)
-          .fontColor(Theme.TextPrimary)
-
-        Blank()
-
-        Text(this.currentUrl.length > 0 ? this.currentUrl : '未设置')
-          .fontSize(Theme.FontCaption)
-          .fontColor(Theme.TextSecondary)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-      }
-      .width('100%')
-
-      Divider().color(Theme.GlassBorder)
-
-      // 连接速度
-      Row() {
-        Text('连接速度')
-          .fontSize(Theme.FontBody)
-          .fontColor(Theme.TextPrimary)
-
-        Blank()
-
+        // 连接速度
         if (this.testingLatency) {
           LoadingProgress()
             .width(20)
@@ -386,9 +331,7 @@ export struct SettingsPage {
             .fontSize(Theme.FontCaption)
             .fontColor(this.getLatencyColor(this.latency))
         } else {
-          Text('点击测试')
-            .fontSize(Theme.FontCaption)
-            .fontColor(Theme.TextSecondary)
+          Text('测速').fontSize(Theme.FontCaption).fontColor(Theme.TextSecondary)
         }
       }
       .width('100%')
@@ -397,6 +340,102 @@ export struct SettingsPage {
           this.testLatency()
         }
       })
+
+      Divider().color(Theme.GlassBorder)
+
+      // 服务器列表
+      if (this.serverProfiles.length > 0) {
+        ForEach(this.serverProfiles, (profile: ServerProfile) => {
+          Row() {
+            // 类型图标
+            Column() {
+              SymbolGlyph(this.getProfileIcon(profile.type))
+                .fontSize(14)
+                .fontColor([this.activeProfileId === profile.id ? Theme.PrimaryColor : Theme.TextSecondary])
+            }
+            .width(28)
+            .height(28)
+            .backgroundColor(this.activeProfileId === profile.id ?
+              Theme.PrimaryColor + '20' : Theme.GlassBackground)
+            .borderRadius(7)
+
+            Column({ space: 2 }) {
+              Text(profile.name)
+                .fontSize(Theme.FontBody)
+                .fontWeight(this.activeProfileId === profile.id ? FontWeight.Bold : FontWeight.Normal)
+                .fontColor(Theme.TextPrimary)
+
+              Text(profile.url)
+                .fontSize(Theme.FontTiny)
+                .fontColor(Theme.TextTertiary)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+            .margin({ left: 10 })
+
+            // 活跃指示
+            if (this.activeProfileId === profile.id) {
+              Text('使用中')
+                .fontSize(Theme.FontTiny)
+                .fontColor(Theme.PrimaryColor)
+                .backgroundColor(Theme.PrimaryColor + '20')
+                .borderRadius(4)
+                .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+            }
+
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(12)
+              .fontColor([Theme.TextTertiary])
+          }
+          .width('100%')
+          .padding({ top: 8, bottom: 8 })
+          .onClick(() => {
+            this.switchProfile(profile.id)
+          })
+        }, (profile: ServerProfile) => profile.id)
+      }
+
+      Divider().color(Theme.GlassBorder)
+
+      // 添加服务器 + 管理按钮
+      Row({ space: 12 }) {
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.plus_circle'))
+            .fontSize(14)
+            .fontColor([Theme.PrimaryColor])
+
+          Text('添加服务器')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.PrimaryColor)
+        }
+        .onClick(() => {
+          this.newProfileUrl = ''
+          this.newProfileName = ''
+          this.showAddProfileSheet = true
+        })
+
+        if (this.serverProfiles.length > 0) {
+          Blank()
+
+          Row({ space: 6 }) {
+            SymbolGlyph($r('sys.symbol.trash'))
+              .fontSize(14)
+              .fontColor([Theme.ErrorColor])
+
+            Text('移除当前')
+              .fontSize(Theme.FontCaption)
+              .fontColor(Theme.ErrorColor)
+          }
+          .onClick(() => {
+            if (this.activeProfileId) {
+              this.showDeleteProfileDialog(this.activeProfileId)
+            }
+          })
+        }
+      }
+      .width('100%')
     }
     .width('100%')
     .padding(Theme.SpacingMD)
@@ -483,22 +522,25 @@ export struct SettingsPage {
   }
 
   @Builder
-  ThemeItem() {
+  BiometricItem() {
     Row() {
-      Text('主题')
-        .fontSize(Theme.FontBody)
-        .fontColor(Theme.TextPrimary)
+      Column({ space: 2 }) {
+        Text('生物识别锁屏')
+          .fontSize(Theme.FontBody)
+          .fontColor(Theme.TextPrimary)
 
-      Blank()
+        Text('切回前台时验证指纹/面部')
+          .fontSize(Theme.FontTiny)
+          .fontColor(Theme.TextSecondary)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
 
-      Text(this.getThemeLabel(this.themeMode))
-        .fontSize(Theme.FontBody)
-        .fontColor(Theme.TextSecondary)
-
-      SymbolGlyph($r('sys.symbol.chevron_right'))
-        .fontSize(14)
-        .fontColor([Theme.TextSecondary])
-        .margin({ left: 8 })
+      Toggle({ type: ToggleType.Switch, isOn: this.biometricEnabled })
+        .onChange(async (isOn: boolean) => {
+          this.biometricEnabled = isOn
+          await authStore.setBiometricEnabled(isOn)
+        })
     }
     .width('100%')
     .padding(Theme.SpacingMD)
@@ -506,18 +548,10 @@ export struct SettingsPage {
     .borderRadius(Theme.RadiusMedium)
     .border({ width: 0.5, color: Theme.GlassBorder })
     .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
-    .onClick(() => {
-      // 切换主题
-      if (this.themeMode === 'dark') {
-        this.themeMode = 'light'
-      } else if (this.themeMode === 'light') {
-        this.themeMode = 'glass'
-      } else {
-        this.themeMode = 'dark'
-      }
-      appState.setThemeMode(this.themeMode)
-    })
   }
+
+  @Builder
+  ThemeItem() {
 
   @Builder
   EffortItem() {
@@ -838,6 +872,87 @@ export struct SettingsPage {
     }
   }
 
+  @Builder
+  AddProfileSheet() {
+    Column() {
+      Text('添加服务器')
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(Theme.TextPrimary)
+        .width('100%')
+        .textAlign(TextAlign.Center)
+        .padding({ top: Theme.SpacingLG, bottom: Theme.SpacingMD })
+
+      TextInput({ placeholder: '名称（如：家里、办公室）', text: this.newProfileName })
+        .width('100%')
+        .height(44)
+        .backgroundColor(Theme.GlassBackground)
+        .borderRadius(8)
+        .fontColor(Theme.TextPrimary)
+        .border({ width: 1, color: Theme.GlassBorder })
+        .padding({ left: 12, right: 12 })
+        .margin({ bottom: Theme.SpacingSM })
+        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+        .onChange((value: string) => {
+          this.newProfileName = value
+        })
+
+      TextInput({ placeholder: 'http://192.168.x.x:3456', text: this.newProfileUrl })
+        .width('100%')
+        .height(44)
+        .backgroundColor(Theme.GlassBackground)
+        .borderRadius(8)
+        .fontColor(Theme.TextPrimary)
+        .border({ width: 1, color: Theme.GlassBorder })
+        .padding({ left: 12, right: 12 })
+        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+        .onChange((value: string) => {
+          this.newProfileUrl = value
+        })
+
+      Text('输入桌面端的服务器地址')
+        .fontSize(Theme.FontCaption)
+        .fontColor(Theme.TextSecondary)
+        .width('100%')
+        .textAlign(TextAlign.Start)
+        .margin({ top: Theme.SpacingSM })
+
+      Row({ space: Theme.SpacingMD }) {
+        Button('取消')
+          .layoutWeight(1)
+          .height(44)
+          .backgroundColor(Theme.GlassBackground)
+          .fontColor(Theme.TextPrimary)
+          .borderRadius(8)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+          .onClick(() => {
+            this.showAddProfileSheet = false
+          })
+
+        Button('添加')
+          .layoutWeight(1)
+          .height(44)
+          .backgroundColor(Theme.PrimaryColor)
+          .fontColor(Theme.TextOnPrimary)
+          .borderRadius(8)
+          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+          .enabled(this.newProfileUrl.length > 0)
+          .onClick(async () => {
+            const name = this.newProfileName.trim() || `服务器 ${this.serverProfiles.length + 1}`
+            await authStore.addFromLogin(this.newProfileUrl)
+            this.serverProfiles = [...authStore.serverProfiles]
+            this.activeProfileId = authStore.activeProfileId
+            this.currentUrl = authStore.serverUrl
+            this.showAddProfileSheet = false
+          })
+      }
+      .width('100%')
+      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, top: Theme.SpacingLG })
+    }
+    .width('100%')
+    .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+  }
+
   private getEffortLabel(level: string): string {
     switch (level) {
       case 'low': return '低 (更快速)'
@@ -857,6 +972,51 @@ export struct SettingsPage {
       return '玻璃'
     }
     return '深色'
+  }
+
+  // MARK: - 多服务器配置
+
+  private async switchProfile(id: string): Promise<void> {
+    await authStore.switchProfile(id)
+    this.serverProfiles = [...authStore.serverProfiles]
+    this.activeProfileId = authStore.activeProfileId
+    this.currentUrl = authStore.serverUrl
+    this.latency = 0 // 切换后重置测速
+
+    // 同步旧版字段
+    const profile = authStore.activeProfile
+    if (profile) {
+      if (profile.type === 'tunnel') {
+        this.tunnelUrl = profile.url
+        this.serverMode = 'tunnel'
+      } else {
+        this.lanUrl = profile.url
+        this.serverMode = 'lan'
+      }
+    }
+  }
+
+  private getProfileDisplayName(): string {
+    const profile = this.serverProfiles.find(p => p.id === this.activeProfileId)
+    return profile ? `${profile.name} (${this.getProfileTypeLabel(profile.type)})` : ''
+  }
+
+  private getProfileTypeLabel(type: string): string {
+    switch (type) {
+      case 'lan': return '局域网'
+      case 'pgy': return '蒲公英'
+      case 'tunnel': return '公网隧道'
+      default: return type
+    }
+  }
+
+  private getProfileIcon(type: string): Resource {
+    switch (type) {
+      case 'lan': return $r('sys.symbol.wifi')
+      case 'pgy': return $r('sys.symbol.globe')
+      case 'tunnel': return $r('sys.symbol.cloud')
+      default: return $r('sys.symbol.questionmark_circle')
+    }
   }
 
   private async setServerMode(mode: ServerMode): Promise<void> {
@@ -916,6 +1076,28 @@ export struct SettingsPage {
     if (ms < 300) return '#84cc16'
     if (ms < 500) return '#eab308'
     return '#f97316'
+  }
+
+  private showDeleteProfileDialog(id: string): void {
+    const profile = this.serverProfiles.find(p => p.id === id)
+    AlertDialog.show({
+      title: '移除服务器',
+      message: `确定要移除 "${profile?.name || ''}" 吗？`,
+      primaryButton: {
+        value: '取消',
+        action: () => {}
+      },
+      secondaryButton: {
+        value: '移除',
+        fontColor: Theme.ErrorColor,
+        action: async () => {
+          await authStore.removeProfile(id)
+          this.serverProfiles = [...authStore.serverProfiles]
+          this.activeProfileId = authStore.activeProfileId
+          this.currentUrl = authStore.serverUrl
+        }
+      }
+    })
   }
 
   private async logout(): Promise<void> {
