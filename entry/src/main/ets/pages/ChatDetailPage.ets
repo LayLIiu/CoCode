@@ -791,6 +791,7 @@ struct ChatDetailPage {
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .clip(false)  // 禁用裁切，让按钮形变效果可以超出边界
     .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.sheetType === 'attachment' ? this.AttachmentActionSheet() : this.SlashCommandsSheet(), {
+      height: this.sheetType === 'model' ? 480 : 0,
       backgroundColor: '#1C1C1E',
       dragBar: true,
       showClose: false,
