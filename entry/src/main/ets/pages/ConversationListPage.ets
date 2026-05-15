@@ -272,7 +272,7 @@ struct SessionItemView {
           mascotSize: 40,
           status: this.getMascotStatus(),
           bodyColor: getMascotColorForSession(this.session.id),
-          mascotType: getMascotTypeForProvider(this.session.providerId || '')
+          mascotType: getMascotTypeForProvider(this.session.aiTool || '')
         })
 
         Column({ space: 4 }) {
@@ -403,7 +403,7 @@ export struct ConversationListPage {
 
   // 根据 Tab 类型判断会话是否属于该 Tab
   private isSessionForTab(session: Session): boolean {
-    const providerId = session.providerId || ''
+    const providerId = session.aiTool || ''
 
     if (this.tabType === TabType.CLAUDE) {
       return providerId === '' ||

@@ -195,7 +195,7 @@ export class SessionStore {
               createdAt: serverSession.createdAt,
               modifiedAt: localTime,
               messageCount: serverSession.messageCount,
-              providerId: serverSession.providerId
+              aiTool: serverSession.aiTool
             }
             return updatedSession
           }
@@ -351,7 +351,7 @@ export class SessionStore {
           createdAt: old.createdAt,
           modifiedAt: new Date().toISOString(),
           messageCount: old.messageCount,
-          providerId: old.providerId
+          aiTool: old.aiTool
         }
         this.sessions[index] = updated
 
@@ -915,7 +915,7 @@ export class SessionStore {
         createdAt: old.createdAt,
         modifiedAt: old.modifiedAt,
         messageCount: old.messageCount,
-        providerId: old.providerId
+        aiTool: old.aiTool
       }
       this.sessions[index] = updated
       this.notifySessionsChanged()

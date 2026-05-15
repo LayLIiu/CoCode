@@ -889,7 +889,7 @@ struct ChatDetailPage {
 
   private getSessionProviderId(): string {
     const session = sessionStore.sessions.find((s: Session) => s.id === this.sessionId)
-    return session?.providerId || ''
+    return session?.aiTool || ''
   }
 
   // 获取可见消息（分页）

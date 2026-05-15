@@ -54,7 +54,7 @@ struct ImportSessionPage {
   }
 
   private isSessionForTab(session: Session): boolean {
-    const providerId = session.providerId || ''
+    const providerId = session.aiTool || ''
 
     if (this.tabType === TabType.CLAUDE) {
       return providerId === '' ||

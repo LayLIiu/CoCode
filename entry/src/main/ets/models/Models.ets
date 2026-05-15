@@ -40,7 +40,7 @@ export interface Session {
   createdAt: string
   modifiedAt: string
   messageCount: number
-  providerId?: string
+  aiTool?: string  // 'claude' | 'codex' | 'opencode'
 }
 
 // MARK: - 消息
