@@ -1685,21 +1685,6 @@ struct ChatDetailPage {
           }
         })
 
-        // 附件按钮 - 选图/拍照
-        HdsMiniBarButton({
-          barWidth: 36,
-          barHeight: 36,
-          contentPadding: 4,
-          iconResource: $r('sys.symbol.square_and_pencil'),
-          iconSize: 16,
-          iconColor: [Theme.AccentBlue],
-          maskColor: 'rgba(10,132,255,0.15)',
-          barBottomMargin: 0,
-          onButtonClick: () => {
-            this.showAttachmentActionSheet = true
-          }
-        })
-
         // 输入框 - 液态玻璃效果
         TextArea({ placeholder: this.pendingAttachments.length > 0 ? '添加描述或直接发送...' : '发送消息...', text: this.inputText })
           .layoutWeight(1)
@@ -1929,6 +1914,31 @@ struct ChatDetailPage {
           this.showMenu = false
           this.sheetType = 'slash'
           this.showSheet = true
+        })
+
+        // 发送图片
+        Row({ space: 12 }) {
+          SymbolGlyph($r('sys.symbol.folder'))
+            .fontSize(20)
+            .fontColor([Theme.AccentBlue])
+
+          Text('发送图片')
+            .fontSize(Theme.FontBody)
+            .fontColor(Theme.TextPrimary)
+
+          Blank()
+
+          SymbolGlyph($r('sys.symbol.chevron_right'))
+            .fontSize(14)
+            .fontColor([Theme.TextTertiary])
+        }
+        .width('100%')
+        .padding(Theme.SpacingMD)
+        .backgroundColor(Theme.BackgroundTertiary)
+        .borderRadius(12)
+        .onClick(() => {
+          this.showMenu = false
+          this.showAttachmentActionSheet = true
         })
       }
       .width(220)
