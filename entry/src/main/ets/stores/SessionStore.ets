@@ -500,7 +500,8 @@ export class SessionStore {
     if (!serverUrl) return
 
     wsService.setServerUrl(serverUrl)
-    wsService.subscribeToSessions([sessionId])
+    // 只连接该会话，不清理其他已连接的会话（否则会断开其他会话的 WS + 服务端 30s 后杀 CLI）
+    wsService.addSubscription(sessionId)
     this.wsSubscribed = true
 
     // 请求当前会话状态

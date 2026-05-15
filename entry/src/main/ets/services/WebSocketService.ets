@@ -73,6 +73,16 @@ export class WebSocketService {
     this.startCleanup()
   }
 
+  /**
+   * 追加订阅单个会话，不清理已有连接（用于多会话同时工作）
+   */
+  addSubscription(sessionId: string): void {
+    if (!this.subscribedSessions.has(sessionId)) {
+      this.subscribedSessions.add(sessionId)
+      this.connectSession(sessionId)
+    }
+  }
+
   connectSession(sessionId: string): void {
     if (!this.serverUrl) {
       console.error('[WS] serverUrl is empty')
