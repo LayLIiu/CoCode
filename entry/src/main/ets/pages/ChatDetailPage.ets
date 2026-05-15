@@ -94,7 +94,7 @@ struct ChatDetailPage {
 
   // 附件（图片发送）
   @State pendingAttachments: AttachmentRef[] = []
-  @State showAttachmentActionSheet: boolean = false
+  // 附件动作 Sheet 复用 showSheet + sheetType='attachment'
 
   // 流式文本本地缓冲（与 iOS 端一致）
   @State streamingText: string = ''
@@ -790,15 +790,8 @@ struct ChatDetailPage {
     .backgroundColor('#121214')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .clip(false)  // 禁用裁切，让按钮形变效果可以超出边界
-    .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.SlashCommandsSheet(), {
-      height: this.sheetType === 'model' ? 480 : 520,
-      backgroundColor: Theme.BackgroundSecondary,
-      dragBar: true,
-      showClose: false,
-      blurStyle: BlurStyle.COMPONENT_THICK
-    })
-    .bindSheet($$this.showAttachmentActionSheet, this.AttachmentActionSheet(), {
-      height: 200,
+    .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.sheetType === 'attachment' ? this.AttachmentActionSheet() : this.SlashCommandsSheet(), {
+      height: this.sheetType === 'model' ? 480 : this.sheetType === 'attachment' ? 200 : 520,
       backgroundColor: Theme.BackgroundSecondary,
       dragBar: true,
       showClose: false,
@@ -1843,7 +1836,7 @@ struct ChatDetailPage {
       .borderRadius(Theme.RadiusMedium)
       .border({ width: 0.5, color: Theme.GlassBorder })
       .onClick(() => {
-        this.showAttachmentActionSheet = false
+        this.showSheet = false
         this.pickPhotoFromGallery()
       })
     }
@@ -1938,7 +1931,8 @@ struct ChatDetailPage {
         .borderRadius(12)
         .onClick(() => {
           this.showMenu = false
-          this.showAttachmentActionSheet = true
+          this.sheetType = 'attachment'
+          this.showSheet = true
         })
       }
       .width(220)
