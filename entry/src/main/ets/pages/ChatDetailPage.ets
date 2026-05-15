@@ -792,10 +792,10 @@ struct ChatDetailPage {
     .clip(false)  // 禁用裁切，让按钮形变效果可以超出边界
     .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.sheetType === 'attachment' ? this.AttachmentActionSheet() : this.SlashCommandsSheet(), {
       height: this.sheetType === 'attachment' ? 200 : 480,
-      backgroundColor: '#1C1C1E',
+      backgroundColor: Theme.BackgroundSecondary,
       dragBar: true,
       showClose: false,
-      blurStyle: BlurStyle.NONE
+      blurStyle: BlurStyle.COMPONENT_THICK
     })
     .width('100%')
     .height('100%')
@@ -1842,7 +1842,6 @@ struct ChatDetailPage {
     }
     .width('100%')
     .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
-    .backgroundColor('#1C1C1E')
   }
 
   // 菜单气泡 - 从按钮左下角扩散
@@ -2041,7 +2040,6 @@ struct ChatDetailPage {
     }
     .width('100%')
     .padding(Theme.SpacingLG)
-    .backgroundColor('#1C1C1E')
   }
 
   // 斜杠命令 Sheet — 与模型选择器完全一致的布局
@@ -2095,7 +2093,6 @@ struct ChatDetailPage {
     }
     .width('100%')
     .padding(Theme.SpacingLG)
-    .backgroundColor('#1C1C1E')
   }
 
   // MARK: - 任务面板（与 iOS SessionTaskBarView 一致）
