@@ -167,6 +167,9 @@ struct ChatDetailPage {
     this.loadMessages()
     this.setupCallbacks()
     // 恢复输入框草稿
+    // 确保弹窗不会在进入页面时意外弹出
+    this.showSheet = false
+
     const draft = sessionStore.inputDrafts.get(this.sessionId)
     if (draft) {
       this.inputText = draft
@@ -683,13 +686,6 @@ struct ChatDetailPage {
       .hideBackButton(false)
       .backgroundColor('#121214')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-      .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.sheetType === 'slash' ? this.SlashCommandsSheet() : this.AttachmentActionSheet(), {
-        height: this.sheetType === 'attachment' ? 200 : 480,
-        backgroundColor: Theme.BackgroundSecondary,
-        dragBar: true,
-        showClose: false,
-        blurStyle: BlurStyle.COMPONENT_THICK
-      })
 
       // 工作状态行 & 连接指示器（标题栏下方独立浮动容器）
       Column() {
@@ -794,6 +790,13 @@ struct ChatDetailPage {
     .backgroundColor('#121214')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .clip(false)
+    .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.sheetType === 'attachment' ? this.AttachmentActionSheet() : this.SlashCommandsSheet(), {
+      height: this.sheetType === 'attachment' ? 200 : 480,
+      backgroundColor: Theme.BackgroundSecondary,
+      dragBar: true,
+      showClose: false,
+      blurStyle: BlurStyle.COMPONENT_THICK
+    })
     .width('100%')
     .height('100%')
   }
