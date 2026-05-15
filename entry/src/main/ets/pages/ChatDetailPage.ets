@@ -77,10 +77,9 @@ struct ChatDetailPage {
   @State sessionId: string = ''
   @State chatStatus: SessionStatus = 'idle'
   @State showMenu: boolean = false
-  @State showSheet: boolean = false
-  @State sheetType: string = '' // 'model' or 'slash'
   @State showModelSelector: boolean = false
   @State showSlashCommands: boolean = false
+  @State showAttachmentSheet: boolean = false
   @State models: ModelInfo[] = []
   @State currentModel: string = ''
   @State isLoadingModels: boolean = false
@@ -94,7 +93,6 @@ struct ChatDetailPage {
 
   // 附件（图片发送）
   @State pendingAttachments: AttachmentRef[] = []
-  // 附件动作 Sheet 复用 showSheet + sheetType='attachment'
 
   // 流式文本本地缓冲（与 iOS 端一致）
   @State streamingText: string = ''
@@ -293,7 +291,7 @@ struct ChatDetailPage {
     try {
       await apiService.setCurrentModel(modelId)
       this.currentModel = modelId
-      this.showSheet = false
+      this.showModelSelector = false
       this.showMenu = false
     } catch (e) {
       console.error(`[ChatDetailPage] Set model error: ${e}`)
@@ -303,7 +301,7 @@ struct ChatDetailPage {
   // 选择斜杠命令
   private selectSlashCommand(cmd: string): void {
     this.inputText = cmd + ' '
-    this.showSheet = false
+    this.showSlashCommands = false
     this.showMenu = false
   }
 
@@ -790,9 +788,23 @@ struct ChatDetailPage {
     .backgroundColor('#121214')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .clip(false)  // 禁用裁切，让按钮形变效果可以超出边界
-    .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.sheetType === 'attachment' ? this.AttachmentActionSheet() : this.SlashCommandsSheet(), {
-      height: this.sheetType === 'attachment' ? 200 : 480,
-      backgroundColor: '#1C1C1E',
+    .bindSheet($$this.showModelSelector, this.ModelSelectorSheet(), {
+      height: 480,
+      backgroundColor: Theme.BackgroundSecondary,
+      dragBar: true,
+      showClose: false,
+      blurStyle: BlurStyle.COMPONENT_THICK
+    })
+    .bindSheet($$this.showSlashCommands, this.SlashCommandsSheet(), {
+      height: 480,
+      backgroundColor: Theme.BackgroundSecondary,
+      dragBar: true,
+      showClose: false,
+      blurStyle: BlurStyle.COMPONENT_THICK
+    })
+    .bindSheet($$this.showAttachmentSheet, this.AttachmentActionSheet(), {
+      height: 200,
+      backgroundColor: Theme.BackgroundSecondary,
       dragBar: true,
       showClose: false,
       blurStyle: BlurStyle.COMPONENT_THICK
@@ -1674,7 +1686,6 @@ struct ChatDetailPage {
           barBottomMargin: 0,
           onButtonClick: () => {
             this.showMenu = !this.showMenu
-            this.showSheet = false
           }
         })
 
@@ -1836,7 +1847,7 @@ struct ChatDetailPage {
       .borderRadius(Theme.RadiusMedium)
       .border({ width: 0.5, color: Theme.GlassBorder })
       .onClick(() => {
-        this.showSheet = false
+        this.showAttachmentSheet = false
         this.pickPhotoFromGallery()
       })
     }
@@ -1878,8 +1889,7 @@ struct ChatDetailPage {
         .borderRadius(12)
         .onClick(() => {
           this.showMenu = false
-          this.sheetType = 'model'
-          this.showSheet = true
+          this.showModelSelector = true
           this.loadModels()
         })
 
@@ -1905,8 +1915,7 @@ struct ChatDetailPage {
         .borderRadius(12)
         .onClick(() => {
           this.showMenu = false
-          this.sheetType = 'slash'
-          this.showSheet = true
+          this.showSlashCommands = true
         })
 
         // 发送图片
@@ -1931,8 +1940,7 @@ struct ChatDetailPage {
         .borderRadius(12)
         .onClick(() => {
           this.showMenu = false
-          this.sheetType = 'attachment'
-          this.showSheet = true
+          this.showAttachmentSheet = true
         })
       }
       .width(220)
