@@ -17,7 +17,7 @@ export class WorkDirRequest {
 
 export class CreateSessionRequest {
   workDir: string = ''
-  providerId?: string
+  aiTool?: string
 }
 
 export class TitleRequest {
@@ -187,10 +187,10 @@ export class APIService {
     return await this.request<CreateSessionResponse>('/api/sessions', 'POST', body)
   }
 
-  async createSessionWithProvider(workDir: string, providerId: string): Promise<CreateSessionResponse> {
+  async createSessionWithProvider(workDir: string, aiTool: string): Promise<CreateSessionResponse> {
     const req = new CreateSessionRequest()
     req.workDir = workDir
-    req.providerId = providerId
+    req.aiTool = aiTool
     return await this.request<CreateSessionResponse>('/api/sessions', 'POST', JSON.stringify(req))
   }
 
