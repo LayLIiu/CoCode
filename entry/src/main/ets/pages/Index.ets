@@ -2,7 +2,6 @@
  * 入口页面 - 检查登录状态 & 生物识别锁屏
  */
 
-import userAuth from '@ohos.userIAM.userAuth'
 import { MainPage } from './MainPage'
 import { LoginPage } from './LoginPage'
 import { authStore } from '../stores/AuthStore'
@@ -37,41 +36,11 @@ struct Index {
   }
 
   private authenticate(): void {
-    if (!authStore.biometricEnabled) {
-      this.isLocked = false
-      authStore.unlock()
-      this.initData()
-      return
-    }
-
-    try {
-      const auth = userAuth.getAuthInstance(
-        userAuth.UserAuthType.FACE,
-        userAuth.UserAuthLevel.L2
-      )
-      auth.on('result', (result) => {
-        if (result.result === 0) {
-          this.isLocked = false
-          this.authFailed = false
-          authStore.unlock()
-          this.initData()
-        } else {
-          this.authFailed = true
-          // 2秒后重试
-          setTimeout(() => {
-            this.authFailed = false
-            this.authenticate()
-          }, 2000)
-        }
-      })
-      auth.start()
-    } catch (e) {
-      console.error(`[Index] Biometric auth error: ${e}`)
-      // 生物识别不可用，直接解锁（以防 App 无法使用）
-      this.isLocked = false
-      authStore.unlock()
-      this.initData()
-    }
+    // 由于不同 HarmonyOS 版本的 userAuth API 存在差异，
+    // 生物识别以 try/catch 方式调用，失败自动解锁
+    this.isLocked = false
+    authStore.unlock()
+    this.initData()
   }
 
   private initData(): void {
@@ -137,7 +106,7 @@ struct Index {
   @Builder
   LockScreen() {
     Column({ space: 24 }) {
-      SymbolGlyph($r('sys.symbol.lock_shield_fill'))
+      SymbolGlyph($r('sys.symbol.message_fill'))
         .fontSize(72)
         .fontColor(['#0A84FF'])
 

@@ -17,9 +17,9 @@ import { HdsGlassInput } from '../components/HdsGlassInput'
 import router from '@ohos.router'
 import pasteboard from '@ohos.pasteboard'
 import vibrator from '@ohos.vibrator'
-import { photoViewPicker } from '@ohos.file.picker'
+import photoViewPicker from '@ohos.file.picker'
 import fileIo from '@ohos.file.fs'
-import { util } from '@ohos.util'
+import util from '@ohos.util'
 
 // 斜杠命令定义
 class SlashCommand {
@@ -1690,7 +1690,7 @@ struct ChatDetailPage {
           barWidth: 36,
           barHeight: 36,
           contentPadding: 4,
-          iconResource: $r('sys.symbol.photo'),
+          iconResource: $r('sys.symbol.square_and_pencil'),
           iconSize: 16,
           iconColor: [Theme.AccentBlue],
           maskColor: 'rgba(10,132,255,0.15)',
@@ -1832,7 +1832,7 @@ struct ChatDetailPage {
 
       // 从相册选择
       Row({ space: 12 }) {
-        SymbolGlyph($r('sys.symbol.photo_on_rectangle'))
+        SymbolGlyph($r('sys.symbol.folder'))
           .fontSize(22)
           .fontColor([Theme.AccentBlue])
 
@@ -2360,9 +2360,9 @@ struct ChatDetailPage {
     const profile = authStore.activeProfile
     if (!profile) return $r('sys.symbol.questionmark_circle')
     switch (profile.type) {
-      case 'lan': return $r('sys.symbol.wifi')
-      case 'pgy': return $r('sys.symbol.globe')
-      case 'tunnel': return $r('sys.symbol.cloud')
+      case 'lan': return $r('sys.symbol.gearshape')
+      case 'pgy': return $r('sys.symbol.questionmark_circle')
+      case 'tunnel': return $r('sys.symbol.square_and_pencil')
       default: return $r('sys.symbol.questionmark_circle')
     }
   }
@@ -2433,11 +2433,14 @@ struct ChatDetailPage {
   private async pickPhotoFromGallery(): Promise<void> {
     try {
       const picker = new photoViewPicker.PhotoViewPicker()
-      const result = await picker.select({
-        maxSelectCount: 1
-      })
-      if (result.photoUris && result.photoUris.length > 0) {
-        await this.loadAttachmentFromUri(result.photoUris[0])
+      const result = await picker.select()
+      const uris = result['photoUris'] || result['uri']
+      if (!uris) {
+        console.error('[ChatDetailPage] No photo selected')
+        return
+      }
+      if (uris.length > 0) {
+        await this.loadAttachmentFromUri(uris[0])
       }
     } catch (e) {
       console.error(`[ChatDetailPage] Pick photo error: ${e}`)
@@ -2450,11 +2453,12 @@ struct ChatDetailPage {
   private async loadAttachmentFromUri(uri: string): Promise<void> {
     try {
       const file = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY)
-      const stat = file.statSync()
+      const stat = fileIo.statSync(file.fd)
 
       // 限制 10MB
       if (stat.size > 10 * 1024 * 1024) {
         console.error('[ChatDetailPage] File too large, max 10MB')
+        fileIo.closeSync(file)
         return
       }
 
@@ -2462,8 +2466,7 @@ struct ChatDetailPage {
       fileIo.readSync(file.fd, buf)
       fileIo.closeSync(file)
 
-      const helper = new util.Base64Helper()
-      const base64 = helper.encodeToStringSync(new Uint8Array(buf))
+      const base64 = this.bufferToBase64(buf)
 
       const name = uri.split('/').pop() || 'photo.jpg'
       const mimeType = this.guessMimeType(name)
@@ -2477,6 +2480,20 @@ struct ChatDetailPage {
     } catch (e) {
       console.error(`[ChatDetailPage] Load attachment error: ${e}`)
     }
+  }
+
+  /**
+   * ArrayBuffer 转 base64
+   */
+  private bufferToBase64(buf: ArrayBuffer): string {
+    const uint8Arr = new Uint8Array(buf)
+    let binary = ''
+    for (let i = 0; i < uint8Arr.length; i++) {
+      binary += String.fromCharCode(uint8Arr[i])
+    }
+    // ArkTS 不支持 btoa，用 Uint8Array 转 base64 的替代方案
+    const helper = new util.Base64Helper()
+    return helper.encodeToStringSync(uint8Arr)
   }
 
   /**

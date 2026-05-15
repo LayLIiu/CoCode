@@ -552,6 +552,40 @@ export struct SettingsPage {
 
   @Builder
   ThemeItem() {
+    Row() {
+      Text('主题')
+        .fontSize(Theme.FontBody)
+        .fontColor(Theme.TextPrimary)
+
+      Blank()
+
+      Text(this.getThemeLabel(this.themeMode))
+        .fontSize(Theme.FontBody)
+        .fontColor(Theme.TextSecondary)
+
+      SymbolGlyph($r('sys.symbol.chevron_right'))
+        .fontSize(14)
+        .fontColor([Theme.TextSecondary])
+        .margin({ left: 8 })
+    }
+    .width('100%')
+    .padding(Theme.SpacingMD)
+    .backgroundColor(Theme.GlassBackground)
+    .borderRadius(Theme.RadiusMedium)
+    .border({ width: 0.5, color: Theme.GlassBorder })
+    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
+    .onClick(() => {
+      // 切换主题
+      if (this.themeMode === 'dark') {
+        this.themeMode = 'light'
+      } else if (this.themeMode === 'light') {
+        this.themeMode = 'glass'
+      } else {
+        this.themeMode = 'dark'
+      }
+      appState.setThemeMode(this.themeMode)
+    })
+  }
 
   @Builder
   EffortItem() {
@@ -1012,9 +1046,9 @@ export struct SettingsPage {
 
   private getProfileIcon(type: string): Resource {
     switch (type) {
-      case 'lan': return $r('sys.symbol.wifi')
-      case 'pgy': return $r('sys.symbol.globe')
-      case 'tunnel': return $r('sys.symbol.cloud')
+      case 'lan': return $r('sys.symbol.gearshape')
+      case 'pgy': return $r('sys.symbol.questionmark_circle')
+      case 'tunnel': return $r('sys.symbol.square_and_pencil')
       default: return $r('sys.symbol.questionmark_circle')
     }
   }
