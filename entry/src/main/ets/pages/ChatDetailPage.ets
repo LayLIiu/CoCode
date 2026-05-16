@@ -1743,10 +1743,35 @@ struct ChatDetailPage {
       if (message.content) {
         Text(message.content).fontSize(13).fontColor(Theme.TextSecondary)
       }
+      if (this.activeCopyMessageId === message.id) {
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.doc_text'))
+            .fontSize(12).fontColor([Theme.TextPrimary])
+          Text('复制').fontSize(11).fontColor(Theme.TextPrimary)
+        }
+        .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+        .backgroundColor(Theme.GlassBackground)
+        .borderRadius(12)
+        .border({ width: 0.5, color: Theme.GlassBorder })
+        .onClick(() => {
+          this.copyToClipboard(message.content)
+          this.activeCopyMessageId = ''
+        })
+      }
     }
     .width('100%').padding(14)
     .backgroundColor(Theme.ErrorColor + '10')
     .borderRadius(10).border({ width: 0.5, color: Theme.ErrorColor + '40' })
+    .gesture(
+      LongPressGesture()
+        .onAction(() => {
+          if (this.activeCopyMessageId === message.id) {
+            this.activeCopyMessageId = ''
+          } else {
+            this.activeCopyMessageId = message.id
+          }
+        })
+    )
   }
 
   @Builder
