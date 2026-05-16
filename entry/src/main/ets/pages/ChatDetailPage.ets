@@ -129,6 +129,7 @@ struct ChatDetailPage {
   // Token 使用量
   @State tokenUsage: number = 0
   @State contextUsage: number = 0
+  private contextPollTimer: number = -1
 
   // 工作中计时（与 iOS StreamingStatusView 一致）
   @State elapsedSeconds: number = 0
@@ -180,6 +181,10 @@ struct ChatDetailPage {
     this.showPermSheet = false
     this.showAttachSheet = false
 
+    // 定时拉取上下文使用率
+    setTimeout(() => { this.fetchContextUsage() }, 1000)
+    this.contextPollTimer = setInterval(() => { this.fetchContextUsage() }, 15000)
+
     const draft = sessionStore.inputDrafts.get(this.sessionId)
     if (draft) {
       this.inputText = draft
@@ -198,8 +203,17 @@ struct ChatDetailPage {
       clearTimeout(this.thinkingScrollTimer)
       this.thinkingScrollTimer = -1
     }
+    if (this.contextPollTimer >= 0) { clearInterval(this.contextPollTimer); this.contextPollTimer = -1 }
     this.removeCallbacks()
     sessionStore.setCurrentSession(null)
+  }
+
+  private async fetchContextUsage(): Promise<void> {
+    if (!this.sessionId) return
+    const pct = await apiService.getContextUsage(this.sessionId)
+    if (pct > 0) {
+      this.contextUsage = pct
+    }
   }
 
   private getRouterParams(): void {
@@ -1782,14 +1796,14 @@ struct ChatDetailPage {
     Row({ space: 4 }) {
       Stack() {
         Progress({ value: this.contextUsage, total: 100, type: ProgressType.Ring })
-          .width(28).height(28)
+          .width(22).height(22)
           .color(this.getRingColor())
-          .backgroundColor('#FFFFFF22')
-          .style({ strokeWidth: 6 })
+          .backgroundColor('#333333')
+          .style({ strokeWidth: 4 })
         Text(`${this.contextUsage}%`)
-          .fontSize(7).fontColor(Theme.TextTertiary).lineHeight(8)
+          .fontSize(6).fontColor(Theme.TextTertiary).lineHeight(7)
       }
-      .width(28).height(28)
+      .width(22).height(22)
     }
     .alignItems(VerticalAlign.Center)
   }

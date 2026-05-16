@@ -344,6 +344,21 @@ export class APIService {
     await this.request<Object>('/api/models/current', 'PUT', JSON.stringify(req))
   }
 
+  // MARK: - 上下文容量 API
+
+  async getContextUsage(sessionId: string): Promise<number> {
+    const res = await this.request<Object>('/api/sessions/' + sessionId + '/inspection?contextOnly=1', 'GET', '')
+    const raw = JSON.stringify(res)
+    const parsed = JSON.parse(raw) as Record<string, Object>
+    const estimate = parsed['contextEstimate']
+    if (estimate) {
+      const estMap = estimate as Record<string, Object>
+      const pct = estMap['percentage']
+      if (typeof pct === 'number') return pct
+    }
+    return 0
+  }
+
   // MARK: - 私有方法
 
   private async request<T>(path: string, method: string, body: string): Promise<T> {
