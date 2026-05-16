@@ -728,31 +728,21 @@ struct ChatDetailPage {
         height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
       })
 
-      // 上下文使用率 & 工作状态（标题栏下方）
-      Column({ space: 2 }) {
+      // 工作状态 & 上下文使用率（标题栏下方，永远显示）
+      Row({ space: 6 }) {
         this.ContextRing()
-
-        // 工作状态
-        if (this.chatStatus !== 'idle' && this.chatStatus !== 'completed') {
-          Row({ space: 6 }) {
-            LoadingProgress()
-              .width(10)
-              .height(10)
-              .color(this.getStatusColor())
-            Text(this.getStatusText())
-              .fontSize(11)
-              .fontColor(this.getStatusColor())
-            if (this.elapsedSeconds > 0) {
-              Text(this.formatElapsed(this.elapsedSeconds))
-                .fontSize(10)
-                .fontColor(Theme.TextTertiary)
-            }
+        if (this.chatStatus === 'idle' || this.chatStatus === 'completed') {
+          Text('休闲中').fontSize(11).fontColor(Theme.TextTertiary)
+        } else {
+          LoadingProgress().width(10).height(10).color(this.getStatusColor())
+          Text(this.getStatusText()).fontSize(11).fontColor(this.getStatusColor())
+          if (this.elapsedSeconds > 0) {
+            Text(this.formatElapsed(this.elapsedSeconds)).fontSize(10).fontColor(Theme.TextTertiary)
           }
-          .width('100%')
-          .justifyContent(FlexAlign.Center)
         }
       }
       .width('100%')
+      .justifyContent(FlexAlign.Center)
       .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
       .position({ x: 0, y: 88 })
       .zIndex(5)
