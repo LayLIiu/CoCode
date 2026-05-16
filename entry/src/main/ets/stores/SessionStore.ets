@@ -652,6 +652,18 @@ export class SessionStore {
 
       case 'content_start':
         this.updateSessionStatus(sessionId, 'streaming')
+        // 开始回复文本 → 把最后一个 running 工具标记为 completed
+        if (msg.blockType === 'text') {
+          const msgs = this.messages.get(sessionId)
+          if (msgs) {
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].type === 'tool_use' && msgs[i].toolStatus === 'running') {
+                msgs[i].toolStatus = 'completed'
+                break
+              }
+            }
+          }
+        }
         break
 
       case 'content_delta':
