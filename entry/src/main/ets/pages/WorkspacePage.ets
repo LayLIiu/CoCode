@@ -1,10 +1,12 @@
 /**
- * 工作区页面 - 文件树浏览器
+ * 工作区页面 - 文件树浏览器（设置页风格）
  */
 
 import { Theme } from '../common/Theme'
 import { sessionStore } from '../stores/SessionStore'
 import { apiService, FsEntry } from '../services/APIService'
+import { HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@hms.hds.hdsBaseComponent'
+import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import router from '@ohos.router'
 
 @Entry
@@ -45,58 +47,83 @@ struct WorkspacePage {
       entry.isExpanded = true
       entry.children = await apiService.browseDirectory(entry.fullPath)
     }
-    this.isLoading = false // trigger refresh
+    this.isLoading = false
   }
 
   build() {
-    Column() {
-      Column() {
-        // 标题栏
-        Row() {
-          SymbolGlyph($r('sys.symbol.chevron_left'))
-            .fontSize(20).fontColor([Theme.PrimaryColor])
+    Stack() {
+      HdsNavigation() {
+        List() {
+          // 顶部留白
+          ListItem() { Row().width('100%').height(80) }
 
-          Text(this.rootPath ? this.rootPath.split('/').pop() || '工作区' : '工作区')
-            .fontSize(18).fontWeight(FontWeight.Bold).fontColor(Theme.TextPrimary)
-            .layoutWeight(1).textAlign(TextAlign.Center)
-
-          Blank().width(20)
-        }
-        .width('100%').padding(Theme.SpacingMD)
-        .onClick(() => { router.back() })
-
-        // 文件树
-        if (this.isLoading) {
-          LoadingProgress().width(30).height(30).color(Theme.PrimaryColor).margin({ top: 40 })
-        } else if (this.rootPath) {
-          Text(this.rootPath).fontSize(11).fontColor(Theme.TextTertiary)
-            .width('100%').padding({ left: Theme.SpacingMD, bottom: Theme.SpacingSM })
-            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-
-          Scroll() {
-            Column() {
-              ForEach(this.rootEntries, (entry: FsEntry) => {
-                this.FileTreeItem(entry, 0)
-              }, (entry: FsEntry) => entry.fullPath)
+          // 路径
+          ListItem() {
+            Column({ space: 4 }) {
+              Row({ space: 8 }) {
+                SymbolGlyph($r('sys.symbol.folder')).fontSize(16).fontColor([Theme.AccentBlue])
+                Text('项目目录').fontSize(14).fontColor(Theme.TextSecondary)
+              }
+              if (this.rootPath) {
+                Text(this.rootPath)
+                  .fontSize(13).fontColor(Theme.TextTertiary).maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+              }
             }
-            .width('100%')
+            .width('100%').padding(Theme.SpacingMD)
+            .backgroundColor(Theme.GlassBackground)
+            .borderRadius(Theme.RadiusMedium)
+            .border({ width: 0.5, color: Theme.GlassBorder })
           }
-          .width('100%').layoutWeight(1)
-        } else {
-          Text('暂无工作区信息').fontSize(14).fontColor(Theme.TextTertiary).margin({ top: 40 })
+
+          // 文件树
+          ListItem() {
+            if (this.isLoading) {
+              Column() {
+                LoadingProgress().width(30).height(30).color(Theme.PrimaryColor)
+              }.width('100%').height(200).justifyContent(FlexAlign.Center)
+            } else if (this.rootEntries.length > 0) {
+              Column({ space: 2 }) {
+                ForEach(this.rootEntries, (entry: FsEntry) => {
+                  this.FileTreeItem(entry, 0)
+                }, (entry: FsEntry) => entry.fullPath)
+              }
+              .width('100%')
+            } else {
+              Text('暂无文件').fontSize(14).fontColor(Theme.TextTertiary)
+                .width('100%').textAlign(TextAlign.Center).margin({ top: 40 })
+            }
+          }
         }
+        .width('100%')
+        .layoutWeight(1)
+        .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
       }
-      .width('100%').height('100%')
-      .linearGradient({
-        angle: 180,
-        colors: [
-          [Theme.BackgroundGradientStart, 0.0],
-          [Theme.BackgroundGradientMiddle, 0.5],
-          [Theme.BackgroundGradientEnd, 1.0]
-        ]
+      .titleBar({
+        content: { title: { mainTitle: '工作区' } },
+        style: {
+          scrollEffectOpts: { enableScrollEffect: true, scrollEffectType: ScrollEffectType.GRADIENT_BLUR },
+          systemMaterialEffect: { materialType: hdsMaterial.MaterialType.ADAPTIVE, materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE },
+        },
+        avoidLayoutSafeArea: true,
+        enableComponentSafeArea: false,
       })
+      .titleMode(HdsNavigationTitleMode.MINI)
+      .hideBackButton(false)
     }
-    .width('100%').height('100%')
+    .width('100%')
+    .height('100%')
+    .linearGradient({
+      angle: 180,
+      colors: [
+        [Theme.BackgroundGradientStart, 0.0],
+        [Theme.BackgroundGradientMiddle, 0.5],
+        [Theme.BackgroundGradientEnd, 1.0]
+      ]
+    })
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 
   @Builder
@@ -105,10 +132,10 @@ struct WorkspacePage {
       Row({ space: 6 }) {
         // 缩进
         if (depth > 0) {
-          Row().width(depth * 16)
+          Row().width(depth * 20)
         }
 
-        // 展开箭头 (仅目录)
+        // 展开箭头
         if (entry.isDir) {
           SymbolGlyph(entry.isExpanded ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
             .fontSize(10).fontColor([Theme.TextTertiary])
@@ -118,15 +145,13 @@ struct WorkspacePage {
 
         // 图标
         SymbolGlyph(entry.isDir ? $r('sys.symbol.folder') : $r('sys.symbol.doc_text'))
-          .fontSize(14)
-          .fontColor([entry.isDir ? Theme.AccentBlue : Theme.TextSecondary])
+          .fontSize(16).fontColor([entry.isDir ? Theme.AccentBlue : Theme.TextSecondary])
 
-        // 文件名
         Text(entry.name)
-          .fontSize(13).fontColor(Theme.TextPrimary).layoutWeight(1).maxLines(1)
+          .fontSize(14).fontColor(Theme.TextPrimary).layoutWeight(1).maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
       }
-      .width('100%').padding({ left: 12, right: 12, top: 6, bottom: 6 })
+      .width('100%').padding({ left: 12, right: 12, top: 8, bottom: 8 })
       .onClick(() => { this.toggleDir(entry) })
 
       // 子项
