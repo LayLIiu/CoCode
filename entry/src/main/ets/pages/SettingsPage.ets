@@ -114,41 +114,14 @@ export struct SettingsPage {
             this.ConnectionItem()
           }
 
-          // 模型设置
+          // 服务商管理
           if (this.isLoggedIn) {
-            ListItem() {
-              this.SettingSection('模型')
-            }
-
-            ListItem() {
-              this.ModelItem()
-            }
-
-            // 思考强度
-            ListItem() {
-              this.SettingSection('思考强度')
-            }
-
-            ListItem() {
-              this.EffortItem()
-            }
-
-            // 服务商管理
             ListItem() {
               this.SettingSection('服务商')
             }
 
             ListItem() {
               this.ProviderManageItem()
-            }
-
-            // 权限模式
-            ListItem() {
-              this.SettingSection('权限模式')
-            }
-
-            ListItem() {
-              this.PermissionModeItem()
             }
           }
 

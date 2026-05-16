@@ -629,6 +629,12 @@ export class SessionStore {
         if (msg.state) {
           this.updateSessionStatusFromState(sessionId, msg.state)
         }
+        // 解析权限模式同步（verb: "permission_mode:bypassPermissions"）
+        if (msg.verb && msg.verb.startsWith('permission_mode:')) {
+          const mode = msg.verb.substring('permission_mode:'.length) as PermissionMode
+          this.sessionPermissionModes.set(sessionId, mode)
+          this.notifySessionsChanged()
+        }
         break
 
       case 'content_start':

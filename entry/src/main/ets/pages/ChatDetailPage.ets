@@ -4,7 +4,7 @@
  */
 
 import { Theme } from '../common/Theme'
-import { Message, Session, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus, AttachmentRef, QuestionOption } from '../models/Models'
+import { Message, Session, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus, AttachmentRef, QuestionOption, PermissionMode, getPermissionModeDisplayName, getPermissionModeDescription } from '../models/Models'
 import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import { sessionStore } from '../stores/SessionStore'
@@ -84,6 +84,7 @@ struct ChatDetailPage {
   @State isLoadingModels: boolean = false
   @State expandedThinkingIds: Set<string> = new Set()
   @State expandedToolIds: Set<string> = new Set()
+  @State currentPermissionMode: PermissionMode = PermissionMode.DEFAULT
   @State showCopyToast: boolean = false
   @State copyToastText: string = ''
   @State showCustomInput: boolean = false
@@ -166,6 +167,8 @@ struct ChatDetailPage {
     this.getRouterParams()
     this.loadMessages()
     this.setupCallbacks()
+    // 加载当前会话权限模式
+    this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
     // 恢复输入框草稿
     // 确保弹窗不会在进入页面时意外弹出
     this.showSheet = false
@@ -234,6 +237,8 @@ struct ChatDetailPage {
   private statusChangedListener = (sid: string, status: SessionStatus) => {
     if (sid === this.sessionId) {
       this.chatStatus = status
+      // 同步当前会话的权限模式
+      this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
     }
   }
 
@@ -792,7 +797,7 @@ struct ChatDetailPage {
     .backgroundColor('#121214')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .clip(false)
-    .bindSheet($$this.showSheet, this.sheetType === 'model' ? this.ModelSelectorSheet() : this.sheetType === 'attachment' ? this.AttachmentActionSheet() : this.SlashCommandsSheet(), {
+    .bindSheet($$this.showSheet, this.sheetType === 'permission' ? this.PermissionSheet() : this.sheetType === 'model' ? this.ModelSelectorSheet() : this.sheetType === 'attachment' ? this.AttachmentActionSheet() : this.SlashCommandsSheet(), {
       height: this.sheetType === 'attachment' ? 200 : 480,
       backgroundColor: Theme.BackgroundSecondary,
       dragBar: true,
@@ -1765,6 +1770,44 @@ struct ChatDetailPage {
   }
 
   @Builder
+  PermissionSheet() {
+    Column({ space: 4 }) {
+      Row() {
+        Text('权限模式')
+          .fontSize(18).fontWeight(FontWeight.Bold).fontColor(Theme.TextPrimary)
+          .layoutWeight(1).textAlign(TextAlign.Center)
+      }
+      .width('100%').padding({ bottom: 12 })
+
+      ForEach([PermissionMode.DEFAULT, PermissionMode.ACCEPT_EDITS, PermissionMode.PLAN, PermissionMode.BYPASS_PERMISSIONS],
+        (mode: PermissionMode) => {
+        Row({ space: 12 }) {
+          Column({ space: 2 }) {
+            Text(getPermissionModeDisplayName(mode))
+              .fontSize(15).fontColor(Theme.TextPrimary)
+
+            Text(getPermissionModeDescription(mode))
+              .fontSize(12).fontColor(Theme.TextTertiary)
+          }
+          .layoutWeight(1).alignItems(HorizontalAlign.Start)
+
+          Radio({ value: mode, group: 'chatPermission' })
+            .checked(this.currentPermissionMode === mode)
+            .onChange((checked: boolean) => {
+              if (checked) {
+                this.currentPermissionMode = mode
+                sessionStore.changePermissionMode(mode)
+                this.showSheet = false
+              }
+            })
+        }
+        .width('100%').padding({ top: 8, bottom: 8 })
+      }, (mode: PermissionMode) => mode)
+    }
+    .width('100%').padding(Theme.SpacingLG)
+  }
+
+  @Builder
   InputAreaContent() {
     Column({ space: 8 }) {
       // 附件预览 - 水平滚动缩略图
@@ -2016,6 +2059,39 @@ struct ChatDetailPage {
         .onClick(() => {
           this.showMenu = false
           this.sheetType = 'slash'
+          this.showSheet = true
+        })
+
+        // 权限模式
+        Row({ space: 12 }) {
+          SymbolGlyph($r('sys.symbol.lock_shield'))
+            .fontSize(20)
+            .fontColor([Theme.AccentOrange])
+
+          Column({ space: 2 }) {
+            Text('权限模式')
+              .fontSize(Theme.FontBody)
+              .fontColor(Theme.TextPrimary)
+
+            Text(getPermissionModeDisplayName(this.currentPermissionMode))
+              .fontSize(Theme.FontTiny)
+              .fontColor(Theme.TextTertiary)
+              .maxLines(1)
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+
+          SymbolGlyph($r('sys.symbol.chevron_right'))
+            .fontSize(14)
+            .fontColor([Theme.TextTertiary])
+        }
+        .width('100%')
+        .padding(Theme.SpacingMD)
+        .backgroundColor(Theme.BackgroundTertiary)
+        .borderRadius(12)
+        .onClick(() => {
+          this.showMenu = false
+          this.sheetType = 'permission'
           this.showSheet = true
         })
 
