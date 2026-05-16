@@ -199,6 +199,7 @@ struct ChatDetailPage {
       this.thinkingScrollTimer = -1
     }
     this.removeCallbacks()
+    if (this.ringTimer >= 0) { clearInterval(this.ringTimer); this.ringTimer = -1 }
     sessionStore.setCurrentSession(null)
   }
 
@@ -1780,18 +1781,9 @@ struct ChatDetailPage {
   @Builder
   ContextRing() {
     Row({ space: 4 }) {
-      Stack() {
-        // 背景环
-        Circle().width(18).height(18).fill('none')
-          .stroke('#FFFFFF22').strokeWidth(4)
-        // 进度弧
-        Circle().width(18).height(18).fill('none')
-          .stroke(this.getRingColor()).strokeWidth(4)
-          .strokeDashOffset(this.getRingOffset())
-          .strokeDashArray([this.getRingLength(), 57])
-      }
-      .width(18).height(18).rotate({ angle: -90 })
-
+      Canvas(this.ringCtx)
+        .width(20).height(20)
+        .onReady(() => { this.drawRing() })
       Text(`${this.contextUsage}%`)
         .fontSize(10).fontFamily('monospace').fontWeight(FontWeight.Bold)
         .fontColor(this.getRingColor()).lineHeight(12)
@@ -2715,13 +2707,40 @@ struct ChatDetailPage {
   /**
    * 根据文件名猜测 MIME 类型
    */
-  private getRingLength(): number {
-    const circumference = 57
-    return Math.round(circumference * Math.min(this.contextUsage, 100) / 100)
-  }
+  private ringSettings: RenderingContextSettings = new RenderingContextSettings(true)
+  private ringCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.ringSettings)
+  private ringTimer: number = -1
 
-  private getRingOffset(): number {
-    return 0
+  private drawRing(): void {
+    // 定时重绘确保 contextUsage 变化时刷新
+    if (this.ringTimer >= 0) clearInterval(this.ringTimer)
+    this.ringTimer = setInterval(() => {
+      const ctx = this.ringCtx
+      const cx = 10, cy = 10, r = 7
+      const pct = Math.min(Math.max(this.contextUsage, 0), 100)
+      const color = this.getRingColor()
+
+      ctx.clearRect(0, 0, 20, 20)
+
+      // 背景环
+      ctx.beginPath()
+      ctx.arc(cx, cy, r, 0, Math.PI * 2)
+      ctx.strokeStyle = '#FFFFFF22'
+      ctx.lineWidth = 3.5
+      ctx.stroke()
+
+      // 进度弧（从12点钟开始顺时针）
+      if (pct > 0) {
+        const startAngle = -Math.PI / 2
+        const endAngle = startAngle + Math.PI * 2 * pct / 100
+        ctx.beginPath()
+        ctx.arc(cx, cy, r, startAngle, endAngle)
+        ctx.strokeStyle = color
+        ctx.lineWidth = 3.5
+        ctx.lineCap = 'round'
+        ctx.stroke()
+      }
+    }, 200)
   }
 
   private getRingColor(): string {
