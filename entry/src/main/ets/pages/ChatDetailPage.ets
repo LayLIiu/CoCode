@@ -245,15 +245,11 @@ struct ChatDetailPage {
   }
 
   private async loadFileAsAttachment(filePath: string, fileName: string): Promise<void> {
-    try {
-      const content = await apiService.readFileText(filePath)
-      if (content) {
-        this.inputText = '请查看这个文件:\n' + '```\n' + content.substring(0, 5000) + '\n```'
-        if (content.length > 5000) {
-          this.inputText += '\n[文件内容过长，已截断 ' + content.length + ' 字符]'
-        }
-      }
-    } catch (e) { /* ignore */ }
+    this.pendingAttachments = [...this.pendingAttachments, {
+      type: 'file',
+      name: fileName,
+      path: filePath
+    }]
   }
 
   private async loadMessages(): Promise<void> {
@@ -1998,56 +1994,43 @@ struct ChatDetailPage {
       Row({ space: 8 }) {
         ForEach(this.pendingAttachments, (attachment: AttachmentRef, index: number) => {
           Stack() {
-            // 缩略图
-            Image('data:' + (attachment.mimeType || 'image/jpeg') + ';base64,' + attachment.data)
-              .width(64)
-              .height(64)
-              .borderRadius(10)
-              .objectFit(ImageFit.Cover)
+            if (attachment.type === 'image') {
+              // 图片预览
+              Image('data:' + (attachment.mimeType || 'image/jpeg') + ';base64,' + attachment.data)
+                .width(64).height(64).borderRadius(10).objectFit(ImageFit.Cover)
+            } else {
+              // 文件图标
+              Column({ space: 4 }) {
+                SymbolGlyph($r('sys.symbol.doc_text'))
+                  .fontSize(22).fontColor([Theme.AccentBlue])
+                Text(attachment.name || '文件')
+                  .fontSize(8).fontColor(Theme.TextPrimary).maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis }).width(52).textAlign(TextAlign.Center)
+              }
+              .width(64).height(64).justifyContent(FlexAlign.Center)
+              .backgroundColor('#FFFFFF0A').borderRadius(10)
+            }
 
             // 删除按钮
             Column() {
-              SymbolGlyph($r('sys.symbol.xmark'))
-                .fontSize(8)
-                .fontColor([Color.White])
+              SymbolGlyph($r('sys.symbol.xmark')).fontSize(8).fontColor([Color.White])
             }
-            .width(18)
-            .height(18)
-            .backgroundColor('rgba(0,0,0,0.6)')
-            .borderRadius(9)
-            .justifyContent(FlexAlign.Center)
-            .alignItems(HorizontalAlign.Center)
-            .position({ x: 0, y: 0 })
-            .margin({ left: -4, top: -4 })
+            .width(18).height(18)
+            .backgroundColor('rgba(0,0,0,0.6)').borderRadius(9)
+            .justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
+            .position({ x: 0, y: 0 }).margin({ left: -4, top: -4 })
             .onClick(() => {
               const newList = [...this.pendingAttachments]
               newList.splice(index, 1)
               this.pendingAttachments = newList
             })
-
-            // 文件名标签
-            if (attachment.name) {
-              Text(attachment.name)
-                .fontSize(8)
-                .fontColor(Color.White)
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .width(56)
-                .textAlign(TextAlign.Center)
-                .position({ x: 0, y: 0 })
-                .margin({ left: 4, bottom: 4 })
-            }
           }
-          .width(64)
-          .height(64)
+          .width(64).height(64)
         })
       }
-      .width('100%')
-      .padding({ left: 4, right: 4 })
+      .width('100%').padding({ left: 4, right: 4 })
     }
-    .height(76)
-    .scrollBar(BarState.Off)
-    .width('100%')
+    .height(76).scrollBar(BarState.Off).width('100%')
   }
 
   @Builder
