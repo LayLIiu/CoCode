@@ -40,7 +40,7 @@ class ListItemHelper {
 
 // ── 行内片段 ──
 
-enum InlineFragmentType { TEXT, BOLD, ITALIC, STRIKETHROUGH, INLINE_CODE, LINK, IMG }
+enum InlineFragmentType { TEXT, BOLD, ITALIC, STRIKETHROUGH, INLINE_CODE, LINK, IMG, COLOR_GREEN, COLOR_RED }
 
 class InlineFragment {
   type: InlineFragmentType = InlineFragmentType.TEXT
@@ -302,6 +302,18 @@ export struct MarkdownRenderer {
       if (linkMatch && linkMatch.index === 0) {
         fragments.push(new InlineFragment(InlineFragmentType.LINK, linkMatch[1], linkMatch[2]))
         remaining = remaining.substring(linkMatch[0].length); continue
+      }
+
+      const greenMatch = remaining.match(/\[g\](.*?)\[\/g\]/)
+      if (greenMatch && greenMatch.index === 0) {
+        fragments.push(new InlineFragment(InlineFragmentType.COLOR_GREEN, greenMatch[1]))
+        remaining = remaining.substring(greenMatch[0].length); continue
+      }
+
+      const redMatch = remaining.match(/\[r\](.*?)\[\/r\]/)
+      if (redMatch && redMatch.index === 0) {
+        fragments.push(new InlineFragment(InlineFragmentType.COLOR_RED, redMatch[1]))
+        remaining = remaining.substring(redMatch[0].length); continue
       }
 
       const nextSpecial = this.findNextSpecial(remaining)
@@ -580,6 +592,10 @@ export struct MarkdownRenderer {
         .decoration({ type: TextDecorationType.Underline })
     } else if (frag.type === InlineFragmentType.IMG) {
       Span('[图片:' + frag.content + ']').fontSize(13).fontColor(Theme.TextTertiary)
+    } else if (frag.type === InlineFragmentType.COLOR_GREEN) {
+      Span(frag.content).fontSize(15).fontColor(Theme.AccentGreen)
+    } else if (frag.type === InlineFragmentType.COLOR_RED) {
+      Span(frag.content).fontSize(15).fontColor(Theme.ErrorColor)
     } else {
       Span(frag.content).fontSize(15).fontColor(Theme.TextPrimary)
     }
