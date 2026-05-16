@@ -1779,16 +1779,23 @@ struct ChatDetailPage {
 
   @Builder
   ContextRing() {
-    Stack() {
-      Progress({ value: this.contextUsage, total: 100, type: ProgressType.Ring })
-        .width(18).height(18)
-        .color(this.getRingColor())
-        .backgroundColor('#FFFFFF1A')
-        .style({ strokeWidth: 4 })
+    Row({ space: 4 }) {
+      Stack() {
+        // 背景环
+        Circle().width(18).height(18).fill('none')
+          .stroke('#FFFFFF22').strokeWidth(4)
+        // 进度弧
+        Circle().width(18).height(18).fill('none')
+          .stroke(this.getRingColor()).strokeWidth(4)
+          .strokeDashOffset(this.getRingOffset())
+          .strokeDashArray([this.getRingLength(), 57])
+      }
+      .width(18).height(18).rotate({ angle: -90 })
+
       Text(`${this.contextUsage}%`)
-        .fontSize(7).fontColor(Theme.TextTertiary).lineHeight(7)
+        .fontSize(10).fontFamily('monospace').fontWeight(FontWeight.Bold)
+        .fontColor(this.getRingColor()).lineHeight(12)
     }
-    .width(20).height(18)
   }
 
   @Builder
@@ -2708,6 +2715,15 @@ struct ChatDetailPage {
   /**
    * 根据文件名猜测 MIME 类型
    */
+  private getRingLength(): number {
+    const circumference = 57
+    return Math.round(circumference * Math.min(this.contextUsage, 100) / 100)
+  }
+
+  private getRingOffset(): number {
+    return 0
+  }
+
   private getRingColor(): string {
     if (this.contextUsage >= 90) return '#FF3B30'
     if (this.contextUsage >= 75) return '#FF9500'
