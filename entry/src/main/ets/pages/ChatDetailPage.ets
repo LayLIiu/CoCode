@@ -1779,11 +1779,17 @@ struct ChatDetailPage {
 
   @Builder
   ContextRing() {
-    Row({ space: 3 }) {
-      Circle().width(8).height(8).fill(this.getRingColor())
-      Text(`${this.contextUsage}%`)
-        .fontSize(10).fontFamily('monospace').fontWeight(FontWeight.Bold)
-        .fontColor(this.getRingColor()).lineHeight(12)
+    Row({ space: 4 }) {
+      Stack() {
+        Progress({ value: this.contextUsage, total: 100, type: ProgressType.Ring })
+          .width(28).height(28)
+          .color(this.getRingColor())
+          .backgroundColor('#FFFFFF22')
+          .style({ strokeWidth: 6 })
+        Text(`${this.contextUsage}%`)
+          .fontSize(7).fontColor(Theme.TextTertiary).lineHeight(8)
+      }
+      .width(28).height(28)
     }
     .alignItems(VerticalAlign.Center)
   }
