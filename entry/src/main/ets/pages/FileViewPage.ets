@@ -38,12 +38,10 @@ struct FileViewPage {
   }
 
   private addToChat(): void {
-    router.clear()
-    router.pushUrl({
+    router.back({
       url: 'pages/ChatDetailPage',
       params: {
         sessionId: this.sessionId,
-        title: '对话',
         attachFile: this.filePath,
         attachFileName: this.fileName
       }

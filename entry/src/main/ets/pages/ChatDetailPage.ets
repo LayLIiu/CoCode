@@ -212,6 +212,10 @@ struct ChatDetailPage {
     sessionStore.setCurrentSession(null)
   }
 
+  onPageShow(): void {
+    this.getRouterParams()
+  }
+
   private async fetchContextUsage(): Promise<void> {
     if (!this.sessionId) return
     try {
