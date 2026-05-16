@@ -2008,7 +2008,7 @@ struct ChatDetailPage {
                   .textOverflow({ overflow: TextOverflow.Ellipsis }).width(52).textAlign(TextAlign.Center)
               }
               .width(64).height(64).justifyContent(FlexAlign.Center)
-              .backgroundColor('#FFFFFF0A').borderRadius(10)
+              .backgroundColor('#2C2C2E').borderRadius(10)
             }
 
             // 删除按钮
