@@ -697,6 +697,17 @@ export class SessionStore {
       case 'message_complete':
         console.info(`[SessionStore] Message complete for ${sessionId}`)
         this.updateSessionStatus(sessionId, 'completed')
+        // 把还在 running 的工具标记为 completed（最后那个没有新工具触发）
+        {
+          const msgs = this.messages.get(sessionId)
+          if (msgs) {
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].type === 'tool_use' && msgs[i].toolStatus === 'running') {
+                msgs[i].toolStatus = 'completed'
+              }
+            }
+          }
+        }
         // 后台通知 - 从最后一条 AI 消息获取内容
         {
           const messages = this.messages.get(sessionId)
