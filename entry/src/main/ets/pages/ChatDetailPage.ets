@@ -438,6 +438,7 @@ struct ChatDetailPage {
         break
 
       case 'tool_result':
+        this.messageUpdateCounter++
         break
 
       case 'message_complete':
