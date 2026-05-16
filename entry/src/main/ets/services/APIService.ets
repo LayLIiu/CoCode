@@ -15,6 +15,20 @@ export class WorkDirRequest {
   workDir: string = ''
 }
 
+export class FsEntry {
+  name: string = ''
+  fullPath: string = ''
+  isDir: boolean = false
+  isExpanded: boolean = false
+  children: FsEntry[] | null = null
+
+  constructor(name: string, fullPath: string, isDir: boolean) {
+    this.name = name
+    this.fullPath = fullPath
+    this.isDir = isDir
+  }
+}
+
 export class InspectResult {
   percentage: number = 0
   model: string = ''
@@ -367,6 +381,30 @@ export class APIService {
       if (typeof estMap['model'] === 'string') result.model = estMap['model'] as string
     }
     return result
+  }
+
+  // MARK: - 文件系统 API
+
+  async browseDirectory(dirPath: string): Promise<FsEntry[]> {
+    try {
+      const res = await this.request<Object>('/api/filesystem/browse?includeFiles=true&path=' + encodeURIComponent(dirPath), 'GET', '')
+      const raw = JSON.stringify(res)
+      const parsed = JSON.parse(raw) as Record<string, Object>
+      const entries = parsed['entries']
+      if (Array.isArray(entries)) {
+        const result: FsEntry[] = []
+        for (let i = 0; i < entries.length; i++) {
+          const e = entries[i] as Record<string, Object>
+          result.push(new FsEntry(
+            String(e['name'] || ''),
+            String(e['path'] || ''),
+            e['isDirectory'] === true
+          ))
+        }
+        return result
+      }
+    } catch (e) { /* ignore */ }
+    return []
   }
 
   // MARK: - 私有方法
