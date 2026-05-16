@@ -4,7 +4,7 @@
  */
 
 import { Theme } from '../common/Theme'
-import { Message, Session, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus, AttachmentRef } from '../models/Models'
+import { Message, Session, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus, AttachmentRef, QuestionOption } from '../models/Models'
 import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import { sessionStore } from '../stores/SessionStore'
@@ -1659,6 +1659,46 @@ struct ChatDetailPage {
     .padding(Theme.SpacingLG)
     .backgroundColor(Theme.BackgroundSecondary)
     .borderRadius(Theme.RadiusMedium)
+  }
+
+  private getQuestionTitle(message: Message): string {
+    if (message.questions && message.questions.length > 0) {
+      const q = message.questions[0]
+      return q.header || '请选择'
+    }
+    return '请选择'
+  }
+
+  private getQuestionContent(message: Message): string {
+    if (message.questions && message.questions.length > 0) {
+      return message.questions[0].question || message.content
+    }
+    return message.content
+  }
+
+  private hasQuestionOptions(message: Message): boolean {
+    if (message.questions && message.questions.length > 0) {
+      const q = message.questions[0]
+      return !!(q.options && q.options.length > 0)
+    }
+    return !!(message.options && message.options.length > 0)
+  }
+
+  private getQuestionOptions(message: Message): string[] {
+    if (message.questions && message.questions.length > 0) {
+      const q = message.questions[0]
+      if (q.options && q.options.length > 0) {
+        return q.options.map((opt: QuestionOption): string => opt.label || '')
+      }
+    }
+    return message.options || []
+  }
+
+  private isQuestionMultiSelect(message: Message): boolean {
+    if (message.questions && message.questions.length > 0) {
+      return !!message.questions[0].multiSelect
+    }
+    return false
   }
 
   @Builder

@@ -71,6 +71,7 @@ export interface Message {
   options?: string[]
   selectedAnswer?: string
   isQuestionAnswered?: boolean
+  questions?: QuestionItem[]
 
   // 任务列表
   tasks?: TaskItem[]
