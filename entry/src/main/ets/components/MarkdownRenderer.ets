@@ -445,7 +445,7 @@ export struct MarkdownRenderer {
         Blank()
         SymbolGlyph($r('sys.symbol.doc_text')).fontSize(11).fontColor(['#FFFFFF99'])
       }
-      .width('100%').padding({ left: 12, right: 12, top: 8, bottom: 8 }).backgroundColor('#1E1E1E')
+      .width('100%').padding({ left: 12, right: 12, top: 8, bottom: 8 })
       .borderRadius({ topLeft: 8, topRight: 8 })
       .onClick(() => { this.copyCode(node.code) })
 
@@ -472,7 +472,7 @@ export struct MarkdownRenderer {
         .onClick(() => { this.expandedCodeIdx = idx })
       }
     }
-    .width('100%').backgroundColor('#1A1A1A').borderRadius(8).margin({ top: 4, bottom: 4 }).clip(true)
+    .width('100%').borderRadius(8).margin({ top: 4, bottom: 4 }).clip(true)
   }
 
   private shouldCollapseCode(node: MDNode): boolean {
@@ -519,16 +519,11 @@ export struct MarkdownRenderer {
             .layoutWeight(1).padding({ left: 8, right: 8, top: 6, bottom: 6 })
           }, (cell: TableCell, ci: number) => `tc-${ri}-${ci}`)
         }
-        .width('100%').backgroundColor(this.getRowBg(ri, row.isHeader))
+        .width('100%')
       }, (row: TableRow, ri: number) => `tr-${ri}`)
     }
     .width('100%').border({ width: 0.5, color: '#FFFFFF1A' }).borderRadius(8)
     .margin({ top: 4, bottom: 4 }).clip(true)
-  }
-
-  private getRowBg(ri: number, isHeader: boolean): string {
-    if (isHeader) return '#FFFFFF14'
-    return ri % 2 === 0 ? '#FFFFFF0A' : '#FFFFFF05'
   }
 
   // ── 图片 ──
@@ -640,7 +635,7 @@ export struct MarkdownRenderer {
   @Builder
   BlockquoteView(node: MDNode) {
     Row({ space: 8 }) {
-      Column().width(3).height('100%').backgroundColor('#FFFFFF4D').borderRadius(2)
+      Column().width(3).height('100%').backgroundColor(Theme.TextSecondary).borderRadius(2)
       Text(node.text).fontSize(15).fontStyle(FontStyle.Italic).fontColor(Theme.TextSecondary).layoutWeight(1)
     }
     .width('100%').padding({ left: 4 }).margin({ top: 4, bottom: 4 })
