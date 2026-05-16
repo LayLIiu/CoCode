@@ -663,6 +663,7 @@ export class SessionStore {
               }
             }
           }
+          this.notifyMessagesChanged(sessionId)
         }
         break
 
@@ -685,6 +686,7 @@ export class SessionStore {
               }
             }
           }
+          this.notifyMessagesChanged(sessionId)
           const toolId = msg.toolUseId || 'tool-' + Date.now()
           const toolMessage: Message = {
             id: toolId,
@@ -719,6 +721,7 @@ export class SessionStore {
               }
             }
           }
+          this.notifyMessagesChanged(sessionId)
         }
         // 后台通知 - 从最后一条 AI 消息获取内容
         {
