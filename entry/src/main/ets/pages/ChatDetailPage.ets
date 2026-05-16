@@ -2002,7 +2002,7 @@ struct ChatDetailPage {
               // 文件图标
               Column({ space: 4 }) {
                 SymbolGlyph($r('sys.symbol.doc_text'))
-                  .fontSize(22).fontColor([Theme.AccentBlue])
+                  .fontSize(22).fontColor([Theme.TextSecondary])
                 Text(attachment.name || '文件')
                   .fontSize(8).fontColor(Theme.TextPrimary).maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis }).width(52).textAlign(TextAlign.Center)
