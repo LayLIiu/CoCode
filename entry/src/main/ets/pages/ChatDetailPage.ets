@@ -77,6 +77,10 @@ struct ChatDetailPage {
   @State sessionId: string = ''
   @State chatStatus: SessionStatus = 'idle'
   @State showMenu: boolean = false
+  @State showModelSheet: boolean = false
+  @State showSlashSheet: boolean = false
+  @State showPermSheet: boolean = false
+  @State showAttachSheet: boolean = false
   @State showSheet: boolean = false
   @State sheetType: string = ''
   @State models: ModelInfo[] = []
@@ -171,7 +175,10 @@ struct ChatDetailPage {
     this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
     // 恢复输入框草稿
     // 确保弹窗不会在进入页面时意外弹出
-    this.showSheet = false
+    this.showModelSheet = false
+    this.showSlashSheet = false
+    this.showPermSheet = false
+    this.showAttachSheet = false
 
     const draft = sessionStore.inputDrafts.get(this.sessionId)
     if (draft) {
@@ -300,7 +307,7 @@ struct ChatDetailPage {
     try {
       await apiService.setCurrentModel(modelId)
       this.currentModel = modelId
-      this.showSheet = false
+      this.showModelSheet = false
       this.showMenu = false
     } catch (e) {
       console.error(`[ChatDetailPage] Set model error: ${e}`)
@@ -310,7 +317,7 @@ struct ChatDetailPage {
   // 选择斜杠命令
   private selectSlashCommand(cmd: string): void {
     this.inputText = cmd + ' '
-    this.showSheet = false
+    this.showSlashSheet = false
     this.showMenu = false
   }
 
@@ -693,6 +700,9 @@ struct ChatDetailPage {
       .hideBackButton(false)
       .backgroundColor('#121214')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+      .bindSheet($$this.showModelSheet, this.ModelSelectorSheet(), {
+        height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+      })
 
       // 工作状态行 & 连接指示器（标题栏下方独立浮动容器）
       Column() {
@@ -738,6 +748,9 @@ struct ChatDetailPage {
       .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
       .position({ x: 0, y: 88 })
       .zIndex(5)
+      .bindSheet($$this.showSlashSheet, this.SlashCommandsSheet(), {
+        height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+      })
 
       // 任务面板
       this.TaskBarView()
@@ -784,7 +797,13 @@ struct ChatDetailPage {
       .zIndex(2)
       .opacity(this.userIsViewingHistory ? 0.7 : 1.0)
       .animation({ duration: 300, curve: Curve.EaseInOut })
-      .clip(false)  // 禁用裁切，让按钮形变效果可以超出边界
+      .clip(false)
+      .bindSheet($$this.showPermSheet, this.PermissionSheet(), {
+        height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+      })
+      .bindSheet($$this.showAttachSheet, this.AttachmentActionSheet(), {
+        height: 200, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+      })  // 禁用裁切，让按钮形变效果可以超出边界
 
     // 菜单气泡 - 从按钮左下角扩散
       if (this.showMenu) {
@@ -797,13 +816,6 @@ struct ChatDetailPage {
     .backgroundColor('#121214')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .clip(false)
-    .bindSheet($$this.showSheet, this.sheetType === 'permission' ? this.PermissionSheet() : this.sheetType === 'model' ? this.ModelSelectorSheet() : this.sheetType === 'attachment' ? this.AttachmentActionSheet() : this.SlashCommandsSheet(), {
-      height: this.sheetType === 'attachment' ? 200 : 480,
-      backgroundColor: Theme.BackgroundSecondary,
-      dragBar: true,
-      showClose: false,
-      blurStyle: BlurStyle.COMPONENT_THICK
-    })
     .width('100%')
     .height('100%')
   }
@@ -1797,7 +1809,7 @@ struct ChatDetailPage {
               if (checked) {
                 this.currentPermissionMode = mode
                 sessionStore.changePermissionMode(mode)
-                this.showSheet = false
+                this.showPermSheet = false
               }
             })
         }
@@ -1989,7 +2001,7 @@ struct ChatDetailPage {
       .borderRadius(Theme.RadiusMedium)
       .border({ width: 0.5, color: Theme.GlassBorder })
       .onClick(() => {
-        this.showSheet = false
+        this.showAttachSheet = false
         this.pickPhotoFromGallery()
       })
     }
@@ -2031,8 +2043,7 @@ struct ChatDetailPage {
         .borderRadius(12)
         .onClick(() => {
           this.showMenu = false
-          this.sheetType = 'model'
-          this.showSheet = true
+          this.showModelSheet = true
           this.loadModels()
         })
 
@@ -2058,8 +2069,7 @@ struct ChatDetailPage {
         .borderRadius(12)
         .onClick(() => {
           this.showMenu = false
-          this.sheetType = 'slash'
-          this.showSheet = true
+          this.showSlashSheet = true
         })
 
         // 权限模式
@@ -2091,8 +2101,7 @@ struct ChatDetailPage {
         .borderRadius(12)
         .onClick(() => {
           this.showMenu = false
-          this.sheetType = 'permission'
-          this.showSheet = true
+          this.showPermSheet = true
         })
 
         // 发送图片
@@ -2117,8 +2126,7 @@ struct ChatDetailPage {
         .borderRadius(12)
         .onClick(() => {
           this.showMenu = false
-          this.sheetType = 'attachment'
-          this.showSheet = true
+          this.showAttachSheet = true
         })
       }
       .width(220)
