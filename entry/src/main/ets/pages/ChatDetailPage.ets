@@ -555,13 +555,16 @@ struct ChatDetailPage {
     }
   }
 
-  // HdsNavigation 菜单项
+  // HdsNavigation 右侧按钮
   private menus: Array<HdsNavigationBadgeIconOptions> = [
     {
       content: {
-        icon: $r('sys.symbol.ellipsis_circle'),
+        icon: $r('sys.symbol.folder'),
         action: () => {
-          this.showMenu = !this.showMenu
+          router.pushUrl({
+            url: 'pages/WorkspacePage',
+            params: { sessionId: this.sessionId }
+          })
         }
       }
     }
@@ -732,7 +735,7 @@ struct ChatDetailPage {
       Row({ space: 6 }) {
         this.ContextRing()
         if (this.chatStatus === 'idle' || this.chatStatus === 'completed') {
-          Text('休闲中').fontSize(11).fontColor(Theme.TextTertiary)
+          Text('休闲中').fontSize(11).fontColor(Theme.TextSecondary)
         } else {
           LoadingProgress().width(10).height(10).color(this.getStatusColor())
           Text(this.getStatusText()).fontSize(11).fontColor(this.getStatusColor())
