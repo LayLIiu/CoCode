@@ -128,7 +128,7 @@ struct ChatDetailPage {
 
   // Token 使用量
   @State tokenUsage: number = 0
-  @State @Watch('onContextUsageChange') contextUsage: number = 0
+  @State contextUsage: number = 0
 
   // 工作中计时（与 iOS StreamingStatusView 一致）
   @State elapsedSeconds: number = 0
@@ -1784,38 +1784,11 @@ struct ChatDetailPage {
 
   @Builder
   ContextRing() {
-    Canvas(this.contextRingCtx)
+    Progress({ value: this.contextUsage, total: 100, type: ProgressType.Ring })
       .width(14).height(14)
-      .onReady(() => { this.drawContextRing() })
-  }
-
-  private ringSettings: RenderingContextSettings = new RenderingContextSettings(true)
-  private contextRingCtx: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.ringSettings)
-
-  private drawContextRing(): void {
-    const ctx = this.contextRingCtx
-    const cx = 7, cy = 7, r = 5.5, w = 2
-    ctx.clearRect(0, 0, 14, 14)
-
-    // 背景环
-    ctx.beginPath()
-    ctx.arc(cx, cy, r, 0, Math.PI * 2)
-    ctx.strokeStyle = '#FFFFFF22'
-    ctx.lineWidth = w
-    ctx.stroke()
-
-    // 进度环
-    if (this.contextUsage > 0) {
-      const pct = Math.min(this.contextUsage, 100) / 100
-      const start = -Math.PI / 2
-      const end = start + Math.PI * 2 * pct
-      ctx.beginPath()
-      ctx.arc(cx, cy, r, start, end)
-      ctx.strokeStyle = this.getRingColor()
-      ctx.lineWidth = w
-      ctx.lineCap = 'round' as CanvasLineCap
-      ctx.stroke()
-    }
+      .color(this.getRingColor())
+      .backgroundColor('#FFFFFF33')
+      .style({ strokeWidth: 3 })
   }
 
   @Builder
@@ -2735,10 +2708,6 @@ struct ChatDetailPage {
   /**
    * 根据文件名猜测 MIME 类型
    */
-  private onContextUsageChange(): void {
-    this.drawContextRing()
-  }
-
   private getRingColor(): string {
     if (this.contextUsage >= 90) return '#FF3B30'
     if (this.contextUsage >= 75) return '#FF9500'
