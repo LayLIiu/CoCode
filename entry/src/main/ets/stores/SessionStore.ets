@@ -629,11 +629,24 @@ export class SessionStore {
         if (msg.state) {
           this.updateSessionStatusFromState(sessionId, msg.state)
         }
-        // 解析权限模式同步（verb: "permission_mode:bypassPermissions"）
-        if (msg.verb && msg.verb.startsWith('permission_mode:')) {
-          const mode = msg.verb.substring('permission_mode:'.length) as PermissionMode
-          this.sessionPermissionModes.set(sessionId, mode)
-          this.notifySessionsChanged()
+        // 解析权限模式/模型/努力度同步
+        if (msg.verb) {
+          if (msg.verb.startsWith('permission_mode:')) {
+            const mode = msg.verb.substring('permission_mode:'.length) as PermissionMode
+            this.sessionPermissionModes.set(sessionId, mode)
+            this.notifySessionsChanged()
+          } else if (msg.verb.startsWith('model_updated:')) {
+            const modelId = msg.verb.substring('model_updated:'.length)
+            console.info(`[SessionStore] Model synced: ${modelId}`)
+            // 触发 AppState 刷新模型列表
+            appState.fetchModels()
+            appState.getCurrentModel()
+          } else if (msg.verb.startsWith('effort_updated:')) {
+            const level = msg.verb.substring('effort_updated:'.length)
+            appState.setEffortLevel(level)
+            // 触发刷新服务端值
+            appState.fetchEffortOptions()
+          }
         }
         break
 
