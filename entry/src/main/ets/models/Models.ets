@@ -45,7 +45,7 @@ export interface Session {
 
 // MARK: - 消息
 
-export type MessageType = 'user' | 'assistant' | 'thinking' | 'tool_use' | 'tool_result' | 'permission_request' | 'question' | 'task_list'
+export type MessageType = 'user' | 'assistant' | 'thinking' | 'tool_use' | 'tool_result' | 'permission_request' | 'question' | 'task_list' | 'error' | 'system_notification' | 'system'
 
 export type ToolStatus = 'pending' | 'running' | 'completed' | 'failed'
 
@@ -144,11 +144,13 @@ export type WSMessageType =
   | 'session_title_updated'
   | 'task_list'
   | 'task_update'
+  | 'system_notification'
   | 'unknown'
 
 export interface WSMessage {
   type?: WSMessageType
   text?: string
+  message?: string
   blockType?: string
   toolName?: string
   toolUseId?: string

@@ -843,11 +843,29 @@ export class SessionStore {
         }
         break
 
-      case 'error':
-        if (msg.text) {
-          this.error = msg.text
+      case 'error': {
+        const errText: string = (msg.text as string) || (msg.message as string) || '未知错误'
+        this.error = errText
+        const errMsg: Message = {
+          id: 'err-' + Date.now(),
+          type: 'error',
+          content: errText,
+          timestamp: msg.timestamp || new Date().toISOString()
         }
+        this.addMessage(sessionId, errMsg)
         break
+      }
+      case 'system_notification': {
+        const sysText: string = (msg.text as string) || (msg.message as string) || ''
+        const sysMsg: Message = {
+          id: 'sys-' + Date.now(),
+          type: 'system',
+          content: sysText,
+          timestamp: msg.timestamp || new Date().toISOString()
+        }
+        this.addMessage(sessionId, sysMsg)
+        break
+      }
     }
   }
 

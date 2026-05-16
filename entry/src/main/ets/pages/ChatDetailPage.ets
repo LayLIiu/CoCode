@@ -950,6 +950,12 @@ struct ChatDetailPage {
           this.PermissionBubble(message)
         } else if (message.type === 'question') {
           this.QuestionBubble(message)
+        } else if (message.type === 'error') {
+          this.ErrorBubble(message)
+        } else if (message.type === 'system_notification' || message.type === 'system') {
+          this.SystemBubble(message)
+        } else if (message.type === 'task_list') {
+          this.TaskSummaryBubble(message)
         }
 
         if (message.type !== 'user') {
@@ -1653,6 +1659,69 @@ struct ChatDetailPage {
     .padding(Theme.SpacingLG)
     .backgroundColor(Theme.BackgroundSecondary)
     .borderRadius(Theme.RadiusMedium)
+  }
+
+  @Builder
+  ErrorBubble(message: Message) {
+    Column({ space: 8 }) {
+      Row({ space: 8 }) {
+        SymbolGlyph($r('sys.symbol.exclamationmark_triangle_fill'))
+          .fontSize(16).fontColor([Theme.ErrorColor])
+        Text('错误').fontSize(14).fontWeight(FontWeight.Bold).fontColor(Theme.ErrorColor)
+      }
+      if (message.content) {
+        Text(message.content).fontSize(13).fontColor(Theme.TextSecondary)
+      }
+    }
+    .width('100%').padding(14)
+    .backgroundColor(Theme.ErrorColor + '10')
+    .borderRadius(10).border({ width: 0.5, color: Theme.ErrorColor + '40' })
+  }
+
+  @Builder
+  SystemBubble(message: Message) {
+    Row() {
+      Text(message.content || '系统消息')
+        .fontSize(12).fontColor(Theme.TextTertiary)
+    }
+    .width('100%').justifyContent(FlexAlign.Center).padding({ top: 4, bottom: 4 })
+  }
+
+  @Builder
+  TaskSummaryBubble(message: Message) {
+    if (message.tasks && message.tasks.length > 0) {
+      Column({ space: 6 }) {
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
+            .fontSize(14).fontColor([Theme.AccentBlue])
+          Text('任务').fontSize(13).fontWeight(FontWeight.Bold).fontColor(Theme.TextPrimary)
+        }
+        Column({ space: 4 }) {
+          ForEach(message.tasks, (task: TaskItem, ti: number) => {
+            Row({ space: 6 }) {
+              if (task.status === 'completed') {
+                SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
+                  .fontSize(12).fontColor([Theme.SuccessColor])
+              } else if (task.status === 'in_progress') {
+                SymbolGlyph($r('sys.symbol.clock')).fontSize(12).fontColor([Theme.AccentBlue])
+              } else if (task.status === 'failed') {
+                SymbolGlyph($r('sys.symbol.xmark_circle_fill'))
+                  .fontSize(12).fontColor([Theme.ErrorColor])
+              } else {
+                SymbolGlyph($r('sys.symbol.circle')).fontSize(12).fontColor([Theme.TextTertiary])
+              }
+              Text(task.content)
+                .fontSize(12)
+                .fontColor(task.status === 'completed' ? Theme.TextTertiary : Theme.TextPrimary)
+                .decoration(task.status === 'completed' ? { type: TextDecorationType.LineThrough } : undefined)
+                .layoutWeight(1)
+            }.width('100%').alignItems(VerticalAlign.Center)
+          }, (task: TaskItem, ti: number) => `tsk-${ti}`)
+        }.width('100%')
+      }
+      .width('100%').padding(14)
+      .backgroundColor('#FFFFFF08').borderRadius(10)
+    }
   }
 
   @Builder
