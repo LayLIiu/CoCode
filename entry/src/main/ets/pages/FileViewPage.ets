@@ -16,6 +16,7 @@ struct FileViewPage {
   @State fileContent: string = ''
   @State isLoading: boolean = true
   @State sessionId: string = ''
+  @State readError: string = ''
 
   async aboutToAppear(): Promise<void> {
     const params = router.getParams() as Record<string, Object>
@@ -29,6 +30,9 @@ struct FileViewPage {
     }
     if (this.filePath) {
       this.fileContent = await apiService.readFileText(this.filePath)
+      if (!this.fileContent) {
+        this.readError = '无法读取该文件（二进制文件或不支持的文件类型）'
+      }
     }
     this.isLoading = false
   }
@@ -55,7 +59,14 @@ struct FileViewPage {
             if (this.isLoading) {
               Column() { LoadingProgress().width(30).height(30).color(Theme.PrimaryColor) }
                 .width('100%').height(300).justifyContent(FlexAlign.Center)
-            } else {
+            } else if (this.readError) {
+              Column({ space: 12 }) {
+                SymbolGlyph($r('sys.symbol.exclamationmark_triangle_fill'))
+                  .fontSize(32).fontColor([Theme.WarningColor])
+                Text(this.readError)
+                  .fontSize(14).fontColor(Theme.TextSecondary).textAlign(TextAlign.Center)
+              }.width('100%').height(200).justifyContent(FlexAlign.Center)
+            } else if (this.fileContent) {
               Text() {
                 Span(this.fileContent).fontSize(14).fontColor(Theme.TextPrimary).fontFamily('monospace')
               }

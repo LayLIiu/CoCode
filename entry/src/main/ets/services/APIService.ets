@@ -411,13 +411,11 @@ export class APIService {
 
   async readFileText(filePath: string): Promise<string> {
     try {
-      const url = this.baseUrl + '/api/filesystem/file?path=' + encodeURIComponent(filePath)
-      const httpReq = http.createHttp()
-      const resp = await httpReq.request(url, { method: http.RequestMethod.GET })
-      httpReq.destroy()
-      if (resp.responseCode === 200) {
-        return resp.result as string
-      }
+      const res = await this.request<Object>('/api/filesystem/read?path=' + encodeURIComponent(filePath), 'GET', '')
+      const raw = JSON.stringify(res)
+      const parsed = JSON.parse(raw) as Record<string, Object>
+      const content = parsed['content']
+      if (typeof content === 'string') return content
     } catch (e) { /* ignore */ }
     return ''
   }
