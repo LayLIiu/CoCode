@@ -235,7 +235,25 @@ struct ChatDetailPage {
       if (params['title']) {
         this.conversationTitle = params['title'] as string
       }
+      // 从工作区/文件查看页传来的附件
+      if (params['attachFile']) {
+        setTimeout(() => {
+          this.loadFileAsAttachment(params['attachFile'], params['attachFileName'] || 'file')
+        }, 500)
+      }
     }
+  }
+
+  private async loadFileAsAttachment(filePath: string, fileName: string): Promise<void> {
+    try {
+      const content = await apiService.readFileText(filePath)
+      if (content) {
+        this.inputText = '请查看这个文件:\n' + '```\n' + content.substring(0, 5000) + '\n```'
+        if (content.length > 5000) {
+          this.inputText += '\n[文件内容过长，已截断 ' + content.length + ' 字符]'
+        }
+      }
+    } catch (e) { /* ignore */ }
   }
 
   private async loadMessages(): Promise<void> {

@@ -161,6 +161,15 @@ struct WorkspacePage {
         .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
     }
     .width('100%').padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .onClick(() => { this.toggleDir(entry) })
+    .onClick(() => {
+      if (entry.isDir) {
+        this.toggleDir(entry)
+      } else {
+        router.pushUrl({
+          url: 'pages/FileViewPage',
+          params: { filePath: entry.fullPath, fileName: entry.name, sessionId: this.sessionId }
+        })
+      }
+    })
   }
 }

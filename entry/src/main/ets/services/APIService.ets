@@ -407,6 +407,21 @@ export class APIService {
     return []
   }
 
+  // MARK: - 文件读取 API
+
+  async readFileText(filePath: string): Promise<string> {
+    try {
+      const url = this.baseUrl + '/api/filesystem/file?path=' + encodeURIComponent(filePath)
+      const httpReq = http.createHttp()
+      const resp = await httpReq.request(url, { method: http.RequestMethod.GET })
+      httpReq.destroy()
+      if (resp.responseCode === 200) {
+        return resp.result as string
+      }
+    } catch (e) { /* ignore */ }
+    return ''
+  }
+
   // MARK: - 私有方法
 
   private async request<T>(path: string, method: string, body: string): Promise<T> {

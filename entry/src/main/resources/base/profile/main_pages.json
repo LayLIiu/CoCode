@@ -6,6 +6,7 @@
     "pages/ImportSessionPage",
     "pages/StorageManagementPage",
     "pages/ProvidersPage",
-    "pages/WorkspacePage"
+    "pages/WorkspacePage",
+    "pages/FileViewPage"
   ]
 }
