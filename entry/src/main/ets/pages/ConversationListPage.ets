@@ -20,176 +20,6 @@ class SessionGroup {
   sessions: Session[] = []
 }
 
-// 新建对话弹窗组件
-@Component
-struct NewSessionDialog {
-  @Link isVisible: boolean
-  @Prop tabType: TabType = TabType.CLAUDE
-  @State workDir: string = ''
-  @State recentDirs: string[] = []
-  @State isLoading: boolean = false
-
-  aboutToAppear(): void {
-    this.loadRecentDirs()
-  }
-
-  private async loadRecentDirs(): Promise<void> {
-    this.recentDirs = await storageService.loadRecentWorkDirs()
-  }
-
-  private async createSession(): Promise<void> {
-    if (!this.workDir.trim()) {
-      return
-    }
-
-    this.isLoading = true
-
-    const providerId = this.getProviderId()
-    const sessionId = await sessionStore.createSessionWithProvider(this.workDir.trim(), providerId)
-
-    this.isLoading = false
-
-    if (sessionId) {
-      this.isVisible = false
-      sessionStore.setCurrentSession(sessionId)
-      sessionStore.subscribeToSession(sessionId)
-
-      router.pushUrl({
-        url: 'pages/ChatDetailPage',
-        params: {
-          sessionId: sessionId,
-          title: '新对话'
-        }
-      })
-    }
-  }
-
-  private getProviderId(): string {
-    if (this.tabType === TabType.CLAUDE) {
-      return 'claude'
-    } else if (this.tabType === TabType.CODEX) {
-      return 'codex'
-    } else if (this.tabType === TabType.OPEN_CODE) {
-      return 'opencode'
-    }
-    return ''
-  }
-
-  private selectRecentDir(dir: string): void {
-    this.workDir = dir
-  }
-
-  build() {
-    if (this.isVisible) {
-      Column() {
-        Column() {
-          // 标题
-          Text('新建对话')
-            .fontSize(18)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Theme.TextPrimary)
-            .width('100%')
-            .textAlign(TextAlign.Center)
-            .margin({ bottom: 20 })
-
-          // 工作目录输入
-          Text('工作目录')
-            .fontSize(14)
-            .fontColor(Theme.TextSecondary)
-            .width('100%')
-            .margin({ bottom: 8 })
-
-          TextInput({ placeholder: '请输入项目路径', text: this.workDir })
-            .width('100%')
-            .height(44)
-            .backgroundColor(Theme.BackgroundTertiary)
-            .borderRadius(8)
-            .fontColor(Theme.TextPrimary)
-            .onChange((value: string) => {
-              this.workDir = value
-            })
-
-          // 最近使用
-          if (this.recentDirs.length > 0) {
-            Text('最近使用')
-              .fontSize(14)
-              .fontColor(Theme.TextSecondary)
-              .width('100%')
-              .margin({ top: 16, bottom: 8 })
-
-            Column({ space: 8 }) {
-              ForEach(this.recentDirs, (dir: string, index: number) => {
-                Row() {
-                  SymbolGlyph($r('sys.symbol.folder'))
-                    .fontSize(16)
-                    .fontColor([Theme.TextSecondary])
-
-                  Text(dir)
-                    .fontSize(14)
-                    .fontColor(Theme.TextPrimary)
-                    .margin({ left: 8 })
-                    .layoutWeight(1)
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                }
-                .width('100%')
-                .padding(12)
-                .backgroundColor(Theme.BackgroundTertiary)
-                .borderRadius(8)
-                .onClick(() => {
-                  this.selectRecentDir(dir)
-                })
-              }, (dir: string, index: number) => `dir-${index}`)
-            }
-            .width('100%')
-            .height(this.recentDirs.length > 3 ? 150 : this.recentDirs.length * 52)
-          }
-
-          // 按钮
-          Row({ space: 12 }) {
-            Button('取消')
-              .width('40%')
-              .height(44)
-              .fontSize(16)
-              .fontColor(Theme.TextPrimary)
-              .backgroundColor(Theme.BackgroundTertiary)
-              .borderRadius(8)
-              .onClick(() => {
-                this.isVisible = false
-              })
-
-            Button(this.isLoading ? '创建中...' : '创建')
-              .width('40%')
-              .height(44)
-              .fontSize(16)
-              .fontColor(Theme.TextOnPrimary)
-              .backgroundColor(this.workDir.trim() ? Theme.PrimaryColor : Theme.BackgroundTertiary)
-              .borderRadius(8)
-              .enabled(!this.isLoading && this.workDir.trim().length > 0)
-              .onClick(() => {
-                this.createSession()
-              })
-          }
-          .width('100%')
-          .justifyContent(FlexAlign.Center)
-          .margin({ top: 24 })
-        }
-        .width('85%')
-        .padding(24)
-        .backgroundColor(Theme.BackgroundSecondary)
-        .borderRadius(16)
-      }
-      .width('100%')
-      .height('100%')
-      .backgroundColor('rgba(0,0,0,0.5)')
-      .justifyContent(FlexAlign.Center)
-      .onClick(() => {
-        this.isVisible = false
-      })
-    }
-  }
-}
-
 // 会话项组件
 @Component
 struct SessionItemView {
@@ -328,6 +158,11 @@ export struct ConversationListPage {
   @State refreshTrigger: number = 0
   @State showNewSessionDialog: boolean = false
 
+  // 新建对话表单
+  @State sessionWorkDir: string = ''
+  @State sessionLoading: boolean = false
+  @State sessionRecentDirs: string[] = []
+
   private scroller: Scroller = new Scroller()
   private sessionsChangedListener: () => void = () => {}
   private statusChangedListener: (sessionId: string, status: SessionStatus) => void = () => {}
@@ -372,11 +207,46 @@ export struct ConversationListPage {
     } else {
       this.loadSessions()
     }
+
+    this.loadRecentDirs()
   }
 
   aboutToDisappear(): void {
     sessionStore.removeSessionsChangedListener(this.sessionsChangedListener)
     sessionStore.removeStatusChangedListener(this.statusChangedListener)
+  }
+
+  // MARK: - 新建对话
+
+  private async loadRecentDirs(): Promise<void> {
+    this.sessionRecentDirs = await storageService.loadRecentWorkDirs()
+  }
+
+  private async createSessionFromSheet(): Promise<void> {
+    if (!this.sessionWorkDir.trim()) return
+    this.sessionLoading = true
+
+    const providerId = this.getProviderId()
+    const sessionId = await sessionStore.createSessionWithProvider(this.sessionWorkDir.trim(), providerId)
+    this.sessionLoading = false
+
+    if (sessionId) {
+      this.showNewSessionDialog = false
+      this.sessionWorkDir = ''
+      sessionStore.setCurrentSession(sessionId)
+      sessionStore.subscribeToSession(sessionId)
+      router.pushUrl({
+        url: 'pages/ChatDetailPage',
+        params: { sessionId: sessionId, title: '新对话' }
+      })
+    }
+  }
+
+  private getProviderId(): string {
+    if (this.tabType === TabType.CLAUDE) return 'claude'
+    if (this.tabType === TabType.CODEX) return 'codex'
+    if (this.tabType === TabType.OPEN_CODE) return 'opencode'
+    return ''
   }
 
   private async loadSessions(): Promise<void> {
@@ -650,12 +520,11 @@ export struct ConversationListPage {
         .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
         .position({ x: 0, y: 96 })
 
-      // 新建对话弹窗
-      NewSessionDialog({
-        isVisible: $showNewSessionDialog,
-        tabType: this.tabType
-      })
+      // 新建对话弹窗改为 bindSheet
     }
+    .bindSheet($$this.showNewSessionDialog, this.NewSessionSheet(), {
+      height: 400, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+    })
     .width('100%')
     .height('100%')
     .backgroundColor('#121214')
@@ -710,5 +579,61 @@ export struct ConversationListPage {
     .height(300)
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
+  }
+
+  @Builder
+  NewSessionSheet() {
+    Column({ space: 4 }) {
+      Row() {
+        Text('新建对话')
+          .fontSize(18).fontWeight(FontWeight.Bold).fontColor(Theme.TextPrimary)
+          .layoutWeight(1).textAlign(TextAlign.Center)
+      }
+      .width('100%').padding({ bottom: 12 })
+
+      Text('工作目录').fontSize(14).fontColor(Theme.TextSecondary).width('100%')
+
+      TextInput({ placeholder: '请输入项目路径', text: this.sessionWorkDir })
+        .width('100%').height(44)
+        .backgroundColor(Theme.BackgroundTertiary).borderRadius(8)
+        .fontColor(Theme.TextPrimary).fontSize(15)
+        .onChange((value: string) => { this.sessionWorkDir = value })
+
+      // 最近使用目录
+      if (this.sessionRecentDirs.length > 0) {
+        Text('最近使用')
+          .fontSize(14).fontColor(Theme.TextSecondary).width('100%').margin({ top: 12, bottom: 8 })
+
+        Column({ space: 8 }) {
+          ForEach(this.sessionRecentDirs, (dir: string) => {
+            Row() {
+              SymbolGlyph($r('sys.symbol.folder')).fontSize(16).fontColor([Theme.TextSecondary])
+              Text(dir).fontSize(14).fontColor(Theme.TextPrimary)
+                .margin({ left: 8 }).layoutWeight(1).maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+            .width('100%').padding(12)
+            .backgroundColor(Theme.BackgroundTertiary).borderRadius(8)
+            .onClick(() => { this.sessionWorkDir = dir })
+          }, (dir: string) => `dir-${dir}`)
+        }
+        .width('100%').constraintSize({ maxHeight: 140 })
+      }
+
+      Row({ space: 12 }) {
+        Button('取消').width('40%').height(44).fontSize(16)
+          .fontColor(Theme.TextPrimary).backgroundColor(Theme.BackgroundTertiary).borderRadius(8)
+          .onClick(() => { this.showNewSessionDialog = false })
+
+        Button(this.sessionLoading ? '创建中...' : '创建').width('40%').height(44).fontSize(16)
+          .fontColor(Theme.TextOnPrimary)
+          .backgroundColor(this.sessionWorkDir.trim() ? Theme.PrimaryColor : Theme.BackgroundTertiary)
+          .borderRadius(8)
+          .enabled(!this.sessionLoading && this.sessionWorkDir.trim().length > 0)
+          .onClick(() => { this.createSessionFromSheet() })
+      }
+      .width('100%').justifyContent(FlexAlign.Center)
+    }
+    .width('100%').padding(Theme.SpacingLG)
   }
 }
