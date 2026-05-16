@@ -490,9 +490,6 @@ export class SessionStore {
     this.wsSubscribed = true
 
     console.info(`[SessionStore] Subscribed to ${this.sessions.length} sessions`)
-
-    // 请求所有会话的当前状态
-    this.requestAllSessionStatuses()
   }
 
   subscribeToSession(sessionId: string): void {
@@ -500,27 +497,9 @@ export class SessionStore {
     if (!serverUrl) return
 
     wsService.setServerUrl(serverUrl)
-    // 只连接该会话，不清理其他已连接的会话（否则会断开其他会话的 WS + 服务端 30s 后杀 CLI）
     wsService.addSubscription(sessionId)
     this.wsSubscribed = true
-
-    // 请求当前会话状态
-    const message: OutgoingMessage = {
-      type: 'get_status'
-    }
-    wsService.send(sessionId, message)
-    console.info(`[SessionStore] Subscribed and requested status for ${sessionId}`)
-  }
-
-  // 请求所有会话的状态
-  private requestAllSessionStatuses(): void {
-    for (let i = 0; i < this.sessions.length; i++) {
-      const sessionId = this.sessions[i].id
-      const message: OutgoingMessage = {
-        type: 'get_status'
-      }
-      wsService.send(sessionId, message)
-    }
+    console.info(`[SessionStore] Subscribed to ${sessionId}`)
   }
 
   disconnectAllSessions(): void {
@@ -628,11 +607,6 @@ export class SessionStore {
 
     // 忽略 connected 消息
     if (msg.type === 'connected') {
-      // 连接成功后请求状态
-      const statusMsg: OutgoingMessage = {
-        type: 'get_status'
-      }
-      wsService.send(sessionId, statusMsg)
       return
     }
 
