@@ -1218,7 +1218,12 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
+    .backgroundColor('rgba(255,255,255,0.04)')
     .borderRadius(10)
+    .border({
+      width: 0.5,
+      color: 'rgba(255,255,255,0.1)'
+    })
   }
 
   // 思考摘要
@@ -1373,7 +1378,12 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
+    .backgroundColor('rgba(255,255,255,0.06)')
     .borderRadius(10)
+    .border({
+      width: 0.5,
+      color: 'rgba(255,255,255,0.12)'
+    })
   }
 
   @Builder
