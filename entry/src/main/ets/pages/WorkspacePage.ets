@@ -16,6 +16,7 @@ struct WorkspacePage {
   @State rootPath: string = ''
   @State rootEntries: FsEntry[] = []
   @State isLoading: boolean = true
+  @State refreshKey: number = 0
 
   aboutToAppear(): void {
     const params = router.getParams() as Record<string, string>
@@ -47,7 +48,8 @@ struct WorkspacePage {
       entry.isExpanded = true
       entry.children = await apiService.browseDirectory(entry.fullPath)
     }
-    this.isLoading = false
+    // 复制数组引用触发 ForEach 重渲染
+    this.rootEntries = [...this.rootEntries]
   }
 
   build() {
@@ -86,9 +88,10 @@ struct WorkspacePage {
               Column({ space: 2 }) {
                 ForEach(this.rootEntries, (entry: FsEntry) => {
                   this.FileTreeItem(entry, 0)
-                }, (entry: FsEntry) => entry.fullPath)
+                }, (entry: FsEntry) => entry.fullPath + this.refreshKey)
               }
               .width('100%')
+              .key('tree-' + this.refreshKey)
             } else {
               Text('暂无文件').fontSize(14).fontColor(Theme.TextTertiary)
                 .width('100%').textAlign(TextAlign.Center).margin({ top: 40 })
