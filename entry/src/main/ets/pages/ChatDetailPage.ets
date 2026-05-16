@@ -707,7 +707,8 @@ struct ChatDetailPage {
       // 工作状态行 & 连接指示器（标题栏下方独立浮动容器）
       Column() {
         // 连接方式指示
-        Row({ space: 4 }) {
+        Row({ space: 6 }) {
+          this.ContextRing()
           SymbolGlyph(this.getConnectionIcon())
             .fontSize(9)
             .fontColor([this.getConnectionColor()])
@@ -733,12 +734,6 @@ struct ChatDetailPage {
               Text(this.formatElapsed(this.elapsedSeconds))
                 .fontSize(10)
                 .fontColor(Theme.TextTertiary)
-            }
-            if (this.contextUsage > 0) {
-              this.ContextRing()
-              Text(`${this.contextUsage}%`)
-                .fontSize(9)
-                .fontColor(this.getRingColor())
             }
           }
           .width('100%')
