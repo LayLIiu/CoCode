@@ -728,24 +728,9 @@ struct ChatDetailPage {
         height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
       })
 
-      // 工作状态行 & 连接指示器（标题栏下方独立浮动容器）
-      Column() {
-        // 连接方式指示
-        Row({ space: 6 }) {
-          this.ContextRing()
-          SymbolGlyph(this.getConnectionIcon())
-            .fontSize(9)
-            .fontColor([this.getConnectionColor()])
-          Text(this.getConnectionLabel())
-            .fontSize(9)
-            .fontColor(Theme.TextTertiary)
-        }
-        .width('100%')
-        .justifyContent(FlexAlign.Center)
-        .padding({ top: 0 })
-        .bindSheet($$this.showContextDetail, this.ContextDetailSheet(), {
-          height: 380, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
-        })
+      // 上下文使用率 & 工作状态（标题栏下方）
+      Column({ space: 2 }) {
+        this.ContextRing()
 
         // 工作状态
         if (this.chatStatus !== 'idle' && this.chatStatus !== 'completed') {
@@ -773,6 +758,9 @@ struct ChatDetailPage {
       .zIndex(5)
       .bindSheet($$this.showSlashSheet, this.SlashCommandsSheet(), {
         height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+      })
+      .bindSheet($$this.showContextDetail, this.ContextDetailSheet(), {
+        height: 380, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
       })
 
       // 任务面板
