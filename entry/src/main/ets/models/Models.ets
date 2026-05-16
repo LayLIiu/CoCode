@@ -53,6 +53,7 @@ export interface Message {
   id: string
   type: MessageType
   content: string
+  toolUseId?: string  // 用于匹配 tool_result
   timestamp: string
   toolName?: string
   toolInput?: Record<string, Object>

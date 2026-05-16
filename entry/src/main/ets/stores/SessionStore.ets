@@ -663,13 +663,25 @@ export class SessionStore {
         this.updateSessionStatus(sessionId, 'tool_executing')
 
         if (msg.toolName) {
+          // 把上一个正在运行的标记为完成
+          const msgs = this.messages.get(sessionId)
+          if (msgs) {
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].type === 'tool_use' && msgs[i].toolStatus === 'running') {
+                msgs[i].toolStatus = 'completed'
+                break
+              }
+            }
+          }
+          const toolId = msg.toolUseId || 'tool-' + Date.now()
           const toolMessage: Message = {
-            id: msg.toolUseId || 'tool-' + Date.now(),
+            id: toolId,
             type: 'tool_use',
             content: '',
             timestamp: new Date().toISOString(),
             toolName: msg.toolName,
             toolInput: msg.input,
+            toolUseId: toolId,
             toolStatus: 'running'
           }
           this.addMessage(sessionId, toolMessage)
@@ -940,7 +952,7 @@ export class SessionStore {
       return
     }
 
-    const index = messages.findIndex(m => m.id === toolUseId)
+    const index = messages.findIndex(m => m.id === toolUseId || m.toolUseId === toolUseId)
     if (index >= 0) {
       const resultString = typeof content === 'string' ? content : JSON.stringify(content)
       messages[index].toolResult = resultString
