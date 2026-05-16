@@ -798,9 +798,6 @@ struct ChatDetailPage {
       .opacity(this.userIsViewingHistory ? 0.7 : 1.0)
       .animation({ duration: 300, curve: Curve.EaseInOut })
       .clip(false)
-      .bindSheet($$this.showPermSheet, this.PermissionSheet(), {
-        height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
-      })
       .bindSheet($$this.showAttachSheet, this.AttachmentActionSheet(), {
         height: 200, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
       })  // 禁用裁切，让按钮形变效果可以超出边界
@@ -816,6 +813,9 @@ struct ChatDetailPage {
     .backgroundColor('#121214')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .clip(false)
+    .bindSheet($$this.showPermSheet, this.PermissionSheet(), {
+      height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+    })
     .width('100%')
     .height('100%')
   }
