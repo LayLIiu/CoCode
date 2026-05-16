@@ -15,6 +15,13 @@ export class WorkDirRequest {
   workDir: string = ''
 }
 
+export class InspectResult {
+  percentage: number = 0
+  model: string = ''
+  totalTokens: number = 0
+  maxTokens: number = 0
+}
+
 export class CreateSessionRequest {
   workDir: string = ''
   aiTool?: string
@@ -346,17 +353,20 @@ export class APIService {
 
   // MARK: - 上下文容量 API
 
-  async getContextUsage(sessionId: string): Promise<number> {
+  async getInspection(sessionId: string): Promise<InspectResult> {
+    const result = new InspectResult()
     const res = await this.request<Object>('/api/sessions/' + sessionId + '/inspection?contextOnly=1', 'GET', '')
     const raw = JSON.stringify(res)
     const parsed = JSON.parse(raw) as Record<string, Object>
     const estimate = parsed['contextEstimate']
     if (estimate) {
       const estMap = estimate as Record<string, Object>
-      const pct = estMap['percentage']
-      if (typeof pct === 'number') return pct
+      if (typeof estMap['percentage'] === 'number') result.percentage = estMap['percentage'] as number
+      if (typeof estMap['totalTokens'] === 'number') result.totalTokens = estMap['totalTokens'] as number
+      if (typeof estMap['maxTokens'] === 'number') result.maxTokens = estMap['maxTokens'] as number
+      if (typeof estMap['model'] === 'string') result.model = estMap['model'] as string
     }
-    return 0
+    return result
   }
 
   // MARK: - 私有方法

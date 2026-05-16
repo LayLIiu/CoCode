@@ -129,6 +129,10 @@ struct ChatDetailPage {
   // Token 使用量
   @State tokenUsage: number = 0
   @State contextUsage: number = 0
+  @State showContextDetail: boolean = false
+  @State contextModel: string = ''
+  @State contextTotal: number = 0
+  @State contextMax: number = 0
   private contextPollTimer: number = -1
 
   // 工作中计时（与 iOS StreamingStatusView 一致）
@@ -210,10 +214,15 @@ struct ChatDetailPage {
 
   private async fetchContextUsage(): Promise<void> {
     if (!this.sessionId) return
-    const pct = await apiService.getContextUsage(this.sessionId)
-    if (pct > 0) {
-      this.contextUsage = pct
-    }
+    try {
+      const res = await apiService.getInspection(this.sessionId)
+      if (res) {
+        if (res.percentage > 0) this.contextUsage = res.percentage
+        if (res.model) this.contextModel = res.model
+        this.contextTotal = res.totalTokens
+        this.contextMax = res.maxTokens
+      }
+    } catch (e) { /* ignore */ }
   }
 
   private getRouterParams(): void {
@@ -734,6 +743,9 @@ struct ChatDetailPage {
         .width('100%')
         .justifyContent(FlexAlign.Center)
         .padding({ top: 0 })
+        .bindSheet($$this.showContextDetail, this.ContextDetailSheet(), {
+          height: 380, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+        })
 
         // 工作状态
         if (this.chatStatus !== 'idle' && this.chatStatus !== 'completed') {
@@ -1799,6 +1811,64 @@ struct ChatDetailPage {
       .width(22).height(22)
     }
     .alignItems(VerticalAlign.Center)
+    .onClick(() => {
+      this.showContextDetail = true
+      this.fetchContextUsage()
+    })
+  }
+
+  // 上下文详情 Sheet
+  @Builder
+  ContextDetailSheet() {
+    Column({ space: 12 }) {
+      Row() {
+        Text('上下文使用量')
+          .fontSize(18).fontWeight(FontWeight.Bold).fontColor(Theme.TextPrimary)
+          .layoutWeight(1).textAlign(TextAlign.Center)
+      }.width('100%').padding({ bottom: 4 })
+
+      // 模型名称
+      if (this.contextModel) {
+        Text('模型: ' + this.contextModel)
+          .fontSize(13).fontColor(Theme.TextSecondary).width('100%')
+      }
+
+      // 用量
+      Row({ space: 12 }) {
+        Column({ space: 2 }) {
+          Text(this.formatTokens(this.contextTotal))
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Theme.TextPrimary)
+          Text('已用').fontSize(10).fontColor(Theme.TextTertiary)
+        }.alignItems(HorizontalAlign.Center)
+
+        Column({ space: 2 }) {
+          Text(this.formatTokens(this.contextMax - this.contextTotal))
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Theme.SuccessColor)
+          Text('剩余').fontSize(10).fontColor(Theme.TextTertiary)
+        }.alignItems(HorizontalAlign.Center)
+
+        Column({ space: 2 }) {
+          Text(this.formatTokens(this.contextMax))
+            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Theme.TextSecondary)
+          Text('上限').fontSize(10).fontColor(Theme.TextTertiary)
+        }.alignItems(HorizontalAlign.Center)
+      }
+      .width('100%').justifyContent(FlexAlign.SpaceAround).padding({ top: 8, bottom: 8 })
+
+      // 圆环
+      Row({ space: 12 }) {
+        Progress({ value: this.contextUsage, total: 100, type: ProgressType.Ring })
+          .width(60).height(60).color(this.getRingColor()).backgroundColor('#333333')
+          .style({ strokeWidth: 8 })
+      }.width('100%').justifyContent(FlexAlign.Center)
+    }
+    .width('100%').padding(Theme.SpacingLG)
+  }
+
+  private formatTokens(count: number): string {
+    if (count >= 1000000) return (count / 1000000).toFixed(1) + 'M'
+    if (count >= 1000) return (count / 1000).toFixed(1) + 'K'
+    return count.toString()
   }
 
   @Builder
