@@ -1215,16 +1215,10 @@ struct ChatDetailPage {
         .height(Math.max(100, Math.min(400, message.content ? message.content.split('\n').length * 22 : 200)))
         .scrollBar(BarState.Off)
         .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-        .backgroundColor('rgba(255,255,255,0.02)')
       }
     }
     .width('100%')
-    .backgroundColor('rgba(255,255,255,0.04)')
     .borderRadius(10)
-    .border({
-      width: 0.5,
-      color: 'rgba(255,255,255,0.1)'
-    })
   }
 
   // 思考摘要
@@ -1290,16 +1284,9 @@ struct ChatDetailPage {
       // Header
       Row({ space: 8 }) {
         // 图标
-        Column() {
-          SymbolGlyph(getToolIcon(message.toolName || 'Tool').symbol)
-            .fontSize(12)
-            .fontColor([getToolIcon(message.toolName || 'Tool').color])
-        }
-        .width(24)
-        .height(24)
-        .backgroundColor(getToolIcon(message.toolName || 'Tool').color + '20')
-        .borderRadius(6)
-        .justifyContent(FlexAlign.Center)
+        SymbolGlyph(getToolIcon(message.toolName || 'Tool').symbol)
+          .fontSize(14)
+          .fontColor([getToolIcon(message.toolName || 'Tool').color])
 
         // 工具名
         Text(getToolIcon(message.toolName || 'Tool').label.toUpperCase())
@@ -1386,12 +1373,7 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
-    .backgroundColor('rgba(255,255,255,0.06)')
     .borderRadius(10)
-    .border({
-      width: 0.5,
-      color: 'rgba(255,255,255,0.12)'
-    })
   }
 
   @Builder
@@ -1801,7 +1783,7 @@ struct ChatDetailPage {
           .backgroundColor('#333333')
           .style({ strokeWidth: 4 })
         Text(`${this.contextUsage}%`)
-          .fontSize(6).fontColor(Theme.TextTertiary).lineHeight(7)
+          .fontSize(6).fontColor(Theme.TextPrimary).lineHeight(7)
       }
       .width(22).height(22)
     }
