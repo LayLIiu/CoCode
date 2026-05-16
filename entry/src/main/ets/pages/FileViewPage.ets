@@ -38,6 +38,7 @@ struct FileViewPage {
   }
 
   private addToChat(): void {
+    router.clear()
     router.pushUrl({
       url: 'pages/ChatDetailPage',
       params: {
