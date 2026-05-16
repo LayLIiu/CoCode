@@ -1779,9 +1779,13 @@ struct ChatDetailPage {
 
   @Builder
   ContextRing() {
-    Progress({ value: this.contextUsage, total: 100, type: ProgressType.Ring })
-      .width(18).height(18).color(this.getRingColor()).backgroundColor('#FFFFFF22')
-      .style({ strokeWidth: 4 })
+    Row({ space: 3 }) {
+      Circle().width(8).height(8).fill(this.getRingColor())
+      Text(`${this.contextUsage}%`)
+        .fontSize(10).fontFamily('monospace').fontWeight(FontWeight.Bold)
+        .fontColor(this.getRingColor()).lineHeight(12)
+    }
+    .alignItems(VerticalAlign.Center)
   }
 
   @Builder
