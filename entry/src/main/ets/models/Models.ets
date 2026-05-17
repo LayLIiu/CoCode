@@ -147,6 +147,9 @@ export type WSMessageType =
   | 'task_list'
   | 'task_update'
   | 'system_notification'
+  | 'sessions_updated'
+  | 'session_activated'
+  | 'session_status_changed'
   | 'unknown'
 
 export interface WSMessage {

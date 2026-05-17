@@ -98,6 +98,11 @@ export class SessionStore {
       this.handleWSMessage(sessionId, message)
     })
 
+    // 设置全局 WebSocket 消息处理器（桌面→移动端同步）
+    wsService.setGlobalMessageHandler((message: WSMessage) => {
+      this.handleGlobalWSMessage(message)
+    })
+
     // 加载本地缓存的会话数据
     this.loadLocalData()
   }
@@ -487,9 +492,10 @@ export class SessionStore {
 
     wsService.setServerUrl(serverUrl)
     wsService.subscribeToSessions(this.sessions.map(s => s.id))
+    wsService.connectGlobal()
     this.wsSubscribed = true
 
-    console.info(`[SessionStore] Subscribed to ${this.sessions.length} sessions`)
+    console.info(`[SessionStore] Subscribed to ${this.sessions.length} sessions, global WS connected`)
   }
 
   subscribeToSession(sessionId: string): void {
@@ -498,8 +504,9 @@ export class SessionStore {
 
     wsService.setServerUrl(serverUrl)
     wsService.addSubscription(sessionId)
+    wsService.connectGlobal()
     this.wsSubscribed = true
-    console.info(`[SessionStore] Subscribed to ${sessionId}`)
+    console.info(`[SessionStore] Subscribed to ${sessionId}, global WS connected`)
   }
 
   disconnectAllSessions(): void {
@@ -897,6 +904,34 @@ export class SessionStore {
         this.addMessage(sessionId, sysMsg)
         break
       }
+    }
+  }
+
+  // MARK: - 全局 WebSocket 消息处理（桌面→移动端同步）
+
+  private handleGlobalWSMessage(msg: WSMessage): void {
+    console.info(`[SessionStore] Global WS msg: ${msg.type}`)
+
+    switch (msg.type) {
+      case 'sessions_updated':
+        this.fetchSessions().catch((e: Error) => {
+          console.error(`[SessionStore] fetchSessions on global event error: ${e.message}`)
+        })
+        break
+
+      case 'session_activated':
+        if (msg.sessionId) {
+          console.info(`[SessionStore] New session activated: ${msg.sessionId}`)
+          this.subscribeToSession(msg.sessionId)
+        }
+        break
+
+      case 'session_status_changed':
+        if (msg.sessionId && msg.state) {
+          console.info(`[SessionStore] Session status changed: ${msg.sessionId} -> ${msg.state}`)
+          this.updateSessionStatusFromState(msg.sessionId, msg.state)
+        }
+        break
     }
   }
 

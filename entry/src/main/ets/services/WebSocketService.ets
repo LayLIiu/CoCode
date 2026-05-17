@@ -24,6 +24,9 @@ export class WebSocketService {
   private reconnectTimers: Map<string, number> = new Map()
   private heartbeatTimer: number = -1
   private cleanupTimer: number = -1
+  private globalConn: WSSessionConnection | null = null
+  private globalMsgHandler: ((msg: WSMessage) => void) | null = null
+  private globalReconnectTimer: number = -1
 
   static getInstance(): WebSocketService {
     if (!WebSocketService.instance) {
@@ -34,6 +37,10 @@ export class WebSocketService {
 
   setMessageHandler(handler: WSMessageHandler): void {
     this.messageHandler = handler
+  }
+
+  setGlobalMessageHandler(handler: (msg: WSMessage) => void): void {
+    this.globalMsgHandler = handler
   }
 
   setServerUrl(url: string): void {
@@ -96,31 +103,7 @@ export class WebSocketService {
       return
     }
 
-    let wsUrl = this.serverUrl
-
-    // 移除协议前缀
-    if (wsUrl.startsWith('https://')) {
-      wsUrl = wsUrl.substring(8)
-    } else if (wsUrl.startsWith('http://')) {
-      wsUrl = wsUrl.substring(7)
-    }
-
-    // 处理 host:port:token 格式
-    const colonCount = this.countChar(wsUrl, ':')
-    if (colonCount >= 2) {
-      const parts = wsUrl.split(':')
-      if (parts.length >= 2) {
-        wsUrl = parts[0] + ':' + parts[1]
-      }
-    }
-
-    // 判断使用 ws:// 还是 wss://
-    const isSecure = this.serverUrl.startsWith('https://') ||
-      wsUrl.includes('.tunnel.') ||
-      wsUrl.includes('trycloudflare') ||
-      wsUrl.includes('loca.lt')
-
-    wsUrl = (isSecure ? 'wss://' : 'ws://') + wsUrl + '/ws/' + sessionId
+    const wsUrl = this.buildWsUrl('/ws/' + sessionId)
 
     console.info(`[WS] Connecting to ${wsUrl}`)
 
@@ -177,6 +160,177 @@ export class WebSocketService {
     })
   }
 
+  private buildWsUrl(pathSuffix: string): string {
+    if (!this.serverUrl) return ''
+
+    let wsUrl = this.serverUrl
+
+    if (wsUrl.startsWith('https://')) {
+      wsUrl = wsUrl.substring(8)
+    } else if (wsUrl.startsWith('http://')) {
+      wsUrl = wsUrl.substring(7)
+    }
+
+    const colonCount = this.countChar(wsUrl, ':')
+    if (colonCount >= 2) {
+      const parts = wsUrl.split(':')
+      if (parts.length >= 2) {
+        wsUrl = parts[0] + ':' + parts[1]
+      }
+    }
+
+    const isSecure = this.serverUrl.startsWith('https://') ||
+      wsUrl.includes('.tunnel.') ||
+      wsUrl.includes('trycloudflare') ||
+      wsUrl.includes('loca.lt')
+
+    return (isSecure ? 'wss://' : 'ws://') + wsUrl + pathSuffix
+  }
+
+  connectGlobal(): void {
+    if (!this.serverUrl) {
+      console.error('[WS-Global] serverUrl is empty')
+      return
+    }
+
+    if (this.globalConn && this.globalConn.status === 'connected' && this.globalConn.ws) {
+      console.info('[WS-Global] Already connected')
+      return
+    }
+
+    const wsUrl = this.buildWsUrl('/ws/global')
+    console.info(`[WS-Global] Connecting to ${wsUrl}`)
+
+    const ws = webSocket.createWebSocket()
+    const conn = new WSSessionConnection()
+    conn.ws = ws
+    conn.status = 'connecting'
+    conn.lastActivity = Date.now()
+
+    if (!this.globalConn) {
+      conn.reconnectAttempts = 0
+    } else {
+      conn.reconnectAttempts = this.globalConn.reconnectAttempts
+    }
+
+    this.globalConn = conn
+
+    ws.connect(wsUrl, (err, value) => {
+      if (err) {
+        console.error(`[WS-Global] Connect failed: ${err.message}`)
+        this.handleGlobalDisconnect()
+        return
+      }
+      console.info('[WS-Global] Connected')
+      if (this.globalConn) {
+        this.globalConn.status = 'connected'
+        this.globalConn.reconnectAttempts = 0
+      }
+      this.startGlobalReceiving(ws)
+    })
+
+    ws.on('close', (err, value) => {
+      console.info('[WS-Global] Connection closed')
+      if (this.globalConn && this.globalConn.ws === ws) {
+        this.handleGlobalDisconnect()
+      }
+    })
+
+    ws.on('error', (err) => {
+      console.error(`[WS-Global] Error: ${err.message}`)
+      if (this.globalConn && this.globalConn.ws === ws) {
+        this.globalConn.status = 'error'
+        this.scheduleGlobalReconnect()
+      }
+    })
+  }
+
+  disconnectGlobal(): void {
+    if (this.globalConn && this.globalConn.ws) {
+      this.globalConn.ws.close((err) => {
+        if (err) {
+          console.error(`[WS-Global] Close error: ${err.message}`)
+        }
+      })
+    }
+    this.globalConn = null
+    if (this.globalReconnectTimer >= 0) {
+      clearTimeout(this.globalReconnectTimer)
+      this.globalReconnectTimer = -1
+    }
+  }
+
+  private startGlobalReceiving(ws: webSocket.WebSocket): void {
+    ws.on('message', (err, value) => {
+      if (err) {
+        console.error(`[WS-Global] Receive error: ${err.message}`)
+        return
+      }
+
+      let text = ''
+      if (typeof value === 'string') {
+        text = value
+      } else if (typeof value === 'object' && value !== null) {
+        text = String(value)
+      }
+
+      if (text) {
+        this.handleGlobalMessage(text)
+      }
+    })
+  }
+
+  private handleGlobalMessage(text: string): void {
+    console.info(`[WS-Global] Received: ${text.substring(0, 200)}`)
+
+    try {
+      const json = JSON.parse(text) as WSMessage
+
+      if (this.globalMsgHandler) {
+        this.globalMsgHandler(json)
+      }
+    } catch (e) {
+      console.error(`[WS-Global] Parse error: ${e}`)
+    }
+
+    if (this.globalConn) {
+      this.globalConn.lastActivity = Date.now()
+      this.globalConn.reconnectAttempts = 0
+    }
+  }
+
+  private handleGlobalDisconnect(): void {
+    if (this.globalConn) {
+      this.globalConn.status = 'disconnected'
+      this.globalConn.ws = null
+    }
+    this.scheduleGlobalReconnect()
+  }
+
+  private scheduleGlobalReconnect(): void {
+    if (!this.globalConn) {
+      return
+    }
+
+    if (this.globalConn.reconnectAttempts >= 5) {
+      console.info('[WS-Global] Max reconnect attempts')
+      return
+    }
+
+    this.globalConn.reconnectAttempts++
+    const delay = Math.min(1000 * Math.pow(2, this.globalConn.reconnectAttempts), 10000)
+
+    console.info(`[WS-Global] Reconnecting in ${delay}ms`)
+
+    if (this.globalReconnectTimer >= 0) {
+      clearTimeout(this.globalReconnectTimer)
+    }
+
+    this.globalReconnectTimer = setTimeout(() => {
+      this.connectGlobal()
+    }, delay)
+  }
+
   private countChar(str: string, char: string): number {
     let count = 0
     for (let i = 0; i < str.length; i++) {
@@ -210,6 +364,7 @@ export class WebSocketService {
     this.connections.forEach((_, sessionId) => {
       this.disconnectSession(sessionId)
     })
+    this.disconnectGlobal()
     // 停止定时器
     if (this.heartbeatTimer >= 0) {
       clearInterval(this.heartbeatTimer)
@@ -610,6 +765,10 @@ export class WebSocketService {
       // 建立新连接
       this.connectSession(sessionId)
     })
+
+    // 重连全局 WS
+    this.disconnectGlobal()
+    this.connectGlobal()
 
     // 重启心跳
     this.startHeartbeat()
