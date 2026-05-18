@@ -446,3 +446,20 @@ export interface TunnelResponse {
   tunnelUrl?: string
   error?: string
 }
+
+// MARK: - mDNS 发现
+
+export interface DiscoveredServer {
+  id: string
+  name: string
+  ip: string
+  port: number
+  url: string
+  host: string
+}
+
+export interface ServerDiscoverListener {
+  onServerFound: (server: DiscoveredServer) => void
+  onServerLost: (serverId: string) => void
+  onSearchStateChange: (isSearching: boolean) => void
+}

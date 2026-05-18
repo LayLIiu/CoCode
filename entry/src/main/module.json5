@@ -52,6 +52,10 @@
         "reason": "$string:internet_permission"
       },
       {
+        "name": "ohos.permission.GET_WIFI_INFO",
+        "reason": "$string:wifi_permission"
+      },
+      {
         "name": "ohos.permission.SYSTEM_FLOAT_WINDOW",
         "reason": "$string:float_window_permission"
       },

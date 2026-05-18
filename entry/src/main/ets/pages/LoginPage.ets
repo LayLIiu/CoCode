@@ -4,11 +4,13 @@
  */
 
 import router from '@ohos.router'
+import { Context } from '@ohos.ability.common'
 import { Theme } from '../common/Theme'
 import { authStore } from '../stores/AuthStore'
 import { apiService } from '../services/APIService'
 import { wsService } from '../services/WebSocketService'
-import { User } from '../models/Models'
+import { User, DiscoveredServer } from '../models/Models'
+import { mdnsDiscoveryService } from '../services/MdnsDiscoveryService'
 
 type ConnectionMode = 'pairing' | 'manual'
 
@@ -20,6 +22,16 @@ export struct LoginPage {
   @State serverUrl: string = ''
   @State isConnecting: boolean = false
   @State errorMessage: string = ''
+  @State discoveredServers: DiscoveredServer[] = []
+  @State isSearching: boolean = false
+
+  aboutToAppear(): void {
+    this.startDiscovery()
+  }
+
+  aboutToDisappear(): void {
+    mdnsDiscoveryService.stopDiscovery()
+  }
 
   build() {
     Column() {
@@ -28,6 +40,9 @@ export struct LoginPage {
 
       // 模式切换
       this.ModeSwitch()
+
+      // 发现服务器列表
+      this.DiscoveredServersSection()
 
       // 输入区域
       if (this.mode === 'pairing') {
@@ -263,6 +278,95 @@ export struct LoginPage {
 
   // MARK: - 连接逻辑
 
+  private startDiscovery(): void {
+    try {
+      mdnsDiscoveryService.setListener({
+        onServerFound: (server: DiscoveredServer) => {
+          // 去重
+          const exists = this.discoveredServers.some(s => s.id === server.id)
+          if (!exists) {
+            this.discoveredServers = [...this.discoveredServers, server]
+          }
+        },
+        onServerLost: (serverId: string) => {
+          this.discoveredServers = this.discoveredServers.filter(s => s.id !== serverId)
+        },
+        onSearchStateChange: (searching: boolean) => {
+          this.isSearching = searching
+        }
+      })
+      mdnsDiscoveryService.startDiscovery(getContext(this) as Context)
+    } catch (e) {
+      console.error('[Login] mDNS discovery start error:', e)
+    }
+  }
+
+  @Builder
+  DiscoveredServersSection() {
+    Column() {
+      if (this.discoveredServers.length > 0 || this.isSearching) {
+        Text('发现服务器')
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Theme.TextPrimary)
+          .width('85%')
+          .margin({ bottom: 8 })
+
+        if (this.isSearching && this.discoveredServers.length === 0) {
+          Text('正在扫描局域网...')
+            .fontSize(12)
+            .fontColor(Theme.TextTertiary)
+            .margin({ bottom: 8 })
+        }
+
+        ForEach(this.discoveredServers, (server: DiscoveredServer) => {
+          Column() {
+            Row({ space: 12 }) {
+              SymbolGlyph($r('sys.symbol.laptopcomputer'))
+                .fontSize(32)
+                .fontColor([Theme.AccentGreen])
+
+              Column({ space: 4 }) {
+                Text(server.name)
+                  .fontSize(14)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Theme.TextPrimary)
+                  .lineHeight(18)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+                Text(server.ip)
+                  .fontSize(12)
+                  .fontColor(Theme.TextSecondary)
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+
+              SymbolGlyph($r('sys.symbol.chevron_forward'))
+                .fontSize(14)
+                .fontColor([Theme.TextTertiary])
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Center)
+            .padding(12)
+          }
+          .width('85%')
+          .backgroundColor(Theme.GlassBackground)
+          .borderRadius(12)
+          .border({ width: 0.5, color: Theme.GlassBorder })
+          .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
+          .margin({ bottom: 8 })
+          .onClick(() => {
+            this.connectManual(server.url)
+          })
+        }, (server: DiscoveredServer) => server.id)
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Center)
+    .margin({ bottom: 16 })
+  }
+
   private async connectWithPairingCode(): Promise<void> {
     const input = this.pairingCode.trim()
     if (!input) return
@@ -349,8 +453,8 @@ export struct LoginPage {
     this.isConnecting = false
   }
 
-  private async connectManual(): Promise<void> {
-    let url = this.serverUrl.trim()
+  private async connectManual(inputUrl?: string): Promise<void> {
+    let url = (inputUrl || this.serverUrl).trim()
     if (!url) return
 
     this.isConnecting = true

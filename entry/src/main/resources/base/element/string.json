@@ -33,6 +33,10 @@
       "value": "用于权限请求和提问时振动提醒"
     },
     {
+      "name": "wifi_permission",
+      "value": "用于扫描局域网内的桌面端服务器"
+    },
+    {
       "name": "tab_claude",
       "value": "Claude"
     },
