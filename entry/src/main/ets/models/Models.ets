@@ -150,12 +150,13 @@ export type WSMessageType =
   | 'sessions_updated'
   | 'session_activated'
   | 'session_status_changed'
+  | 'session_broadcast'
   | 'unknown'
 
 export interface WSMessage {
   type?: WSMessageType
   text?: string
-  message?: string
+  message?: string | object
   blockType?: string
   toolName?: string
   toolUseId?: string

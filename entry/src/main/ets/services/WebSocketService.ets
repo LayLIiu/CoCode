@@ -47,6 +47,11 @@ export class WebSocketService {
     this.serverUrl = url
   }
 
+  /** 检查是否已有直接 WebSocket 连接到指定会话（用于避免全局广播重复处理） */
+  isSubscribed(sessionId: string): boolean {
+    return this.subscribedSessions.has(sessionId)
+  }
+
   // MARK: - 连接管理
 
   subscribeToSessions(sessionIds: string[]): void {
@@ -61,7 +66,8 @@ export class WebSocketService {
       }
     }
 
-    // 清理不再需要的连接
+    // 清理不再需要的连接 - 先收集 key 再操作，避免遍历 Map 时修改
+    const keysToRemove: string[] = []
     this.connections.forEach((_, existingId) => {
       let found = false
       for (let i = 0; i < sessionIds.length; i++) {
@@ -71,9 +77,12 @@ export class WebSocketService {
         }
       }
       if (!found) {
-        this.disconnectSession(existingId)
+        keysToRemove.push(existingId)
       }
     })
+    for (let i = 0; i < keysToRemove.length; i++) {
+      this.disconnectSession(keysToRemove[i])
+    }
 
     // 启动心跳和清理定时器
     this.startHeartbeat()
@@ -163,28 +172,30 @@ export class WebSocketService {
   private buildWsUrl(pathSuffix: string): string {
     if (!this.serverUrl) return ''
 
-    let wsUrl = this.serverUrl
+    // 先用原始 URL 判断是否安全连接
+    const isSecure = this.serverUrl.startsWith('https://') ||
+      this.serverUrl.includes('.tunnel.') ||
+      this.serverUrl.includes('trycloudflare') ||
+      this.serverUrl.includes('loca.lt')
 
-    if (wsUrl.startsWith('https://')) {
-      wsUrl = wsUrl.substring(8)
-    } else if (wsUrl.startsWith('http://')) {
-      wsUrl = wsUrl.substring(7)
+    let hostPart = this.serverUrl
+
+    if (hostPart.startsWith('https://')) {
+      hostPart = hostPart.substring(8)
+    } else if (hostPart.startsWith('http://')) {
+      hostPart = hostPart.substring(7)
     }
 
-    const colonCount = this.countChar(wsUrl, ':')
+    // 处理 host:port:token 格式（3 段冒号），只保留 host:port
+    const colonCount = this.countChar(hostPart, ':')
     if (colonCount >= 2) {
-      const parts = wsUrl.split(':')
+      const parts = hostPart.split(':')
       if (parts.length >= 2) {
-        wsUrl = parts[0] + ':' + parts[1]
+        hostPart = parts[0] + ':' + parts[1]
       }
     }
 
-    const isSecure = this.serverUrl.startsWith('https://') ||
-      wsUrl.includes('.tunnel.') ||
-      wsUrl.includes('trycloudflare') ||
-      wsUrl.includes('loca.lt')
-
-    return (isSecure ? 'wss://' : 'ws://') + wsUrl + pathSuffix
+    return (isSecure ? 'wss://' : 'ws://') + hostPart + pathSuffix
   }
 
   connectGlobal(): void {
@@ -258,6 +269,26 @@ export class WebSocketService {
       clearTimeout(this.globalReconnectTimer)
       this.globalReconnectTimer = -1
     }
+  }
+
+  private reconnectGlobal(): void {
+    // 先清理旧连接状态（同步）
+    if (this.globalConn && this.globalConn.ws) {
+      try {
+        this.globalConn.ws.close()
+      } catch (e) {
+        // ignore close errors
+      }
+    }
+    this.globalConn = null
+    if (this.globalReconnectTimer >= 0) {
+      clearTimeout(this.globalReconnectTimer)
+      this.globalReconnectTimer = -1
+    }
+    // 延迟建立新连接，确保旧连接完全释放
+    setTimeout(() => {
+      this.connectGlobal()
+    }, 150)
   }
 
   private startGlobalReceiving(ws: webSocket.WebSocket): void {
@@ -442,16 +473,16 @@ export class WebSocketService {
   }
 
   sendQuestionResponse(sessionId: string, questionId: string, answer: string): boolean {
+    // 服务端没有 question_response 类型，用 user_message 发送回答
     const message: OutgoingMessage = {
-      type: 'question_response',
-      questionId: questionId,
-      answer: answer
+      type: 'user_message',
+      content: answer
     }
     return this.send(sessionId, message)
   }
 
   sendStop(sessionId: string): boolean {
-    const message: OutgoingMessage = { type: 'stop' }
+    const message: OutgoingMessage = { type: 'stop_generation' }
     return this.send(sessionId, message)
   }
 
@@ -766,9 +797,8 @@ export class WebSocketService {
       this.connectSession(sessionId)
     })
 
-    // 重连全局 WS
-    this.disconnectGlobal()
-    this.connectGlobal()
+    // 重连全局 WS - 使用原子方法避免竞态
+    this.reconnectGlobal()
 
     // 重启心跳
     this.startHeartbeat()

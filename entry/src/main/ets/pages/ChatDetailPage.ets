@@ -12,6 +12,7 @@ import { authStore } from '../stores/AuthStore'
 import { apiService } from '../services/APIService'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
+import { DotMatrixBackground } from '../components/DotMatrixBackground'
 import { HdsMiniBarButton } from '../components/HdsMiniBarButton'
 import { HdsGlassInput } from '../components/HdsGlassInput'
 import router from '@ohos.router'
@@ -94,6 +95,7 @@ struct ChatDetailPage {
   @State showCustomInput: boolean = false
   @State customInputText: string = ''
   @State activeQuestionMessageId: string = ''
+  @State isPageActive: boolean = true
 
   // 附件（图片发送）
   @State pendingAttachments: AttachmentRef[] = []
@@ -134,6 +136,7 @@ struct ChatDetailPage {
   @State contextTotal: number = 0
   @State contextMax: number = 0
   private contextPollTimer: number = -1
+  private isDestroyed: boolean = false
 
   // 工作中计时（与 iOS StreamingStatusView 一致）
   @State elapsedSeconds: number = 0
@@ -186,8 +189,8 @@ struct ChatDetailPage {
     this.showAttachSheet = false
 
     // 定时拉取上下文使用率
-    setTimeout(() => { this.fetchContextUsage() }, 1000)
-    this.contextPollTimer = setInterval(() => { this.fetchContextUsage() }, 15000)
+    setTimeout(() => { if (!this.isDestroyed) this.fetchContextUsage() }, 1000)
+    this.contextPollTimer = setInterval(() => { if (!this.isDestroyed) this.fetchContextUsage() }, 15000)
 
     const draft = sessionStore.inputDrafts.get(this.sessionId)
     if (draft) {
@@ -196,6 +199,8 @@ struct ChatDetailPage {
   }
 
   aboutToDisappear(): void {
+    this.isPageActive = false
+    this.isDestroyed = true
     // 保存输入框草稿
     if (this.inputText) {
       sessionStore.inputDrafts.set(this.sessionId, this.inputText)
@@ -213,7 +218,12 @@ struct ChatDetailPage {
   }
 
   onPageShow(): void {
+    this.isPageActive = true
     this.getRouterParams()
+  }
+
+  onPageHide(): void {
+    this.isPageActive = false
   }
 
   private async fetchContextUsage(): Promise<void> {
@@ -249,9 +259,10 @@ struct ChatDetailPage {
   }
 
   private async loadFileAsAttachment(filePath: string, fileName: string): Promise<void> {
+    if (!filePath || filePath.trim() === '') return
     this.pendingAttachments = [...this.pendingAttachments, {
       type: 'file',
-      name: fileName,
+      name: fileName || 'file',
       path: filePath
     }]
   }
@@ -590,6 +601,9 @@ struct ChatDetailPage {
 
   build() {
     Stack() {
+      // 点阵背景 - 最底层，穿透触控
+      DotMatrixBackground({ active: this.isPageActive })
+
       HdsNavigation() {
         // 消息列表 — 倒序+翻转：默认就在"底部"（最新消息），无需scrollTo
         List({ scroller: this.scroller }) {
@@ -632,6 +646,9 @@ struct ChatDetailPage {
             }
             .rotate({ angle: 180 })
           }, (message: Message) => {
+            if (message.type === 'tool_use') {
+              return message.id + '_' + (message.toolStatus || '')
+            }
             if (message.type === 'permission_request') {
               return message.id + '_' + (message.isPermissionHandled ? 'done' : 'pending')
             }
@@ -743,7 +760,7 @@ struct ChatDetailPage {
       })
       .titleMode(HdsNavigationTitleMode.MINI)
       .hideBackButton(false)
-      .backgroundColor('#121214')
+      .backgroundColor('#00000000')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .bindSheet($$this.showModelSheet, this.ModelSelectorSheet(), {
         height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
@@ -1035,7 +1052,7 @@ struct ChatDetailPage {
       }
     }
     .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-    .backgroundColor('rgba(255,255,255,0.12)')
+    .backgroundColor('rgba(255,255,255,0.22)')
     .borderRadius(18)
     .gesture(
       LongPressGesture()
@@ -1079,7 +1096,7 @@ struct ChatDetailPage {
     }
     .width('100%')
     .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-    .backgroundColor('rgba(255,255,255,0.08)')
+    .backgroundColor('rgba(255,255,255,0.16)')
     .borderRadius(18)
     .gesture(
       LongPressGesture()
@@ -1102,7 +1119,7 @@ struct ChatDetailPage {
       }
       .width('100%')
       .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-      .backgroundColor('rgba(255,255,255,0.08)')
+      .backgroundColor('rgba(255,255,255,0.16)')
       .borderRadius(18)
     }
     .width('100%')
@@ -1141,7 +1158,7 @@ struct ChatDetailPage {
         .padding({ left: 12, right: 12, bottom: 10 })
       }
       .width('100%')
-      .backgroundColor('rgba(255,255,255,0.04)')
+      .backgroundColor('rgba(255,255,255,0.10)')
       .borderRadius(10)
       .border({ width: 0.5, color: 'rgba(255,255,255,0.1)' })
     }
@@ -1230,7 +1247,7 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
-    .backgroundColor('rgba(255,255,255,0.04)')
+    .backgroundColor('rgba(255,255,255,0.10)')
     .borderRadius(10)
     .border({
       width: 0.5,
@@ -1390,7 +1407,7 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
-    .backgroundColor('rgba(255,255,255,0.06)')
+    .backgroundColor('rgba(255,255,255,0.13)')
     .borderRadius(10)
     .border({
       width: 0.5,
@@ -1494,7 +1511,7 @@ struct ChatDetailPage {
     }
     .width('100%')
     .padding(12)
-    .backgroundColor('rgba(255,255,255,0.08)')
+    .backgroundColor('rgba(255,255,255,0.16)')
     .borderRadius(12)
   }
 
@@ -1760,7 +1777,7 @@ struct ChatDetailPage {
       }
     }
     .width('100%').padding(14)
-    .backgroundColor(Theme.ErrorColor + '10')
+    .backgroundColor(Theme.ErrorColor + '20')
     .borderRadius(10).border({ width: 0.5, color: Theme.ErrorColor + '40' })
     .gesture(
       LongPressGesture()
@@ -1816,7 +1833,7 @@ struct ChatDetailPage {
         }.width('100%')
       }
       .width('100%').padding(14)
-      .backgroundColor('#FFFFFF08').borderRadius(10)
+      .backgroundColor('#FFFFFF18').borderRadius(10)
     }
   }
 
@@ -1961,7 +1978,7 @@ struct ChatDetailPage {
         TextArea({ placeholder: this.pendingAttachments.length > 0 ? '添加描述或直接发送...' : '发送消息...', text: this.inputText })
           .layoutWeight(1)
           .constraintSize({ minHeight: 36, maxHeight: 120 })
-          .backgroundColor('rgba(255,255,255,0.1)')
+          .backgroundColor('rgba(255,255,255,0.16)')
           .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
           .borderRadius(18)
           .fontColor(Theme.TextPrimary)
@@ -2581,6 +2598,7 @@ struct ChatDetailPage {
     if (this.workTimer !== -1) return
     this.elapsedSeconds = 0
     this.workTimer = setInterval(() => {
+      if (this.isDestroyed) return
       this.elapsedSeconds++
     }, 1000)
     // 启动吉祥物慢速脉冲动画

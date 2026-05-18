@@ -116,10 +116,19 @@ export struct PixelMascot {
   }
 
   aboutToDisappear(): void {
+    this.pauseAnimation()
+  }
+
+  private pauseAnimation(): void {
     if (this.animationTimer !== -1) {
       clearInterval(this.animationTimer)
       this.animationTimer = -1
     }
+  }
+
+  private resumeAnimation(): void {
+    if (this.animationTimer !== -1) return
+    this.startAnimationTimer()
   }
 
   onStatusChange(): void {
@@ -212,6 +221,13 @@ export struct PixelMascot {
         .onReady(() => {
           this.isCanvasReady = true
           this.drawMascot()
+        })
+        .onVisibleAreaChange([0.0, 1.0], (isVisible: boolean, currentRatio: number) => {
+          if (isVisible) {
+            this.resumeAnimation()
+          } else {
+            this.pauseAnimation()
+          }
         })
 
       // ZZZ 睡眠符号

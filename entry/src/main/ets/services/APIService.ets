@@ -369,10 +369,8 @@ export class APIService {
 
   async getInspection(sessionId: string): Promise<InspectResult> {
     const result = new InspectResult()
-    const res = await this.request<Object>('/api/sessions/' + sessionId + '/inspection?contextOnly=1', 'GET', '')
-    const raw = JSON.stringify(res)
-    const parsed = JSON.parse(raw) as Record<string, Object>
-    const estimate = parsed['contextEstimate']
+    const res = await this.request<Record<string, Object>>('/api/sessions/' + sessionId + '/inspection?contextOnly=1', 'GET', '')
+    const estimate = res['contextEstimate']
     if (estimate) {
       const estMap = estimate as Record<string, Object>
       if (typeof estMap['percentage'] === 'number') result.percentage = estMap['percentage'] as number
@@ -387,10 +385,8 @@ export class APIService {
 
   async browseDirectory(dirPath: string): Promise<FsEntry[]> {
     try {
-      const res = await this.request<Object>('/api/filesystem/browse?includeFiles=true&path=' + encodeURIComponent(dirPath), 'GET', '')
-      const raw = JSON.stringify(res)
-      const parsed = JSON.parse(raw) as Record<string, Object>
-      const entries = parsed['entries']
+      const res = await this.request<Record<string, Object>>('/api/filesystem/browse?includeFiles=true&path=' + encodeURIComponent(dirPath), 'GET', '')
+      const entries = res['entries']
       if (Array.isArray(entries)) {
         const result: FsEntry[] = []
         for (let i = 0; i < entries.length; i++) {
@@ -411,10 +407,8 @@ export class APIService {
 
   async readFileText(filePath: string): Promise<string> {
     try {
-      const res = await this.request<Object>('/api/filesystem/read?path=' + encodeURIComponent(filePath), 'GET', '')
-      const raw = JSON.stringify(res)
-      const parsed = JSON.parse(raw) as Record<string, Object>
-      const content = parsed['content']
+      const res = await this.request<Record<string, Object>>('/api/filesystem/read?path=' + encodeURIComponent(filePath), 'GET', '')
+      const content = res['content']
       if (typeof content === 'string') return content
     } catch (e) { /* ignore */ }
     return ''

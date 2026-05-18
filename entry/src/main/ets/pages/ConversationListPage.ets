@@ -26,23 +26,9 @@ struct SessionItemView {
   @Prop session: Session
   @Prop @Watch('onRefresh') refreshTrigger: number = 0
   @State currentStatus: SessionStatus = 'idle'
-  private statusCheckTimer: number = -1
 
   aboutToAppear(): void {
     this.refreshStatus()
-    this.statusCheckTimer = setInterval(() => {
-      const latestStatus = sessionStore.getSessionStatus(this.session.id)
-      if (latestStatus !== this.currentStatus) {
-        this.currentStatus = latestStatus
-      }
-    }, 500)
-  }
-
-  aboutToDisappear(): void {
-    if (this.statusCheckTimer !== -1) {
-      clearInterval(this.statusCheckTimer)
-      this.statusCheckTimer = -1
-    }
   }
 
   onRefresh(): void {
@@ -469,9 +455,9 @@ export struct ConversationListPage {
                     end: this.SwipeDeleteButton(session.id),
                     edgeEffect: SwipeEdgeEffect.Spring
                   })
-                }, (session: Session) => `${session.id}_${this.refreshTrigger}`)
+                }, (session: Session) => session.id)
               }
-            }, (group: SessionGroup) => `${group.groupName}_${this.refreshTrigger}`)
+            }, (group: SessionGroup) => group.groupName)
           } else {
             ListItem() {
               this.EmptyState()

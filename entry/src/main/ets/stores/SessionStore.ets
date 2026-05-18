@@ -164,9 +164,12 @@ export class SessionStore {
   // MARK: - 会话操作
 
   async fetchSessions(): Promise<void> {
-    // 等待本地数据加载完成
-    while (!this.isLocalDataLoaded) {
+    // 等待本地数据加载完成，最多等待 5 秒
+    let waitCount = 0
+    const maxWait = 100 // 50ms * 100 = 5s
+    while (!this.isLocalDataLoaded && waitCount < maxWait) {
       await new Promise<void>(resolve => setTimeout(resolve, 50))
+      waitCount++
     }
 
     this.isLoading = true
@@ -401,9 +404,9 @@ export class SessionStore {
     try {
       const serverMessages = await apiService.getMessages(sessionId)
 
-      // 智能合并：服务器消息为主，保留本地独有的消息（如 thinking/tool_use）
-      const localMsgs = this.messages.get(sessionId) || []
-      const merged = this.mergeMessages(localMsgs, serverMessages)
+      // 重新获取当前本地消息（可能已被 WebSocket 更新），避免覆盖实时消息
+      const currentLocal = this.messages.get(sessionId) || []
+      const merged = this.mergeMessages(currentLocal, serverMessages)
 
       this.messages.set(sessionId, merged)
       this.notifyMessagesChanged(sessionId)
@@ -930,6 +933,18 @@ export class SessionStore {
         if (msg.sessionId && msg.state) {
           console.info(`[SessionStore] Session status changed: ${msg.sessionId} -> ${msg.state}`)
           this.updateSessionStatusFromState(msg.sessionId, msg.state)
+        }
+        break
+
+      case 'session_broadcast':
+        if (msg.sessionId && msg.message) {
+          // 已有直连 WS 的会话不重复处理全局广播，避免消息重复
+          if (wsService.isSubscribed(msg.sessionId)) {
+            console.info(`[SessionStore] Skip session_broadcast for ${msg.sessionId}: already subscribed`)
+            break
+          }
+          console.info(`[SessionStore] Session broadcast for ${msg.sessionId}`)
+          this.handleWSMessage(msg.sessionId, msg.message as WSMessage)
         }
         break
     }
