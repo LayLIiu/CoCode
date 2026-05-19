@@ -4,13 +4,16 @@
  */
 
 import { Theme } from '../common/Theme'
-import { Message, Session, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus, AttachmentRef, QuestionOption, PermissionMode, getPermissionModeDisplayName, getPermissionModeDescription } from '../models/Models'
+import { Message, Session, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus, AttachmentRef, QuestionOption, QuestionItem, PermissionMode, PendingPermission, getPermissionModeDisplayName, getPermissionModeDescription } from '../models/Models'
 import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import { sessionStore } from '../stores/SessionStore'
 import { authStore } from '../stores/AuthStore'
 import { apiService } from '../services/APIService'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
+import { FileAttachmentBubble } from '../components/FileAttachmentBubble'
+import { ImagePreviewDialog } from '../components/ImagePreviewDialog'
+import { fileService, FileInfo } from '../services/FileService'
 import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
 import { StatusIcon, WorkStatus } from '../components/StatusIcon'
 import { DotMatrixBackground } from '../components/DotMatrixBackground'
@@ -101,6 +104,18 @@ struct ChatDetailPage {
 
   // 附件（图片发送）
   @State pendingAttachments: AttachmentRef[] = []
+
+  // 文件图片预览
+  @State filePreviewSrc: string = ''
+  @State filePreviewAlt: string = ''
+  @State filePreviewName: string = ''
+  @State showFilePreview: boolean = false
+
+  // AskUserQuestion 选项（多问题支持）
+  @State questionActiveTab: number = 0
+  @State questionSelections: Map<number, string[]> = new Map()
+  @State questionFreeText: string = ''
+  @State questionHasSubmitted: boolean = false
 
   // 流式文本本地缓冲（与 iOS 端一致）
   @State streamingText: string = ''
@@ -317,6 +332,14 @@ struct ChatDetailPage {
       this.chatStatus = status
       // 同步当前会话的权限模式
       this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
+      // 状态变为 completed 或 idle 时停止计时器
+      if (status === 'completed' || status === 'idle') {
+        this.stopWorkTimer()
+      }
+      // 状态变为 working 时启动计时器
+      if (status === 'thinking' || status === 'streaming' || status === 'tool_executing') {
+        this.startWorkTimer()
+      }
     }
   }
 
@@ -326,16 +349,24 @@ struct ChatDetailPage {
     }
   }
 
+  // 任务列表更新监听器
+  private sessionsChangedListener = () => {
+    // 触发重绘以更新 TaskBarView
+    this.messageUpdateCounter++
+  }
+
   private setupCallbacks(): void {
     sessionStore.addMessagesChangedListener(this.messagesChangedListener)
     sessionStore.addStatusChangedListener(this.statusChangedListener)
     sessionStore.addRawMessageListener(this.rawMessageListener)
+    sessionStore.addSessionsChangedListener(this.sessionsChangedListener)
   }
 
   private removeCallbacks(): void {
     sessionStore.removeMessagesChangedListener(this.messagesChangedListener)
     sessionStore.removeStatusChangedListener(this.statusChangedListener)
     sessionStore.removeRawMessageListener(this.rawMessageListener)
+    sessionStore.removeSessionsChangedListener(this.sessionsChangedListener)
   }
 
   private scrollToBottom(): void {
@@ -417,6 +448,23 @@ struct ChatDetailPage {
     return ''
   }
 
+  /**
+   * 从工具输入中提取文件路径，用于显示文件预览
+   */
+  private getFileInfoFromTool(message: Message): FileInfo | null {
+    if (!message.toolInput || !message.toolName) return null
+    // 只对 Write/Edit 工具显示文件预览
+    if (message.toolName !== 'Write' && message.toolName !== 'Edit') return null
+
+    const filePath = message.toolInput['file_path']
+    if (typeof filePath !== 'string' || !filePath) return null
+
+    const info = fileService.analyzeFilePath(filePath)
+    // 只对图片和代码文件显示预览
+    if (!info.isImage && !info.isSvg && !info.isCode) return null
+    return info
+  }
+
   // MARK: - 剪贴板
 
   private copyToClipboard(text: string): void {
@@ -473,8 +521,8 @@ struct ChatDetailPage {
   private handleStreamingMessage(msg: WSMessage): void {
     switch (msg.type) {
       case 'content_start':
+        // 启动工作计时器（如果当前不在工作状态）
         if (this.chatStatus === 'idle' || this.chatStatus === 'completed') {
-          this.chatStatus = 'streaming'
           this.startWorkTimer()
         }
         if (msg.blockType === 'text') {
@@ -484,8 +532,8 @@ struct ChatDetailPage {
         break
 
       case 'content_delta':
+        // 启动工作计时器（如果当前不在工作状态）
         if (this.chatStatus === 'idle' || this.chatStatus === 'completed') {
-          this.chatStatus = 'streaming'
           this.startWorkTimer()
         }
         if (msg.text) {
@@ -498,8 +546,8 @@ struct ChatDetailPage {
         break
 
       case 'thinking':
+        // 启动工作计时器（如果当前不在工作状态）
         if (this.chatStatus === 'idle' || this.chatStatus === 'completed') {
-          this.chatStatus = 'thinking'
           this.startWorkTimer()
         }
         if (!this.inThinkingBlock) {
@@ -522,7 +570,7 @@ struct ChatDetailPage {
         this.flushStreamingBuffers()
         this.inTextBlock = false
         this.inThinkingBlock = false
-        this.chatStatus = 'tool_executing'
+        // 状态由 SessionStore 更新
         // 新工具出现 → 合上最新 thinking（与 iOS 一致）
         this.collapseLatestThinking()
         break
@@ -535,7 +583,7 @@ struct ChatDetailPage {
         this.flushStreamingBuffers()
         this.inTextBlock = false
         this.inThinkingBlock = false
-        this.chatStatus = 'completed'
+        // 状态由 SessionStore 更新，这里只停止计时器和更新 token
         this.stopWorkTimer()
         if (msg.used) {
           this.tokenUsage = msg.used
@@ -552,14 +600,19 @@ struct ChatDetailPage {
 
       case 'permission_request':
         this.flushStreamingBuffers()
-        this.chatStatus = 'permission_pending'
+        // 状态由 SessionStore 更新
+        // 重置 AskUserQuestion 相关状态
+        this.questionHasSubmitted = false
+        this.questionSelections = new Map()
+        this.questionFreeText = ''
+        this.questionActiveTab = 0
         this.vibrateAlert()
         break
 
       case 'question':
       case 'questions':
         this.flushStreamingBuffers()
-        this.chatStatus = 'question_pending'
+        // 状态由 SessionStore 更新
         this.vibrateAlert()
         break
 
@@ -914,6 +967,16 @@ struct ChatDetailPage {
         this.MenuBubble()
       }
 
+      // 文件/图片全屏预览（只在需要显示时渲染，避免阻止触摸事件）
+      if (this.showFilePreview) {
+        ImagePreviewDialog({
+          imageSrc: this.filePreviewSrc,
+          imageAlt: this.filePreviewAlt,
+          fileName: this.filePreviewName,
+          isVisible: $showFilePreview
+        })
+      }
+
     }
     .width('100%')
     .height('100%')
@@ -1069,13 +1132,19 @@ struct ChatDetailPage {
         } else if (message.type === 'tool_use') {
           if (message.toolName === 'Agent') {
             this.AgentToolUseBubble(message)
+          } else if (message.toolName === 'AskUserQuestion') {
+            this.AskUserQuestionBubble(message)
           } else {
             this.ToolUseBubble(message)
           }
         } else if (message.type === 'tool_result') {
           this.ToolResultBubble(message)
         } else if (message.type === 'permission_request') {
-          this.PermissionBubble(message)
+          if (message.toolName === 'AskUserQuestion') {
+            this.AskUserQuestionBubble(message)
+          } else {
+            this.PermissionBubble(message)
+          }
         } else if (message.type === 'question') {
           this.QuestionBubble(message)
         } else if (message.type === 'error') {
@@ -1510,6 +1579,27 @@ struct ChatDetailPage {
             .width('100%')
             .alignItems(HorizontalAlign.Start)
           }
+
+          // 文件附件预览（Write/Edit 工具）
+          if (message.toolStatus === 'completed') {
+            if (message.toolName === 'Write' || message.toolName === 'Edit') {
+              Column({ space: 4 }) {
+                Text('FILE')
+                  .fontSize(9)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(Theme.TextSecondary)
+
+                FileAttachmentBubble({
+                  filePath: (message.toolInput ? message.toolInput['file_path'] : '') as string,
+                  onImageTap: (src: string, alt: string, name: string) => {
+                    this.openFilePreview(src, alt, name)
+                  }
+                })
+              }
+              .width('100%')
+              .alignItems(HorizontalAlign.Start)
+            }
+          }
         }
         .width('100%')
         .padding({ left: 12, right: 12, top: 10, bottom: 10 })
@@ -1913,6 +2003,14 @@ struct ChatDetailPage {
     return lines.join('\n')
   }
 
+  // 打开文件/图片预览
+  private openFilePreview(src: string, alt: string, name: string): void {
+    this.filePreviewSrc = src
+    this.filePreviewAlt = alt
+    this.filePreviewName = name
+    this.showFilePreview = true
+  }
+
 
   // 工具结果气泡（独立显示，与 iOS toolResultBubble 一致）
   @Builder
@@ -1952,40 +2050,381 @@ struct ChatDetailPage {
     .borderRadius(12)
   }
 
+  // AskUserQuestion 工具气泡（参照桌面端 AskUserQuestion.tsx）
   @Builder
-  PermissionBubble(message: Message) {
+  AskUserQuestionBubble(message: Message) {
     Column({ space: 12 }) {
+      // Header
       Row({ space: 8 }) {
-        SymbolGlyph($r('sys.symbol.lock_shield_fill'))
+        SymbolGlyph($r('sys.symbol.questionmark_circle_fill'))
           .fontSize(20)
-          .fontColor([Theme.AccentOrange])
+          .fontColor([Theme.AccentPurple])
 
-        Text('权限请求')
+        Text('需要输入')
           .fontSize(Theme.FontBody)
           .fontWeight(FontWeight.Bold)
           .fontColor(Theme.TextPrimary)
+
+        if (this.questionHasSubmitted || message.toolStatus === 'completed') {
+          Text('已回答')
+            .fontSize(Theme.FontTiny)
+            .fontColor(Theme.TextTertiary)
+            .backgroundColor(Theme.BackgroundTertiary)
+            .borderRadius(4)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+        }
       }
 
-      if (message.toolName) {
-        Text('工具: ' + message.toolName)
+      // 获取问题列表
+      if (this.parseAskUserQuestions(message).length > 0) {
+        // 多问题 Tab
+        if (this.parseAskUserQuestions(message).length > 1) {
+          Row({ space: 0 }) {
+            ForEach(this.parseAskUserQuestions(message), (q: QuestionItem, index: number) => {
+              Button(q.header || `Q${index + 1}`)
+                .fontSize(Theme.FontTiny)
+                .fontColor(this.questionActiveTab === index ? Theme.AccentPurple : Theme.TextSecondary)
+                .backgroundColor(this.questionActiveTab === index ? 'rgba(175,82,222,0.15)' : 'transparent')
+                .borderRadius(0)
+                .onClick(() => { this.questionActiveTab = index })
+            }, (q: QuestionItem, index: number) => `qtab-${index}`)
+          }
+          .width('100%')
+        }
+
+        // 当前问题
+        if (this.parseAskUserQuestions(message)[this.questionActiveTab]) {
+          this.QuestionCard(message, this.questionActiveTab)
+        }
+      }
+    }
+    .width('100%')
+    .padding(Theme.SpacingLG)
+    .backgroundColor(Theme.BackgroundSecondary)
+    .borderRadius(Theme.RadiusMedium)
+    .border({ width: 1, color: this.questionHasSubmitted ? Theme.GlassBorder : Theme.AccentPurple })
+  }
+
+  @Builder
+  QuestionCard(message: Message, qIndex: number) {
+    Column({ space: 12 }) {
+      // 问题文本
+      Text(this.getQuestionText(message, qIndex))
+        .fontSize(Theme.FontCaption)
+        .fontColor(Theme.TextPrimary)
+
+      // 选项
+      if (this.hasQuestionOptions(message, qIndex) && !this.questionHasSubmitted) {
+        Column({ space: 8 }) {
+          ForEach(this.getQuestionOptions(message, qIndex), (opt: QuestionOption, optIndex: number) => {
+            this.QuestionOptionCard(message, qIndex, opt, optIndex, this.isQuestionMultiSelect(message, qIndex))
+          }, (opt: QuestionOption, optIndex: number) => `opt-${qIndex}-${optIndex}`)
+        }
+        .width('100%')
+      }
+
+      // 自定义输入
+      if (!this.questionHasSubmitted) {
+        Row({ space: 8 }) {
+          TextInput({ placeholder: '自定义回答...', text: this.questionFreeText })
+            .layoutWeight(1)
+            .height(36)
+            .backgroundColor(Theme.BackgroundTertiary)
+            .borderRadius(8)
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextPrimary)
+            .onChange((value: string) => {
+              this.questionFreeText = value
+            })
+
+          Button('发送')
+            .fontSize(Theme.FontTiny)
+            .fontColor(Theme.TextOnPrimary)
+            .backgroundColor(Theme.PrimaryColor)
+            .borderRadius(8)
+            .height(36)
+            .enabled(this.questionFreeText.trim().length > 0)
+            .onClick(() => {
+              this.submitQuestionAnswer(message, this.questionFreeText.trim())
+            })
+        }
+        .width('100%')
+      }
+
+      // 已提交显示
+      if (this.questionHasSubmitted) {
+        Row({ space: 4 }) {
+          SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
+            .fontSize(14)
+            .fontColor([Theme.SuccessColor])
+          Text('已提交')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.SuccessColor)
+        }
+      }
+    }
+  }
+
+  // QuestionCard 辅助方法
+  private getQuestionText(message: Message, qIndex: number): string {
+    const questions = this.parseAskUserQuestions(message)
+    return questions[qIndex]?.question || ''
+  }
+
+  private hasQuestionOptions(message: Message, qIndex: number): boolean {
+    const questions = this.parseAskUserQuestions(message)
+    const opts = questions[qIndex]?.options
+    return opts !== undefined && opts.length > 0
+  }
+
+  private getQuestionOptions(message: Message, qIndex: number): QuestionOption[] {
+    const questions = this.parseAskUserQuestions(message)
+    return questions[qIndex]?.options || []
+  }
+
+  private isQuestionMultiSelect(message: Message, qIndex: number): boolean {
+    const questions = this.parseAskUserQuestions(message)
+    return questions[qIndex]?.multiSelect || false
+  }
+
+  private isOptionSelected(qIndex: number, label: string): boolean {
+    return (this.questionSelections.get(qIndex) || []).includes(label || '')
+  }
+
+  @Builder
+  QuestionOptionCard(message: Message, qIndex: number, opt: QuestionOption, optIndex: number, isMultiSelect: boolean) {
+    Row({ space: 12 }) {
+      // 选择指示器
+      if (isMultiSelect) {
+        Row() {
+          if (this.isOptionSelected(qIndex, opt.label || '')) {
+            Text('✓')
+              .fontSize(12)
+              .fontColor(Theme.TextOnPrimary)
+          }
+        }
+        .width(18)
+        .height(18)
+        .borderRadius(4)
+        .backgroundColor(this.isOptionSelected(qIndex, opt.label || '') ? Theme.AccentPurple : 'transparent')
+        .border({ width: 2, color: this.isOptionSelected(qIndex, opt.label || '') ? Theme.AccentPurple : Theme.GlassBorder })
+      } else {
+        Row() {
+          if (this.isOptionSelected(qIndex, opt.label || '')) {
+            Text('✓')
+              .fontSize(12)
+              .fontColor(Theme.TextOnPrimary)
+          }
+        }
+        .width(18)
+        .height(18)
+        .borderRadius(9)
+        .backgroundColor(this.isOptionSelected(qIndex, opt.label || '') ? Theme.AccentPurple : 'transparent')
+        .border({ width: 2, color: this.isOptionSelected(qIndex, opt.label || '') ? Theme.AccentPurple : Theme.GlassBorder })
+      }
+
+      // 选项文本
+      Column({ space: 2 }) {
+        Text(opt.label || '')
           .fontSize(Theme.FontCaption)
-          .fontColor(Theme.TextSecondary)
+          .fontColor(this.isOptionSelected(qIndex, opt.label || '') ? Theme.AccentPurple : Theme.TextPrimary)
+
+        if (opt.description) {
+          Text(opt.description)
+            .fontSize(Theme.FontTiny)
+            .fontColor(Theme.TextTertiary)
+        }
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+    }
+    .width('100%')
+    .padding(12)
+    .backgroundColor(this.isOptionSelected(qIndex, opt.label || '') ? 'rgba(175,82,222,0.1)' : Theme.BackgroundTertiary)
+    .borderRadius(8)
+    .border({ width: this.isOptionSelected(qIndex, opt.label || '') ? 1 : 0, color: Theme.AccentPurple })
+    .onClick(() => {
+      this.toggleQuestionOption(message, qIndex, opt.label || '', isMultiSelect)
+    })
+  }
+
+  // 解析 AskUserQuestion 工具的 input
+  private parseAskUserQuestions(message: Message): QuestionItem[] {
+    const input = message.toolInput
+    if (!input || typeof input !== 'object') return []
+
+    const obj = input as Record<string, Object>
+
+    // 格式1: { questions: [...] }
+    if (obj['questions'] && Array.isArray(obj['questions'])) {
+      return obj['questions'] as QuestionItem[]
+    }
+
+    // 格式2: { question: "...", options: [...] }
+    if (obj['question'] && typeof obj['question'] === 'string') {
+      return [{
+        question: obj['question'] as string,
+        header: obj['header'] as string,
+        options: obj['options'] as QuestionOption[],
+        multiSelect: obj['multiSelect'] as boolean
+      }]
+    }
+
+    return []
+  }
+
+  // 切换问题选项
+  private toggleQuestionOption(message: Message, qIndex: number, label: string, isMultiSelect: boolean): void {
+    const current = this.questionSelections.get(qIndex) || []
+
+    if (isMultiSelect) {
+      const newSelections = current.includes(label)
+        ? current.filter(s => s !== label)
+        : [...current, label]
+      this.questionSelections.set(qIndex, newSelections)
+    } else {
+      this.questionSelections.set(qIndex, [label])
+    }
+
+    // 触发更新
+    const newMap = new Map(this.questionSelections)
+    this.questionSelections = newMap
+  }
+
+  // 提交问题答案
+  private submitQuestionAnswer(message: Message, answer: string): void {
+    const pendingPermission = sessionStore.pendingPermissions.get(this.sessionId || '')
+    if (!pendingPermission) return
+
+    const questions = this.parseAskUserQuestions(message)
+    const answers: Record<string, string> = {}
+
+    if (this.questionFreeText.trim()) {
+      // 使用自定义文本
+      for (const q of questions) {
+        if (q.question) {
+          answers[q.question] = this.questionFreeText.trim()
+        }
+      }
+    } else {
+      // 使用选择的选项
+      for (let i = 0; i < questions.length; i++) {
+        const selected = this.questionSelections.get(i) || []
+        if (selected.length > 0 && questions[i].question) {
+          answers[questions[i].question!] = selected.join(', ')
+        }
+      }
+    }
+
+    // 发送响应 - AskUserQuestion 使用专门的响应方法
+    const updatedInput: Record<string, string> = {}
+    const keys = Object.keys(answers)
+    for (let i = 0; i < keys.length; i++) {
+      updatedInput[keys[i]] = answers[keys[i]]
+    }
+    sessionStore.sendAskUserQuestionResponse(pendingPermission.requestId, updatedInput)
+
+    this.questionHasSubmitted = true
+  }
+
+  @Builder
+  PermissionBubble(message: Message) {
+    Column({ space: 12 }) {
+      // Header
+      Row({ space: 8 }) {
+        SymbolGlyph(this.getPermissionToolIcon(message.toolName || '').symbol)
+          .fontSize(20)
+          .fontColor([this.getPermissionToolIcon(message.toolName || '').color])
+
+        Text(this.getPermissionTitle(message.toolName || '', message.toolInput))
+          .fontSize(Theme.FontBody)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Theme.TextPrimary)
+          .layoutWeight(1)
+
+        if (message.isPermissionHandled) {
+          Text(message.permissionResult ? '已允许' : '已拒绝')
+            .fontSize(Theme.FontTiny)
+            .fontColor(message.permissionResult ? Theme.SuccessColor : Theme.ErrorColor)
+            .backgroundColor(message.permissionResult ? 'rgba(52,199,89,0.15)' : 'rgba(255,69,58,0.15)')
+            .borderRadius(4)
+            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+        }
       }
 
+      // 描述
       if (message.permissionDescription) {
         Text(message.permissionDescription)
           .fontSize(Theme.FontCaption)
           .fontColor(Theme.TextSecondary)
       }
 
+      // Diff 预览（Edit/Write 工具）
+      if ((message.toolName === 'Edit' || message.toolName === 'Write') && message.toolInput) {
+        this.PermissionDiffPreview(message.toolName, message.toolInput)
+      }
+
+      // Bash 命令预览
+      if (message.toolName === 'Bash' && message.toolInput) {
+        if ((message.toolInput as Record<string, Object>)['command']) {
+          Row() {
+            Text('$ ')
+              .fontSize(Theme.FontTiny)
+              .fontColor(Theme.AccentGreen)
+            Text((message.toolInput as Record<string, Object>)['command'] as string)
+              .fontSize(Theme.FontTiny)
+              .fontColor(Theme.TextPrimary)
+              .layoutWeight(1)
+          }
+          .width('100%')
+          .padding(8)
+          .backgroundColor(Theme.BackgroundTertiary)
+          .borderRadius(8)
+        }
+      }
+
+      // 操作按钮
       if (!message.isPermissionHandled) {
-        Row({ space: 12 }) {
+        Column({ space: 8 }) {
+          Row({ space: 8 }) {
+            Button('允许')
+              .fontSize(Theme.FontCaption)
+              .fontColor(Theme.TextOnPrimary)
+              .backgroundColor(Theme.PrimaryColor)
+              .borderRadius(8)
+              .layoutWeight(1)
+              .onClick(() => {
+                if (message.permissionId) {
+                  sessionStore.sendPermissionResponse(message.permissionId, true)
+                  message.isPermissionHandled = true
+                  message.permissionResult = true
+                  this.messageUpdateCounter++
+                }
+              })
+
+            Button('始终允许')
+              .fontSize(Theme.FontCaption)
+              .fontColor(Theme.PrimaryColor)
+              .backgroundColor('rgba(0,122,255,0.15)')
+              .borderRadius(8)
+              .layoutWeight(1)
+              .onClick(() => {
+                if (message.permissionId) {
+                  sessionStore.sendPermissionResponse(message.permissionId, true, true)
+                  message.isPermissionHandled = true
+                  message.permissionResult = true
+                  this.messageUpdateCounter++
+                }
+              })
+          }
+          .width('100%')
+
           Button('拒绝')
             .fontSize(Theme.FontCaption)
-            .fontColor(Theme.TextPrimary)
+            .fontColor(Theme.TextSecondary)
             .backgroundColor(Theme.BackgroundTertiary)
             .borderRadius(8)
-            .layoutWeight(1)
+            .width('100%')
             .onClick(() => {
               if (message.permissionId) {
                 sessionStore.sendPermissionResponse(message.permissionId, false)
@@ -1994,37 +2433,6 @@ struct ChatDetailPage {
                 this.messageUpdateCounter++
               }
             })
-
-          Button('允许')
-            .fontSize(Theme.FontCaption)
-            .fontColor(Theme.TextOnPrimary)
-            .backgroundColor(Theme.PrimaryColor)
-            .borderRadius(8)
-            .layoutWeight(1)
-            .onClick(() => {
-              if (message.permissionId) {
-                sessionStore.sendPermissionResponse(message.permissionId, true)
-                message.isPermissionHandled = true
-                message.permissionResult = true
-                this.messageUpdateCounter++
-              }
-            })
-        }
-        .width('100%')
-      } else {
-        Row({ space: 4 }) {
-          if (message.permissionResult) {
-            SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
-              .fontSize(14)
-              .fontColor([Theme.SuccessColor])
-          } else {
-            SymbolGlyph($r('sys.symbol.xmark_circle_fill'))
-              .fontSize(14)
-              .fontColor([Theme.ErrorColor])
-          }
-          Text(message.permissionResult ? '已允许' : '已拒绝')
-            .fontSize(Theme.FontCaption)
-            .fontColor(message.permissionResult ? Theme.SuccessColor : Theme.ErrorColor)
         }
       }
     }
@@ -2032,6 +2440,107 @@ struct ChatDetailPage {
     .padding(Theme.SpacingLG)
     .backgroundColor(Theme.BackgroundSecondary)
     .borderRadius(Theme.RadiusMedium)
+    .border({ width: 1, color: message.isPermissionHandled ? Theme.GlassBorder : Theme.AccentOrange })
+  }
+
+  // 权限工具图标
+  private getPermissionToolIcon(toolName: string): ToolIconInfo {
+    switch (toolName) {
+      case 'Edit': return new ToolIconInfo($r('sys.symbol.square_and_pencil'), '编辑文件', Theme.WarningColor)
+      case 'Write': return new ToolIconInfo($r('sys.symbol.doc_text'), '写入文件', Theme.AccentGreen)
+      case 'Bash': return new ToolIconInfo($r('sys.symbol.gearshape'), '执行命令', Theme.AccentOrange)
+      case 'Read': return new ToolIconInfo($r('sys.symbol.doc_text'), '读取文件', Theme.AccentBlue)
+      case 'Glob': return new ToolIconInfo($r('sys.symbol.folder'), '搜索文件', Theme.AccentPurple)
+      case 'Grep': return new ToolIconInfo($r('sys.symbol.magnifyingglass'), '搜索内容', Theme.AccentPurple)
+      default: return new ToolIconInfo($r('sys.symbol.lock_shield_fill'), toolName, Theme.AccentOrange)
+    }
+  }
+
+  // 权限标题
+  private getPermissionTitle(toolName: string, input?: Record<string, Object>): string {
+    const obj = input || {}
+    const filePath = obj['file_path'] as string || ''
+    const fileName = filePath ? filePath.split('/').pop() || filePath : ''
+
+    switch (toolName) {
+      case 'Edit': return fileName ? `编辑 ${fileName}` : '编辑文件'
+      case 'Write': return fileName ? `写入 ${fileName}` : '写入文件'
+      case 'Bash': return '执行命令'
+      case 'Read': return fileName ? `读取 ${fileName}` : '读取文件'
+      default: return `权限请求: ${toolName}`
+    }
+  }
+
+  // Diff 预览
+  @Builder
+  PermissionDiffPreview(toolName: string, input: Record<string, Object>) {
+    Column({ space: 4 }) {
+      // 文件路径
+      Text(input['file_path'] as string || 'file')
+        .fontSize(Theme.FontTiny)
+        .fontColor(Theme.TextTertiary)
+        .width('100%')
+
+      // 简化 diff 显示
+      Scroll() {
+        Column({ space: 2 }) {
+          // 删除的内容（old_string）
+          if (toolName === 'Edit' && (input['old_string'] as string)) {
+            ForEach((input['old_string'] as string).split('\n').slice(0, 10), (line: string, idx: number) => {
+              Row() {
+                Text('-')
+                  .fontSize(Theme.FontTiny)
+                  .fontColor(Theme.ErrorColor)
+                  .width(12)
+                Text(line || ' ')
+                  .fontSize(Theme.FontTiny)
+                  .fontColor(Theme.ErrorColor)
+                  .backgroundColor('rgba(255,69,58,0.1)')
+                  .layoutWeight(1)
+              }
+              .width('100%')
+              .padding({ left: 4, right: 4 })
+            }, (line: string, idx: number) => `old-${idx}`)
+            if ((input['old_string'] as string).split('\n').length > 10) {
+              Text(`... 还有 ${(input['old_string'] as string).split('\n').length - 10} 行`)
+                .fontSize(Theme.FontTiny)
+                .fontColor(Theme.TextTertiary)
+            }
+          }
+
+          // 添加的内容（new_string / content）
+          if ((input['new_string'] as string) || (toolName === 'Write' ? input['content'] as string : '')) {
+            ForEach(((input['new_string'] as string) || (toolName === 'Write' ? input['content'] as string : '')).split('\n').slice(0, 10), (line: string, idx: number) => {
+              Row() {
+                Text('+')
+                  .fontSize(Theme.FontTiny)
+                  .fontColor(Theme.SuccessColor)
+                  .width(12)
+                Text(line || ' ')
+                  .fontSize(Theme.FontTiny)
+                  .fontColor(Theme.SuccessColor)
+                  .backgroundColor('rgba(52,199,89,0.1)')
+                  .layoutWeight(1)
+              }
+              .width('100%')
+              .padding({ left: 4, right: 4 })
+            }, (line: string, idx: number) => `new-${idx}`)
+            if (((input['new_string'] as string) || (toolName === 'Write' ? input['content'] as string : '')).split('\n').length > 10) {
+              Text(`... 还有 ${((input['new_string'] as string) || (toolName === 'Write' ? input['content'] as string : '')).split('\n').length - 10} 行`)
+                .fontSize(Theme.FontTiny)
+                .fontColor(Theme.TextTertiary)
+            }
+          }
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .constraintSize({ maxHeight: 150 })
+      .padding(8)
+      .backgroundColor(Theme.BackgroundTertiary)
+      .borderRadius(8)
+    }
+    .width('100%')
   }
 
   @Builder
@@ -2159,31 +2668,6 @@ struct ChatDetailPage {
       return message.questions[0].question || message.content
     }
     return message.content
-  }
-
-  private hasQuestionOptions(message: Message): boolean {
-    if (message.questions && message.questions.length > 0) {
-      const q = message.questions[0]
-      return !!(q.options && q.options.length > 0)
-    }
-    return !!(message.options && message.options.length > 0)
-  }
-
-  private getQuestionOptions(message: Message): string[] {
-    if (message.questions && message.questions.length > 0) {
-      const q = message.questions[0]
-      if (q.options && q.options.length > 0) {
-        return q.options.map((opt: QuestionOption): string => opt.label || '')
-      }
-    }
-    return message.options || []
-  }
-
-  private isQuestionMultiSelect(message: Message): boolean {
-    if (message.questions && message.questions.length > 0) {
-      return !!message.questions[0].multiSelect
-    }
-    return false
   }
 
   @Builder
@@ -3138,10 +3622,12 @@ struct ChatDetailPage {
       clearInterval(this.workTimer)
       this.workTimer = -1
     }
-    // 停止吉祥物脉冲动画，回到静止状态
-    animateTo({ duration: 300 }, () => {
-      this.mascotScale = 0.85
-    })
+    // 停止吉祥物脉冲动画，回到静止状态（组件未销毁时才执行动画）
+    if (!this.isDestroyed) {
+      animateTo({ duration: 300 }, () => {
+        this.mascotScale = 0.85
+      })
+    }
   }
 
   private formatElapsed(seconds: number): string {
@@ -3258,7 +3744,7 @@ struct ChatDetailPage {
     this.inThinkingBlock = false
     this.latestThinkingId = ''
 
-    this.chatStatus = 'thinking'
+    // 状态由 SessionStore 更新，启动计时器
     this.startWorkTimer()
 
     this.scrollToBottom()

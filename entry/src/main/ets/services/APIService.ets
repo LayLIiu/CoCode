@@ -118,6 +118,13 @@ export class RawMessage {
   thinking: string = ''
 }
 
+// 文件信息响应
+export class FileInfoResult {
+  type: string = ''
+  size: number = 0
+  name: string = ''
+}
+
 export class APIError extends Error {
   code: number = 0
 
@@ -372,6 +379,86 @@ export class APIService {
       if (typeof content === 'string') return content
     } catch (e) { /* ignore */ }
     return ''
+  }
+
+  /**
+   * 下载文件为 Base64 编码
+   * 用于获取图片等二进制文件，返回 data:image/...;base64,... 格式
+   */
+  async downloadFileAsBase64(filePath: string): Promise<string> {
+    if (!this.baseUrl) {
+      throw new APIError('服务器地址未设置', -1)
+    }
+
+    const url = this.baseUrl + '/api/filesystem/read?path=' + encodeURIComponent(filePath)
+    console.info(`[APIService] Download file: ${url}`)
+
+    const httpRequest = http.createHttp()
+    try {
+      // 使用二进制模式读取文件
+      const response = await httpRequest.request(url, {
+        method: http.RequestMethod.GET,
+        connectTimeout: 30000,
+        readTimeout: 30000,
+        header: {
+          'Accept': 'image/png,image/jpeg,image/svg+xml,image/*,*/*'
+        },
+        // 让 http 响应返回字符串（对于小文件足够）
+        expectDataType: http.HttpDataType.STRING
+      })
+
+      if (response.responseCode >= 200 && response.responseCode < 300) {
+        const result = response.result as string
+        // 判断是否为 JSON（文本文件）或二进制
+        if (typeof result === 'string') {
+          try {
+            const parsed: Record<string, Object> = JSON.parse(result)
+            if (parsed && parsed['content']) {
+              // 文本文件内容
+              return parsed['content'] as string
+            }
+          } catch (e) {
+            // 不是 JSON，尝试 base64
+            return result
+          }
+        }
+      }
+      throw new APIError('文件下载失败', response.responseCode)
+    } catch (e) {
+      if (e instanceof APIError) throw e
+      console.error(`[APIService] Download error: ${e}`)
+      throw new APIError('文件下载失败: 网络错误', -3)
+    } finally {
+      httpRequest.destroy()
+    }
+  }
+
+  /**
+   * 获取文件信息（MIME 类型、大小等）
+   */
+  async getFileInfo(filePath: string): Promise<FileInfoResult> {
+    try {
+      const res = await this.request<Record<string, Object>>('/api/filesystem/info?path=' + encodeURIComponent(filePath), 'GET', '')
+      const result = new FileInfoResult()
+      result.type = (res['mimeType'] as string) || ''
+      result.size = (res['size'] as number) || 0
+      result.name = (res['name'] as string) || filePath.split('/').pop() || filePath
+      return result
+    } catch (e) {
+      // 从文件路径推断
+      const name = filePath.split('/').pop() || filePath
+      const ext = name.split('.').pop()?.toLowerCase() || ''
+      const mimeMap: Record<string, string> = {
+        'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+        'gif': 'image/gif', 'svg': 'image/svg+xml', 'webp': 'image/webp',
+        'pdf': 'application/pdf', 'txt': 'text/plain'
+      }
+      const result = new FileInfoResult()
+      result.type = mimeMap[ext] || 'application/octet-stream'
+      result.size = 0
+      result.name = name
+      return result
+    }
   }
 
   // MARK: - 私有方法

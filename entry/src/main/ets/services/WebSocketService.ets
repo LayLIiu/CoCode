@@ -455,6 +455,16 @@ export class WebSocketService {
     return this.send(sessionId, message)
   }
 
+  sendAskUserQuestionResponse(sessionId: string, requestId: string, answers: Record<string, string>): boolean {
+    const message: OutgoingMessage = {
+      type: 'permission_response',
+      requestId: requestId,
+      allowed: true,
+      answers: answers
+    }
+    return this.send(sessionId, message)
+  }
+
   sendStop(sessionId: string): boolean {
     const message: OutgoingMessage = { type: 'stop_generation' }
     return this.send(sessionId, message)

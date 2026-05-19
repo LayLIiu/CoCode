@@ -5,6 +5,7 @@
 
 import { Theme } from '../common/Theme'
 import pasteboard from '@ohos.pasteboard'
+import { fileService } from '../services/FileService'
 
 // ── 辅助类型 ──
 
@@ -540,12 +541,40 @@ export struct MarkdownRenderer {
 
   // ── 图片 ──
 
+  /** 从服务端获取的图片缓存 url → dataUri */
+  private imageFetchCache: Map<string, string> = new Map()
+
+  /**
+   * 解析图片 URL：远程 URL 直接返回，本地路径从服务端拉取
+   */
+  private async resolveImageUrl(url: string): Promise<string> {
+    if (!url) return ''
+    if (fileService.isRemoteUrl(url)) return url
+
+    const cached = this.imageFetchCache.get(url)
+    if (cached) return cached
+
+    try {
+      const dataUri = await fileService.fetchImageBase64(url)
+      if (dataUri) {
+        this.imageFetchCache.set(url, dataUri)
+        return dataUri
+      }
+    } catch (e) {
+      console.error('[Markdown] resolveImageUrl error:', e)
+    }
+    return url
+  }
+
   @Builder
   ImageView(node: MDNode) {
     Column({ space: 4 }) {
       if (node.imageUrl) {
-        Image(node.imageUrl).width('100%').objectFit(ImageFit.Contain)
-          .borderRadius(8).constraintSize({ maxHeight: 250 })
+        AsyncImage({
+          url: node.imageUrl,
+          resolver: (u: string) => this.resolveImageUrl(u),
+          alt: node.imageAlt
+        })
       }
       if (node.imageAlt) {
         Text(node.imageAlt).fontSize(11).fontColor(Theme.TextTertiary).textAlign(TextAlign.Center)
@@ -667,5 +696,93 @@ export struct MarkdownRenderer {
       }, (frag: InlineFragment, fi: number) => `ilf-${fi}`)
     }
     .lineHeight(20).layoutWeight(1)
+  }
+}
+
+// ── 异步图片加载组件 ──
+
+@Component
+struct AsyncImage {
+  private url: string = ''
+  private resolver: (url: string) => Promise<string> = async (u) => u
+  private alt: string = ''
+  @State private resolvedSrc: string = ''
+  @State private isLoading: boolean = true
+  @State private hasError: boolean = false
+
+  aboutToAppear(): void {
+    this.loadImage()
+  }
+
+  private async loadImage(): Promise<void> {
+    if (!this.url) {
+      this.isLoading = false
+      this.hasError = true
+      return
+    }
+    this.isLoading = true
+    this.hasError = false
+    try {
+      const src = await this.resolver(this.url)
+      if (src) {
+        this.resolvedSrc = src
+      } else {
+        this.hasError = true
+      }
+    } catch (e) {
+      this.hasError = true
+    }
+    this.isLoading = false
+  }
+
+  build() {
+    Column({ space: 4 }) {
+      if (this.isLoading) {
+        Row({ space: 6 }) {
+          Text('⬇')
+            .fontSize(16)
+          Text('加载图片...')
+            .fontSize(12)
+            .fontColor(Theme.TextTertiary)
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .height(80)
+        .backgroundColor('rgba(255,255,255,0.05)')
+        .borderRadius(8)
+
+      } else if (this.hasError) {
+        Row({ space: 6 }) {
+          Text('⚠')
+            .fontSize(16)
+          Text('图片加载失败')
+            .fontSize(12)
+            .fontColor(Theme.TextTertiary)
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .height(60)
+        .backgroundColor('rgba(255,255,255,0.05)')
+        .borderRadius(8)
+        .onClick(() => { this.loadImage() })
+
+      } else if (this.resolvedSrc) {
+        Image(this.resolvedSrc)
+          .width('100%')
+          .objectFit(ImageFit.Contain)
+          .borderRadius(8)
+          .constraintSize({ maxHeight: 240 })
+          .backgroundColor('rgba(0,0,0,0.1)')
+      }
+
+      if (this.alt) {
+        Text(this.alt)
+          .fontSize(11)
+          .fontColor(Theme.TextTertiary)
+          .textAlign(TextAlign.Center)
+          .width('100%')
+      }
+    }
+    .width('100%')
   }
 }

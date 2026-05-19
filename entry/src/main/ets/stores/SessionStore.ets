@@ -3,7 +3,7 @@
  * 支持状态持久化和 WebSocket 实时更新
  */
 
-import { Session, Message, SessionStatus, TaskItem, PermissionMode, WSMessage, OutgoingMessage, RecentProject, AttachmentRef } from '../models/Models'
+import { Session, Message, SessionStatus, TaskItem, PermissionMode, WSMessage, OutgoingMessage, RecentProject, AttachmentRef, PendingPermission } from '../models/Models'
 import { apiService } from '../services/APIService'
 import { wsService } from '../services/WebSocketService'
 import { storageService } from '../services/StorageService'
@@ -33,6 +33,9 @@ export class SessionStore {
   sessionTasks: Map<string, TaskItem[]> = new Map()
   taskBarExpanded: boolean = false
   taskBarDismissed: boolean = false
+
+  // 待审批权限请求
+  pendingPermissions: Map<string, PendingPermission> = new Map()
 
   // 最近项目
   recentProjects: RecentProject[] = []
@@ -606,6 +609,11 @@ export class SessionStore {
     wsService.sendQuestionResponse(this.currentSessionId, questionId, answer)
   }
 
+  sendAskUserQuestionResponse(requestId: string, answers: Record<string, string>): void {
+    if (!this.currentSessionId) return
+    wsService.sendAskUserQuestionResponse(this.currentSessionId, requestId, answers)
+  }
+
   stopGeneration(): void {
     if (!this.currentSessionId) return
     wsService.sendStop(this.currentSessionId)
@@ -675,8 +683,8 @@ export class SessionStore {
       storageService.saveSessionStatuses(this.sessionStatuses)
     }
 
-    
-    // completed 状态 3 秒后自动恢复为 idle，让吉祥物回到睡眠
+
+    // completed 状态 2 秒后自动恢复为 idle，让吉祥物回到睡眠
     if (status === 'completed') {
       // 清除之前的 timer
       const oldTimer = this.completedTimers.get(sessionId)
@@ -689,7 +697,7 @@ export class SessionStore {
         if (this.sessionStatuses.get(sessionId) === 'completed') {
           this.updateSessionStatus(sessionId, 'idle')
         }
-      }, 8000)
+      }, 2000)
       this.completedTimers.set(sessionId, timer)
     }
 
@@ -855,7 +863,18 @@ export class SessionStore {
       case 'permission_request':
         this.updateSessionStatus(sessionId, 'permission_pending')
 
+        // 设置 pendingPermission 状态
         if (msg.requestId) {
+          const pending: PendingPermission = {
+            requestId: msg.requestId,
+            toolName: msg.toolName,
+            toolUseId: msg.toolUseId,
+            input: msg.input as Record<string, Object>,
+            description: msg.description
+          }
+          this.pendingPermissions.set(sessionId, pending)
+
+          // AskUserQuestion 工具特殊处理：添加带 toolName 的消息，由 ChatDetailPage 特殊渲染
           const permMessage: Message = {
             id: 'permission-' + msg.requestId,
             type: 'permission_request',
@@ -863,7 +882,8 @@ export class SessionStore {
             timestamp: new Date().toISOString(),
             toolName: msg.toolName,
             permissionId: msg.requestId,
-            permissionDescription: msg.description
+            permissionDescription: msg.description,
+            toolInput: msg.input as Record<string, Object>
           }
           this.addMessage(sessionId, permMessage)
         }
@@ -1109,6 +1129,17 @@ export class SessionStore {
   }
 
   private updateSessionStatusFromState(sessionId: string, state: string): void {
+    // 获取当前状态，避免覆盖已完成状态
+    const currentStatus = this.sessionStatuses.get(sessionId) || 'idle'
+
+    // 如果当前是 completed 或 idle，且新状态是 working 状态，忽略
+    // 这避免桌面端延迟的状态消息覆盖移动端的完成状态
+    if ((currentStatus === 'completed' || currentStatus === 'idle') &&
+        (state === 'thinking' || state === 'streaming' || state === 'tool_executing')) {
+      console.info(`[SessionStore] Ignoring stale status ${state} for ${sessionId}, current is ${currentStatus}`)
+      return
+    }
+
     let status: SessionStatus = 'idle'
     switch (state) {
       case 'idle':

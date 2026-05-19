@@ -204,6 +204,16 @@ export interface QuestionOption {
   description?: string
 }
 
+// MARK: - 待审批权限请求
+
+export interface PendingPermission {
+  requestId: string
+  toolName?: string
+  toolUseId?: string
+  input?: Record<string, Object>
+  description?: string
+}
+
 // MARK: - 附件
 
 export interface AttachmentRef {
@@ -224,6 +234,7 @@ export interface OutgoingMessage {
   rule?: string
   questionId?: string
   answer?: string
+  answers?: Record<string, string>
   mode?: string
   attachments?: AttachmentRef[]
 }
