@@ -749,6 +749,8 @@ export class SessionStore {
             const mode = msg.verb.substring('permission_mode:'.length) as PermissionMode
             this.sessionPermissionModes.set(sessionId, mode)
             this.notifySessionsChanged()
+            // 同步触发状态变更通知，确保 ChatDetailPage/ConversationListPage 刷新权限显示
+            this.notifyStatusChanged(sessionId, this.sessionStatuses.get(sessionId) || 'idle')
           } else if (msg.verb.startsWith('model_updated:')) {
             const modelId = msg.verb.substring('model_updated:'.length)
             console.info(`[SessionStore] Model synced: ${modelId}`)

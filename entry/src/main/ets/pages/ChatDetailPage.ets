@@ -250,9 +250,10 @@ struct ChatDetailPage {
   onPageShow(): void {
     this.isPageActive = true
     this.getRouterParams()
-    // 回到页面时重新同步工作状态
+    // 回到页面时重新同步工作状态和权限模式
     if (this.sessionId) {
       this.chatStatus = sessionStore.getSessionStatus(this.sessionId)
+      this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
     }
   }
 
@@ -353,6 +354,8 @@ struct ChatDetailPage {
   private sessionsChangedListener = () => {
     // 触发重绘以更新 TaskBarView
     this.messageUpdateCounter++
+    // 同步权限模式（服务端或其他端更改时更新）
+    this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
   }
 
   private setupCallbacks(): void {
