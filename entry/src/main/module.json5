@@ -32,6 +32,12 @@
         ]
       }
     ],
+    "metadata": [
+      {
+        "name": "client_id",
+        "value": "1947309297654316224"
+      }
+    ],
     "extensionAbilities": [
       {
         "name": "EntryBackupAbility",
@@ -56,16 +62,20 @@
         "reason": "$string:wifi_permission"
       },
       {
-        "name": "ohos.permission.SYSTEM_FLOAT_WINDOW",
-        "reason": "$string:float_window_permission"
-      },
-      {
         "name": "ohos.permission.KEEP_BACKGROUND_RUNNING",
         "reason": "$string:background_permission"
       },
       {
         "name": "ohos.permission.VIBRATE",
         "reason": "$string:vibrate_permission"
+      },
+      {
+        "name": "ohos.permission.CAMERA",
+        "reason": "$string:camera_permission",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "inuse"
+        }
       }
     ]
   }

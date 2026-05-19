@@ -60,41 +60,46 @@ export class NotificationHelper {
     }
   }
 
-  async notifyNewMessage(sessionTitle: string, content: string, sessionId: string): Promise<void> {
+  async notifyNewMessage(aiName: string, sessionTitle: string, content: string, sessionId: string): Promise<void> {
     if (!this.shouldNotify()) return
+    const displayTitle = sessionTitle || '新消息'
+    let displayText = content
+    if (displayText.length > 200) {
+      displayText = displayText.substring(0, 197) + '...'
+    }
     const p = new NotificationParams()
     p.id = this.hashSessionId(sessionId)
-    p.title = sessionTitle || '新消息'
-    p.text = content.length > 100 ? content.substring(0, 97) + '...' : content
+    p.title = aiName + ' 新回复 - ' + displayTitle
+    p.text = displayText
     p.label = 'ChatMessage'
     p.sessionId = sessionId
     await this.publishNotification(p)
   }
 
-  async notifyPermissionRequest(sessionTitle: string, toolName: string, sessionId: string): Promise<void> {
-    if (!this.shouldNotify()) return
+  async notifyPermissionRequest(aiName: string, sessionTitle: string, toolName: string, sessionId: string): Promise<void> {
+    if (!this.shouldNotify(true)) return
     const p = new NotificationParams()
     p.id = this.hashSessionId(sessionId) + 10000
-    p.title = '权限请求 - ' + sessionTitle
+    p.title = aiName + ' 权限请求 - ' + sessionTitle
     p.text = '工具 "' + toolName + '" 需要您的授权'
     p.label = 'PermissionRequest'
     p.sessionId = sessionId
     await this.publishNotification(p)
   }
 
-  async notifyQuestion(sessionTitle: string, text: string, sessionId: string): Promise<void> {
-    if (!this.shouldNotify()) return
+  async notifyQuestion(aiName: string, sessionTitle: string, text: string, sessionId: string): Promise<void> {
+    if (!this.shouldNotify(true)) return
     const p = new NotificationParams()
     p.id = this.hashSessionId(sessionId) + 20000
-    p.title = '问题 - ' + sessionTitle
+    p.title = aiName + ' 问题 - ' + sessionTitle
     p.text = text.length > 100 ? text.substring(0, 97) + '...' : text
     p.label = 'Question'
     p.sessionId = sessionId
     await this.publishNotification(p)
   }
 
-  private shouldNotify(): boolean {
-    if (appState.isInForeground) {
+  private shouldNotify(allowInForeground: boolean = false): boolean {
+    if (appState.isInForeground && !allowInForeground) {
       return false
     }
     return true

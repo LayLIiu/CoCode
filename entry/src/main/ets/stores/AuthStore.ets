@@ -7,6 +7,7 @@ import preferences from '@ohos.data.preferences'
 import { User, ServerMode, ServerProfile } from '../models/Models'
 import { apiService } from '../services/APIService'
 import { wsService } from '../services/WebSocketService'
+import { UrlUtils } from '../common/UrlUtils'
 
 export class AuthStore {
   private static instance: AuthStore
@@ -103,7 +104,7 @@ export class AuthStore {
     const profile: ServerProfile = {
       id: id,
       name: name,
-      url: this.normalizeUrl(url),
+      url: UrlUtils.normalizeUrl(url),
       type: type,
       lastUsed: Date.now()
     }
@@ -146,7 +147,7 @@ export class AuthStore {
     const profile = this.serverProfiles.find(p => p.id === id)
     if (!profile) return
 
-    profile.url = this.normalizeUrl(url)
+    profile.url = UrlUtils.normalizeUrl(url)
     profile.lastUsed = Date.now()
     await this.saveProfiles()
     if (this.activeProfileId === id) {
@@ -168,7 +169,7 @@ export class AuthStore {
    * 登录时自动添加配置（兼容旧版登录流程）
    */
   async addFromLogin(url: string): Promise<void> {
-    const normalized = this.normalizeUrl(url)
+    const normalized = UrlUtils.normalizeUrl(url)
 
     // 检查是否已有相同 URL 的配置
     const existing = this.serverProfiles.find(p => p.url === normalized)
@@ -211,7 +212,7 @@ export class AuthStore {
   // 以下为旧版兼容方法
 
   async setLanUrl(url: string): Promise<void> {
-    this.lanUrl = this.normalizeUrl(url)
+    this.lanUrl = UrlUtils.normalizeUrl(url)
     if (this.preferences) {
       await this.preferences.put('lanUrl', this.lanUrl)
       await this.preferences.flush()
@@ -222,7 +223,7 @@ export class AuthStore {
   }
 
   async setTunnelUrl(url: string): Promise<void> {
-    this.tunnelUrl = this.normalizeUrl(url)
+    this.tunnelUrl = UrlUtils.normalizeUrl(url)
     if (this.preferences) {
       await this.preferences.put('tunnelUrl', this.tunnelUrl)
       await this.preferences.flush()
@@ -285,43 +286,6 @@ export class AuthStore {
     }
   }
 
-  private normalizeUrl(url: string): string {
-    if (!url) return url
-
-    let processed = url
-
-    // 移除协议前缀
-    if (processed.startsWith('https://')) {
-      processed = processed.substring(8)
-    } else if (processed.startsWith('http://')) {
-      processed = processed.substring(7)
-    }
-
-    // 处理 host:port:token 格式
-    const colonCount = (processed.match(/:/g) || []).length
-    if (colonCount >= 2) {
-      const parts = processed.split(':')
-      if (parts.length >= 2) {
-        const host = parts[0]
-        const port = parts[1]
-        const isTunnel = host.includes('.tunnel.') ||
-          host.includes('trycloudflare') ||
-          host.includes('loca.lt')
-        processed = isTunnel ? `https://${host}:${port}` : `http://${host}:${port}`
-        return processed
-      }
-    }
-
-    // 添加协议
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      const isTunnel = url.includes('.tunnel.') ||
-        url.includes('trycloudflare') ||
-        url.includes('loca.lt')
-      return isTunnel ? `https://${url}` : `http://${url}`
-    }
-
-    return url
   }
-}
 
 export const authStore = AuthStore.getInstance()

@@ -4,13 +4,13 @@
  */
 
 import router from '@ohos.router'
-import { Context } from '@ohos.ability.common'
 import { Theme } from '../common/Theme'
 import { authStore } from '../stores/AuthStore'
 import { apiService } from '../services/APIService'
 import { wsService } from '../services/WebSocketService'
 import { User, DiscoveredServer } from '../models/Models'
 import { mdnsDiscoveryService } from '../services/MdnsDiscoveryService'
+import { openScanner } from '../services/ScanService'
 
 type ConnectionMode = 'pairing' | 'manual'
 
@@ -189,17 +189,36 @@ export struct LoginPage {
           .fontColor(Theme.TextPrimary)
           .width('85%')
 
-        TextInput({ placeholder: 'http://192.168.1.100:3456' })
-          .width('85%')
+        Row({ space: 8 }) {
+          TextInput({ placeholder: 'http://192.168.1.100:3456', text: this.serverUrl })
+            .layoutWeight(1)
+            .height(48)
+            .backgroundColor(Theme.GlassBackground)
+            .borderRadius(8)
+            .fontColor(Theme.TextPrimary)
+            .border({ width: 1, color: Theme.GlassBorder })
+            .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+            .onChange((value: string) => {
+              this.serverUrl = value
+            })
+
+          Button() {
+            SymbolGlyph($r('sys.symbol.qrcode'))
+              .fontSize(22)
+              .fontColor([Theme.TextOnPrimary])
+          }
+          .width(48)
           .height(48)
-          .backgroundColor(Theme.GlassBackground)
+          .backgroundColor(Theme.PrimaryColor)
           .borderRadius(8)
-          .fontColor(Theme.TextPrimary)
-          .border({ width: 1, color: Theme.GlassBorder })
-          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-          .onChange((value: string) => {
-            this.serverUrl = value
+          .onClick(async () => {
+            const result = await openScanner()
+            if (result?.bestUrl) {
+              this.serverUrl = result.bestUrl
+            }
           })
+        }
+        .width('85%')
       }
 
       Text('请输入桌面端服务地址（确保手机和电脑在同一网络）')
@@ -322,7 +341,7 @@ export struct LoginPage {
         ForEach(this.discoveredServers, (server: DiscoveredServer) => {
           Column() {
             Row({ space: 12 }) {
-              SymbolGlyph($r('sys.symbol.laptopcomputer'))
+              SymbolGlyph($r('sys.symbol.wifi'))
                 .fontSize(32)
                 .fontColor([Theme.AccentGreen])
 
@@ -440,9 +459,13 @@ export struct LoginPage {
         await authStore.login(user)
 
         // 跳转到主页
-        router.pushUrl({
-          url: 'pages/Index'
-        })
+        try {
+          await router.pushUrl({
+            url: 'pages/Index'
+          })
+        } catch (e) {
+          console.error(`[Login] Router push error: ${e}`)
+        }
       } else {
         this.errorMessage = '配对失败，请检查配对码是否正确'
       }
@@ -460,12 +483,15 @@ export struct LoginPage {
     this.isConnecting = true
     this.errorMessage = ''
 
-    // 处理 host:port:token 格式
-    const colonCount = (url.match(/:/g) || []).length
-    if (colonCount >= 2 && !url.startsWith('http')) {
-      const parts = url.split(':')
-      if (parts.length >= 2) {
-        url = parts[0] + ':' + parts[1]
+    // 处理 host:port:token 格式（仅对非 IPv6 的 URL）
+    const isIpv6 = url.includes('[') || (url.match(/:/g) || []).length > 2
+    if (!isIpv6 && !url.startsWith('http')) {
+      const colonCount = (url.match(/:/g) || []).length
+      if (colonCount >= 2) {
+        const parts = url.split(':')
+        if (parts.length >= 2) {
+          url = parts[0] + ':' + parts[1]
+        }
       }
     }
 
@@ -490,9 +516,13 @@ export struct LoginPage {
       await authStore.login(user)
 
       // 跳转到主页
-      router.pushUrl({
-        url: 'pages/Index'
-      })
+      try {
+        await router.pushUrl({
+          url: 'pages/Index'
+        })
+      } catch (e) {
+        console.error(`[Login] Router push error: ${e}`)
+      }
     } catch (e) {
       this.errorMessage = '连接失败: ' + this.getErrorMessage(e)
     }

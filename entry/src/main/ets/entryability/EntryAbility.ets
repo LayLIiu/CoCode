@@ -1,15 +1,20 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit'
 import { hilog } from '@kit.PerformanceAnalysisKit'
-import { window } from '@kit.ArkUI'
+import { window, router } from '@kit.ArkUI'
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit'
 import { wantAgent } from '@kit.AbilityKit'
 import { notificationManager } from '@kit.NotificationKit'
+import { pushService } from '@kit.PushKit'
+import { BusinessError } from '@kit.BasicServicesKit'
 import { authStore } from '../stores/AuthStore'
+import { apiService } from '../services/APIService'
 import { appState } from '../stores/AppState'
 import { sessionStore } from '../stores/SessionStore'
 import { wsService } from '../services/WebSocketService'
 import { storageService } from '../services/StorageService'
 import { notificationHelper } from '../services/NotificationHelper'
+import { liveViewService } from '../services/LiveViewService'
+import { initScanService } from '../services/ScanService'
 
 const DOMAIN = 0x0000
 
@@ -26,7 +31,9 @@ export default class EntryAbility extends UIAbility {
 
     // 初始化 Store
     await authStore.setContext(this.context)
+    initScanService(this.context)
     notificationHelper.setContext(this.context)
+    liveViewService.setBundleName(this.context.applicationInfo.name)
 
     // 初始化本地存储
     await storageService.init(this.context)
@@ -43,12 +50,76 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, 'testTag', 'Notification permission error: %{public}s', JSON.stringify(e))
     }
     hilog.info(DOMAIN, 'testTag', 'Notification helper initialized')
+
+    // 处理通知点击跳转
+    this.handleNotificationWant(want)
+
+    // 获取华为推送 Token（非阻塞，不阻碍 App 启动）
+    // 注意：调试签名下会报 1000900010 (Illegal application identity)，
+    // 这是正常现象，需使用 AGC 正式签名才能获取成功
+    this.initPushToken()
+  }
+
+  onNewWant(want: Want): void {
+    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onNewWant')
+    this.handleNotificationWant(want)
   }
 
   onDestroy(): void {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy')
     // 断开所有 WebSocket 连接
     wsService.disconnectAll()
+  }
+
+  /**
+   * 初始化推送 Token
+   * 调试签名下会报 1000900010 (Illegal application identity)，属正常现象
+   * 仅在使用 AGC 正式签名时才能成功获取
+   */
+  private initPushToken(): void {
+    hilog.info(DOMAIN, 'testTag', 'Requesting push token...')
+    pushService.getToken().then((token: string) => {
+      hilog.info(DOMAIN, 'testTag', 'Succeeded in getting push token: %{public}s', token)
+      if (token) {
+        apiService.uploadPushToken(token).then(() => {
+          hilog.info(DOMAIN, 'testTag', 'Push token uploaded to server')
+        }).catch((err: Error) => {
+          hilog.error(DOMAIN, 'testTag', 'Failed to upload push token: %{public}s', err.message)
+        })
+      }
+    }).catch((err: Error) => {
+      const code = (err as BusinessError).code
+      if (code === 1000900010) {
+        // 调试签名下的预期错误，降级为 info 级别避免日志刷屏
+        hilog.info(DOMAIN, 'testTag',
+          'Push token unavailable (debug signing). Use AGC release signing for push notifications.')
+      } else {
+        hilog.error(DOMAIN, 'testTag', 'Failed to get push token: %{public}d %{public}s',
+          code, (err as BusinessError).message)
+      }
+    })
+  }
+
+  private handleNotificationWant(want: Want): void {
+    if (!want.parameters) return
+    const fromNotification = want.parameters['fromNotification']
+    const sessionId = want.parameters['sessionId']
+    if (fromNotification === 'true' && typeof sessionId === 'string' && sessionId) {
+      appState.pendingSessionId = sessionId
+      hilog.info(DOMAIN, 'testTag', 'Notification deep link: sessionId=%{public}s', sessionId)
+      // 延迟跳转等 Index 页加载完成
+      setTimeout(() => {
+        try {
+          sessionStore.setCurrentSession(sessionId)
+          router.pushUrl({
+            url: 'pages/ChatDetailPage',
+            params: { sessionId: sessionId }
+          })
+        } catch (e) {
+          hilog.error(DOMAIN, 'testTag', 'Notification navigation error: %{public}s', JSON.stringify(e))
+        }
+      }, 500)
+    }
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {

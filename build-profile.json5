@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "/Users/liujie/.ohos/config/default_MyApplication2_nCHPsmMP808hvsV5omdsQAQPXyChn7n1cbK8ZCsBIa8=.cer",
+          "certpath": "/Users/liujie/.ohos/config/default_MyApplication2_aaIIvZpJJBevBjB1MY2ztqKI3TktDhP1kigQqC2YJmg=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001BA917138FC44D518C7A82B1CE20022CA78291D0F9D961A9B17BCA4B54C8BA126290706F7D32400B",
-          "profile": "/Users/liujie/.ohos/config/default_MyApplication2_nCHPsmMP808hvsV5omdsQAQPXyChn7n1cbK8ZCsBIa8=.p7b",
+          "keyPassword": "0000001B493FDD0FC6FB250B7152B3BE6EC010E27766807CD8A0F6C03CBC507C8E15552CA5147556F86D88",
+          "profile": "/Users/liujie/MyApplication2/signing/debug.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "/Users/liujie/.ohos/config/default_MyApplication2_nCHPsmMP808hvsV5omdsQAQPXyChn7n1cbK8ZCsBIa8=.p12",
-          "storePassword": "0000001B2CD4C89F7E28835C125090CBF140B0D5C7CB5D3BFD5F614BF3A967585FAB958B2FD83962F15374"
+          "storeFile": "/Users/liujie/.ohos/config/default_MyApplication2_aaIIvZpJJBevBjB1MY2ztqKI3TktDhP1kigQqC2YJmg=.p12",
+          "storePassword": "0000001B9C779B0E40487C59D2C4DB9B89F403DCDD2F742F4117D8273C063751202AAA543854F33DBFAA09"
         }
       }
     ],

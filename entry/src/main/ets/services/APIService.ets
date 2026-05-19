@@ -4,6 +4,7 @@
  */
 
 import http from '@ohos.net.http'
+import { UrlUtils } from '../common/UrlUtils'
 import {
   Session, Message, Provider, NetworkInfo, ModelInfo,
   RecentProject, EffortResponse, ProviderInput, ProviderTestOverrides,
@@ -138,49 +139,8 @@ export class APIService {
   }
 
   setBaseUrl(url: string): void {
-    let processedUrl = url.trim()
-    let isSecure = false
-
-    // 移除协议前缀
-    if (processedUrl.startsWith('https://')) {
-      isSecure = true
-      processedUrl = processedUrl.substring(8)
-    } else if (processedUrl.startsWith('http://')) {
-      processedUrl = processedUrl.substring(7)
-    }
-
-    // 处理 host:port:token 格式
-    const colonCount = this.countChar(processedUrl, ':')
-    if (colonCount >= 2) {
-      const parts = processedUrl.split(':')
-      if (parts.length >= 2) {
-        processedUrl = parts[0] + ':' + parts[1]
-      }
-    }
-
-    // 判断是否需要 HTTPS
-    const isTunnel = processedUrl.includes('.tunnel.') ||
-      processedUrl.includes('trycloudflare') ||
-      processedUrl.includes('loca.lt')
-
-    if (isSecure || isTunnel) {
-      processedUrl = 'https://' + processedUrl
-    } else {
-      processedUrl = 'http://' + processedUrl
-    }
-
-    this.baseUrl = processedUrl
+    this.baseUrl = UrlUtils.normalizeUrl(url)
     console.info(`[APIService] baseUrl: ${this.baseUrl}`)
-  }
-
-  private countChar(str: string, char: string): number {
-    let count = 0
-    for (let i = 0; i < str.length; i++) {
-      if (str[i] === char) {
-        count++
-      }
-    }
-    return count
   }
 
   getBaseUrl(): string {
@@ -432,7 +392,9 @@ export class APIService {
     } else if (method === 'PUT') {
       httpMethod = http.RequestMethod.PUT
     } else if (method === 'PATCH') {
-      httpMethod = http.RequestMethod.PUT // 鸿蒙 http.RequestMethod 不包含 PATCH，用 PUT + X-HTTP-Method-Override
+      httpMethod = http.RequestMethod.PUT
+      // 鸿蒙 http.RequestMethod 不包含 PATCH 枚举值，服务端使用 X-HTTP-Method-Override 头识别 PATCH
+      // 若服务端不支持此方式，需改用 POST 或添加原生 PATCH 支持
     } else if (method === 'DELETE') {
       httpMethod = http.RequestMethod.DELETE
     }
@@ -489,6 +451,12 @@ export class APIService {
     } finally {
       httpRequest.destroy()
     }
+  }
+
+  // MARK: - Push Token 上报
+
+  async uploadPushToken(token: string): Promise<void> {
+    await this.request<Object>('/api/push/token', 'POST', JSON.stringify({ token: token }))
   }
 
   // MARK: - 消息转换

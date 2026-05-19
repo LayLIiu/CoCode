@@ -74,6 +74,11 @@ export interface Message {
   isQuestionAnswered?: boolean
   questions?: QuestionItem[]
 
+  // Agent 派遣
+  parentToolUseId?: string  // 父级工具 ID，用于 Agent 子工具嵌套
+  agentTaskStatus?: 'starting' | 'running' | 'done' | 'failed' | 'stopped'  // Agent 任务状态
+  agentSummary?: string     // Agent 任务摘要
+
   // 任务列表
   tasks?: TaskItem[]
 }
@@ -179,6 +184,12 @@ export interface WSMessage {
   title?: string
   questions?: QuestionItem[]
   tasks?: TaskItem[]
+
+  // Agent 派遣
+  subtype?: string           // system_notification 子类型（如 task_notification）
+  data?: Record<string, Object>  // 附加数据（如 task_notification 负载）
+  summary?: string           // Agent 任务摘要
+  parentToolUseId?: string   // 父级工具 UseID（用于 Agent 子工具追踪）
 }
 
 export interface QuestionItem {

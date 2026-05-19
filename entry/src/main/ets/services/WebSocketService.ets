@@ -4,6 +4,7 @@
  */
 
 import webSocket from '@ohos.net.webSocket'
+import { UrlUtils } from '../common/UrlUtils'
 import { WSMessage, OutgoingMessage, QuestionItem, TaskStatus, WSMessageType, AttachmentRef } from '../models/Models'
 
 export class WSSessionConnection {
@@ -44,7 +45,7 @@ export class WebSocketService {
   }
 
   setServerUrl(url: string): void {
-    this.serverUrl = url
+    this.serverUrl = UrlUtils.normalizeUrl(url)
   }
 
   /** 检查是否已有直接 WebSocket 连接到指定会话（用于避免全局广播重复处理） */
@@ -102,14 +103,14 @@ export class WebSocketService {
   connectSession(sessionId: string): void {
     if (!this.serverUrl) {
       console.error('[WS] serverUrl is empty')
-      return
+      // removed
     }
 
     // 检查是否已连接
     const existing = this.connections.get(sessionId)
     if (existing && existing.status === 'connected' && existing.ws) {
       console.info(`[WS] Already connected to ${sessionId}`)
-      return
+      // removed
     }
 
     const wsUrl = this.buildWsUrl('/ws/' + sessionId)
@@ -137,7 +138,7 @@ export class WebSocketService {
       if (err) {
         console.error(`[WS] Connect failed: ${err.message}`)
         this.handleDisconnect(sessionId)
-        return
+        // removed
       }
       console.info(`[WS] Connected to ${sessionId}`)
       this.updateConnectionStatus(sessionId, 'connected')
@@ -172,27 +173,13 @@ export class WebSocketService {
   private buildWsUrl(pathSuffix: string): string {
     if (!this.serverUrl) return ''
 
-    // 先用原始 URL 判断是否安全连接
-    const isSecure = this.serverUrl.startsWith('https://') ||
-      this.serverUrl.includes('.tunnel.') ||
-      this.serverUrl.includes('trycloudflare') ||
-      this.serverUrl.includes('loca.lt')
-
+    // 使用已规范化的 serverUrl，去掉 http/https 前缀，替换为 ws/wss
+    const isSecure = this.serverUrl.startsWith('https://')
     let hostPart = this.serverUrl
-
     if (hostPart.startsWith('https://')) {
       hostPart = hostPart.substring(8)
     } else if (hostPart.startsWith('http://')) {
       hostPart = hostPart.substring(7)
-    }
-
-    // 处理 host:port:token 格式（3 段冒号），只保留 host:port
-    const colonCount = this.countChar(hostPart, ':')
-    if (colonCount >= 2) {
-      const parts = hostPart.split(':')
-      if (parts.length >= 2) {
-        hostPart = parts[0] + ':' + parts[1]
-      }
     }
 
     return (isSecure ? 'wss://' : 'ws://') + hostPart + pathSuffix
@@ -201,12 +188,12 @@ export class WebSocketService {
   connectGlobal(): void {
     if (!this.serverUrl) {
       console.error('[WS-Global] serverUrl is empty')
-      return
+      // removed
     }
 
     if (this.globalConn && this.globalConn.status === 'connected' && this.globalConn.ws) {
       console.info('[WS-Global] Already connected')
-      return
+      // removed
     }
 
     const wsUrl = this.buildWsUrl('/ws/global')
@@ -230,7 +217,7 @@ export class WebSocketService {
       if (err) {
         console.error(`[WS-Global] Connect failed: ${err.message}`)
         this.handleGlobalDisconnect()
-        return
+        // removed
       }
       console.info('[WS-Global] Connected')
       if (this.globalConn) {
@@ -295,7 +282,7 @@ export class WebSocketService {
     ws.on('message', (err, value) => {
       if (err) {
         console.error(`[WS-Global] Receive error: ${err.message}`)
-        return
+        // removed
       }
 
       let text = ''
@@ -320,13 +307,14 @@ export class WebSocketService {
       if (this.globalMsgHandler) {
         this.globalMsgHandler(json)
       }
+
+      // 解析成功后更新连接健康状态
+      if (this.globalConn) {
+        this.globalConn.lastActivity = Date.now()
+        this.globalConn.reconnectAttempts = 0
+      }
     } catch (e) {
       console.error(`[WS-Global] Parse error: ${e}`)
-    }
-
-    if (this.globalConn) {
-      this.globalConn.lastActivity = Date.now()
-      this.globalConn.reconnectAttempts = 0
     }
   }
 
@@ -343,13 +331,9 @@ export class WebSocketService {
       return
     }
 
-    if (this.globalConn.reconnectAttempts >= 5) {
-      console.info('[WS-Global] Max reconnect attempts')
-      return
-    }
-
     this.globalConn.reconnectAttempts++
-    const delay = Math.min(1000 * Math.pow(2, this.globalConn.reconnectAttempts), 10000)
+    // 无限重连，退避上限 30 秒
+    const delay = Math.min(1000 * Math.pow(2, this.globalConn.reconnectAttempts), 30000)
 
     console.info(`[WS-Global] Reconnecting in ${delay}ms`)
 
@@ -360,16 +344,6 @@ export class WebSocketService {
     this.globalReconnectTimer = setTimeout(() => {
       this.connectGlobal()
     }, delay)
-  }
-
-  private countChar(str: string, char: string): number {
-    let count = 0
-    for (let i = 0; i < str.length; i++) {
-      if (str[i] === char) {
-        count++
-      }
-    }
-    return count
   }
 
   disconnectSession(sessionId: string): void {
@@ -492,7 +466,7 @@ export class WebSocketService {
     ws.on('message', (err, value) => {
       if (err) {
         console.error(`[WS] Receive error: ${err.message}`)
-        return
+        // removed
       }
 
       let text = ''
@@ -518,7 +492,7 @@ export class WebSocketService {
       if (json.type === 'connected') {
         console.info(`[WS] WebSocket connected for ${sessionId}`)
         this.updateConnectionStatus(sessionId, 'connected')
-        return
+        // removed
       }
 
       if (this.messageHandler) {
@@ -574,22 +548,21 @@ export class WebSocketService {
       return
     }
 
-    if (conn.reconnectAttempts >= 5) {
-      console.info(`[WS] Max reconnect attempts for ${sessionId}`)
+    // 检查是否已有待处理的 recconnect 定时器，避免重复计数和多重重连
+    const existingTimer = this.reconnectTimers.get(sessionId)
+    if (existingTimer !== undefined) {
+      console.info(`[WS] Reconnect already scheduled for ${sessionId}, skipping`)
       return
     }
 
     conn.reconnectAttempts++
-    const delay = Math.min(1000 * Math.pow(2, conn.reconnectAttempts), 10000)
+    // 无限重连，退避上限 30 秒
+    const delay = Math.min(1000 * Math.pow(2, conn.reconnectAttempts), 30000)
 
     console.info(`[WS] Reconnecting to ${sessionId} in ${delay}ms`)
 
-    const timer = this.reconnectTimers.get(sessionId)
-    if (timer) {
-      clearTimeout(timer)
-    }
-
     this.reconnectTimers.set(sessionId, setTimeout(() => {
+      this.reconnectTimers.delete(sessionId)
       this.connectSession(sessionId)
     }, delay))
   }
@@ -614,11 +587,7 @@ export class WebSocketService {
       const conn = this.connections.get(sessionId)
       if (conn) {
         if (conn.status === 'disconnected' || conn.status === 'error' || !conn.ws) {
-          // 如果已达到最大重试次数，不再尝试（避免绕过退避策略）
-          if (conn.reconnectAttempts >= 5) {
-            console.info(`[WS] Heartbeat: ${sessionId} has reached max reconnect attempts, skipping`)
-            return
-          }
+          // 无限重连，不做次数限制
           console.info(`[WS] Heartbeat: reconnecting broken connection for ${sessionId}`)
           this.scheduleReconnect(sessionId)
         }
@@ -766,7 +735,7 @@ export class WebSocketService {
   forceReconnectAll(): void {
     if (!this.serverUrl) {
       console.info('[WS] forceReconnectAll: no serverUrl, skipping')
-      return
+      // removed
     }
 
     console.info(`[WS] forceReconnectAll: ${this.subscribedSessions.size} sessions`)

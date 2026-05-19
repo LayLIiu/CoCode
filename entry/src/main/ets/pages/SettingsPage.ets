@@ -11,6 +11,7 @@ import { HdsNavigation, ScrollEffectType, HdsNavigationTitleMode } from '@hms.hd
 import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import router from '@ohos.router'
 import http from '@ohos.net.http'
+import { openScanner } from '../services/ScanService'
 
 @Component
 export struct SettingsPage {
@@ -375,11 +376,29 @@ export struct SettingsPage {
       // 添加服务器 + 管理按钮
       Row({ space: 12 }) {
         Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.qrcode'))
+            .fontSize(14)
+            .fontColor([Theme.PrimaryColor])
+
+          Text('扫码添加')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.PrimaryColor)
+        }
+        .onClick(async () => {
+          const result = await openScanner()
+          if (result?.bestUrl) {
+            this.newProfileName = ''
+            this.newProfileUrl = result.bestUrl
+            this.showAddProfileSheet = true
+          }
+        })
+
+        Row({ space: 6 }) {
           SymbolGlyph($r('sys.symbol.plus_circle'))
             .fontSize(14)
             .fontColor([Theme.PrimaryColor])
 
-          Text('添加服务器')
+          Text('手动输入')
             .fontSize(Theme.FontCaption)
             .fontColor(Theme.PrimaryColor)
         }
@@ -904,18 +923,37 @@ export struct SettingsPage {
           this.newProfileName = value
         })
 
-      TextInput({ placeholder: 'http://192.168.x.x:3456', text: this.newProfileUrl })
-        .width('100%')
+      Row({ space: 8 }) {
+        TextInput({ placeholder: 'http://192.168.x.x:3456', text: this.newProfileUrl })
+          .layoutWeight(1)
+          .height(44)
+          .backgroundColor(Theme.GlassBackground)
+          .borderRadius(8)
+          .fontColor(Theme.TextPrimary)
+          .border({ width: 1, color: Theme.GlassBorder })
+          .padding({ left: 12, right: 12 })
+          .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+          .onChange((value: string) => {
+            this.newProfileUrl = value
+          })
+
+        Button() {
+          SymbolGlyph($r('sys.symbol.qrcode'))
+            .fontSize(20)
+            .fontColor([Theme.TextOnPrimary])
+        }
+        .width(44)
         .height(44)
-        .backgroundColor(Theme.GlassBackground)
+        .backgroundColor(Theme.PrimaryColor)
         .borderRadius(8)
-        .fontColor(Theme.TextPrimary)
-        .border({ width: 1, color: Theme.GlassBorder })
-        .padding({ left: 12, right: 12 })
-        .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-        .onChange((value: string) => {
-          this.newProfileUrl = value
+        .onClick(async () => {
+          const result = await openScanner()
+          if (result?.bestUrl) {
+            this.newProfileUrl = result.bestUrl
+          }
         })
+      }
+      .width('100%')
 
       Text('输入桌面端的服务器地址')
         .fontSize(Theme.FontCaption)

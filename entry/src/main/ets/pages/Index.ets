@@ -15,6 +15,9 @@ struct Index {
   @State isInitialized: boolean = false
   @State isLocked: boolean = false
   @State authFailed: boolean = false
+  private authTimer: number = -1
+  private subscribeTimer: number = -1
+  private appStateTimer: number = -1
 
   async aboutToAppear(): Promise<void> {
     // 等待 authStore 初始化
@@ -29,15 +32,30 @@ struct Index {
 
     // 如果已锁定，自动触发生物识别
     if (this.isLocked) {
-      setTimeout(() => {
+      this.authTimer = setTimeout(() => {
         this.authenticate()
+        this.authTimer = -1
       }, 500)
     }
   }
 
+  aboutToDisappear(): void {
+    if (this.authTimer >= 0) {
+      clearTimeout(this.authTimer)
+      this.authTimer = -1
+    }
+    if (this.subscribeTimer >= 0) {
+      clearTimeout(this.subscribeTimer)
+      this.subscribeTimer = -1
+    }
+    if (this.appStateTimer >= 0) {
+      clearTimeout(this.appStateTimer)
+      this.appStateTimer = -1
+    }
+  }
+
   private authenticate(): void {
-    // 由于不同 HarmonyOS 版本的 userAuth API 存在差异，
-    // 生物识别以 try/catch 方式调用，失败自动解锁
+    // 生物识别功能待后续适配，当前直接解锁
     this.isLocked = false
     authStore.unlock()
     this.initData()
@@ -52,7 +70,7 @@ struct Index {
     })
 
     // 延迟订阅 WebSocket
-    setTimeout(() => {
+    this.subscribeTimer = setTimeout(() => {
       try {
         sessionStore.subscribeToAllSessions()
       } catch (e) {
@@ -61,7 +79,7 @@ struct Index {
     }, 300)
 
     // 延迟初始化应用状态
-    setTimeout(() => {
+    this.appStateTimer = setTimeout(() => {
       appState.initialize().catch((e: Error) => {
         console.error(`[Index] Init app state error: ${e.message}`)
       })

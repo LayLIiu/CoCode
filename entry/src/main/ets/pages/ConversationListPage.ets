@@ -190,6 +190,8 @@ export struct ConversationListPage {
     if (sessionStore.sessions && sessionStore.sessions.length > 0) {
       this.sessions = sessionStore.sessions
       this.isLoading = false
+      // 每次出现时同步 stale 状态（WS 断开的工作状态重置为 idle）
+      sessionStore.syncSessionStatuses()
     } else {
       this.loadSessions()
     }

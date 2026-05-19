@@ -37,6 +37,9 @@ export class AppState {
   // 加载状态
   isLoadingModels: boolean = false
 
+  // 通知点击待跳转的会话 ID
+  pendingSessionId: string | null = null
+
   // 状态变更监听者列表
   private themeChangedListeners: Array<() => void> = []
   private modelsChangedListeners: Array<() => void> = []

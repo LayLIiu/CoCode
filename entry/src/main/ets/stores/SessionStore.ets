@@ -8,6 +8,7 @@ import { apiService } from '../services/APIService'
 import { wsService } from '../services/WebSocketService'
 import { storageService } from '../services/StorageService'
 import { notificationHelper } from '../services/NotificationHelper'
+import { liveViewService, getAiDisplayName } from '../services/LiveViewService'
 import { authStore } from './AuthStore'
 import { appState } from './AppState'
 
@@ -265,6 +266,11 @@ export class SessionStore {
     }
   }
 
+  getSessionAiTool(sessionId: string): string {
+    const session = this.sessions.find(s => s.id === sessionId)
+    return session?.aiTool || ''
+  }
+
   // 获取提供商 ID 根据 Tab 类型
   getProviderIdForTabType(tabType: string): string {
     if (tabType === 'Claude') {
@@ -388,11 +394,18 @@ export class SessionStore {
   // MARK: - 消息操作
 
   async loadMessages(sessionId: string): Promise<void> {
-    // 先加载本地缓存（快速展示）
-    const localMessages = await storageService.loadMessages(sessionId)
-    if (localMessages.length > 0) {
-      this.messages.set(sessionId, localMessages)
-      this.notifyMessagesChanged(sessionId)
+    // 检查内存中是否已有消息，避免重复加载覆盖内存数据
+    const existing = this.messages.get(sessionId)
+    if (existing && existing.length > 0) {
+      // 内存中已有消息，跳过本地存储加载（防止覆盖 WebSocket 实时消息）
+      console.info(`[SessionStore] loadMessages: ${sessionId} already has ${existing.length} messages in memory, skip local load`)
+    } else {
+      // 先加载本地缓存（快速展示）
+      const localMessages = await storageService.loadMessages(sessionId)
+      if (localMessages.length > 0) {
+        this.messages.set(sessionId, localMessages)
+        this.notifyMessagesChanged(sessionId)
+      }
     }
 
     // 后台静默同步服务器消息（不阻塞页面渲染）
@@ -419,23 +432,58 @@ export class SessionStore {
   }
 
   // 智能合并消息：服务器消息为主，保留本地独有的消息
+  // 使用多维度去重（toolUseId / id / 内容摘要）防止重复
   private mergeMessages(localMessages: Message[], serverMessages: Message[]): Message[] {
-    // 用 content+type 作为去重键（因为 id 格式可能不同）
-    const serverKeys: Set<string> = new Set()
+    // 为服务器消息构建多维去重组
+    const serverKeys: Map<string, boolean> = new Map()
+    const serverToolUseIds: Set<string> = new Set()
+    const serverIds: Set<string> = new Set()
+
     for (let i = 0; i < serverMessages.length; i++) {
       const msg = serverMessages[i]
-      const key = msg.type + ':' + this.messageContentKey(msg)
-      serverKeys.add(key)
+      // 主键: type + content 摘要
+      const primaryKey = this.messageContentKey(msg)
+      serverKeys.set(primaryKey, true)
+      if (msg.toolUseId) {
+        serverToolUseIds.add(msg.toolUseId)
+      }
+      if (msg.id) {
+        serverIds.add(msg.id)
+      }
     }
 
     // 先添加服务器消息
     const result: Message[] = [...serverMessages]
 
-    // 再检查本地消息中是否有服务器没有的（如 thinking、tool_use）
+    // 再检查本地消息中是否有服务器没有的
     for (let i = 0; i < localMessages.length; i++) {
       const msg = localMessages[i]
-      const key = msg.type + ':' + this.messageContentKey(msg)
-      if (!serverKeys.has(key)) {
+      const primaryKey = this.messageContentKey(msg)
+
+      // 跳过: 主键匹配
+      if (serverKeys.has(primaryKey)) continue
+      // 跳过: toolUseId 匹配
+      if (msg.toolUseId && serverToolUseIds.has(msg.toolUseId)) continue
+      // 跳过: id 匹配
+      if (msg.id && serverIds.has(msg.id)) continue
+
+      // 额外检查: 对没有 toolUseId 的本地消息，检查服务器是否有同 type 同内容的
+      let foundByContent = false
+      if (!msg.toolUseId && msg.type !== 'user') {
+        for (let j = 0; j < serverMessages.length; j++) {
+          const sm = serverMessages[j]
+          if (sm.type === msg.type) {
+            const localContent = (msg.content || msg.toolResult || '').substring(0, 200)
+            const serverContent = (sm.content || sm.toolResult || '').substring(0, 200)
+            if (localContent.length > 10 && localContent === serverContent) {
+              foundByContent = true
+              break
+            }
+          }
+        }
+      }
+
+      if (!foundByContent) {
         result.push(msg)
       }
     }
@@ -445,21 +493,32 @@ export class SessionStore {
       return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     })
 
-    return result
+    // 最终去重：同类型同内容只保留一条（不含时间戳比对，避免本地/服务器时间戳差异导致重复）
+    const finalResult: Message[] = []
+    const seenFinal: Set<string> = new Set()
+    for (let i = 0; i < result.length; i++) {
+      const m = result[i]
+      const finalKey = m.type + '|' + (m.toolUseId || '') + '|' + (m.content || m.toolResult || '').substring(0, 200)
+      if (seenFinal.has(finalKey)) continue
+      seenFinal.add(finalKey)
+      finalResult.push(m)
+    }
+
+    return finalResult
   }
 
   // 生成消息内容去重键
   private messageContentKey(msg: Message): string {
-    if (msg.type === 'tool_use') {
-      return (msg.toolName || '') + ':' + (msg.toolResult || '').substring(0, 100)
-    } else if (msg.type === 'thinking') {
-      return (msg.content || '').substring(0, 100)
-    } else if (msg.type === 'user') {
-      return (msg.content || '').substring(0, 100)
-    } else if (msg.type === 'assistant') {
-      return (msg.content || '').substring(0, 100)
+    // 优先使用 toolUseId 或 msg.id（排除本地生成的临时 id）
+    if (msg.toolUseId) {
+      return 'toolUseId:' + msg.toolUseId
     }
-    return msg.id
+    if (msg.id && !msg.id.startsWith('user-') && !msg.id.startsWith('err-') && !msg.id.startsWith('sys-')) {
+      return 'id:' + msg.id
+    }
+    // fallback：按类型 + 内容去重（不含时间戳，避免本地和服务器时间戳不一致导致重复）
+    const content = (msg.content || '') || (msg.toolResult || '')
+    return msg.type + ':' + content.substring(0, 300)
   }
 
   addMessage(sessionId: string, message: Message): void {
@@ -519,6 +578,8 @@ export class SessionStore {
   sendMessage(content: string, attachments?: AttachmentRef[]): void {
     if (!this.currentSessionId) return
 
+    const sessionId = this.currentSessionId
+
     // 添加用户消息
     const userMessage: Message = {
       id: 'user-' + Date.now(),
@@ -526,13 +587,13 @@ export class SessionStore {
       content: content,
       timestamp: new Date().toISOString()
     }
-    this.addMessage(this.currentSessionId, userMessage)
+    this.addMessage(sessionId, userMessage)
 
     // 发送到服务器
-    wsService.sendUserMessage(this.currentSessionId, content, attachments)
+    wsService.sendUserMessage(sessionId, content, attachments)
 
     // 更新状态
-    this.updateSessionStatus(this.currentSessionId, 'thinking')
+    this.updateSessionStatus(sessionId, 'thinking')
   }
 
   sendPermissionResponse(requestId: string, allowed: boolean, always: boolean = false): void {
@@ -569,6 +630,40 @@ export class SessionStore {
 
   // MARK: - 状态管理
 
+  /**
+   * 同步会话状态：清除过期的"工作中"状态
+   * 当对话列表出现时调用，修复状态停留在 working 但不继续的问题
+   */
+  syncSessionStatuses(): void {
+    const now = Date.now()
+    for (const session of this.sessions) {
+      const status = this.sessionStatuses.get(session.id)
+      if (!status || status === 'idle') continue
+
+      // 如果 WS 没连接，working 状态肯定是过期的
+      const wsConnected = wsService.isConnected(session.id)
+
+      if (status === 'completed') {
+        // completed 超过 10 秒无新消息 → idle
+        const timer = this.completedTimers.get(session.id)
+        if (timer === undefined) {
+          // timer 已触发或不存在 → 状态可能已过期
+          // 同时 WS 未连接说明不在聊天页面 → 可以直接 idle
+          if (!wsConnected) {
+            this.updateSessionStatus(session.id, 'idle')
+          }
+        }
+        continue
+      }
+
+      // working 状态（thinking、streaming、tool_executing 等）
+      if (!wsConnected) {
+        console.info(`[SessionStore] Stale status for ${session.id}: ${status}, WS not connected, resetting to idle`)
+        this.updateSessionStatus(session.id, 'idle')
+      }
+    }
+  }
+
   // 更新会话状态
   updateSessionStatus(sessionId: string, status: SessionStatus): void {
     this.sessionStatuses.set(sessionId, status)
@@ -580,6 +675,7 @@ export class SessionStore {
       storageService.saveSessionStatuses(this.sessionStatuses)
     }
 
+    
     // completed 状态 3 秒后自动恢复为 idle，让吉祥物回到睡眠
     if (status === 'completed') {
       // 清除之前的 timer
@@ -662,6 +758,8 @@ export class SessionStore {
 
       case 'content_start':
         this.updateSessionStatus(sessionId, 'streaming')
+        // 启动实况窗
+        liveViewService.showThinking(sessionId, this.getSessionAiTool(sessionId))
         // 开始回复文本 → 把最后一个 running 工具标记为 completed
         if (msg.blockType === 'text') {
           const msgs = this.messages.get(sessionId)
@@ -706,7 +804,8 @@ export class SessionStore {
             toolName: msg.toolName,
             toolInput: msg.input,
             toolUseId: toolId,
-            toolStatus: 'running'
+            toolStatus: 'running',
+            parentToolUseId: msg.parentToolUseId as string | undefined
           }
           this.addMessage(sessionId, toolMessage)
         }
@@ -721,6 +820,8 @@ export class SessionStore {
       case 'message_complete':
         console.info(`[SessionStore] Message complete for ${sessionId}`)
         this.updateSessionStatus(sessionId, 'completed')
+        // 结束实况窗
+        liveViewService.showComplete(sessionId)
         // 把还在 running 的工具标记为 completed（最后那个没有新工具触发）
         {
           const msgs = this.messages.get(sessionId)
@@ -780,7 +881,7 @@ export class SessionStore {
 
         if (msg.questions && msg.questions.length > 0) {
           const firstQuestion = msg.questions[0]
-          questionId = 'q-' + Date.now()
+          questionId = 'q-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6)
           questionText = firstQuestion.question || ''
           const optList: string[] = []
           if (firstQuestion.options) {
@@ -793,7 +894,7 @@ export class SessionStore {
           }
           options = optList
         } else {
-          questionId = msg.questionId || 'q-' + Date.now()
+          questionId = msg.questionId || 'q-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6)
           questionText = msg.questionText || ''
           options = msg.options || []
         }
@@ -897,14 +998,43 @@ export class SessionStore {
         break
       }
       case 'system_notification': {
-        const sysText: string = (msg.text as string) || (msg.message as string) || ''
-        const sysMsg: Message = {
-          id: 'sys-' + Date.now(),
-          type: 'system',
-          content: sysText,
-          timestamp: msg.timestamp || new Date().toISOString()
+        // 处理 Agent task_notification
+        if (msg.subtype === 'task_notification') {
+          const taskData = msg.data as Record<string, Object> | undefined
+          if (taskData && taskData['toolUseId']) {
+            const targetToolUseId = taskData['toolUseId'] as string
+            const taskStatus = taskData['status'] as string || ''
+            const msgSummary = taskData['summary'] as string || msg.message as string || ''
+
+            // 映射 task status 到 agentTaskStatus
+            let agentStatus: string = 'running'
+            if (taskStatus === 'completed') agentStatus = 'done'
+            else if (taskStatus === 'failed') agentStatus = 'failed'
+            else if (taskStatus === 'stopped') agentStatus = 'stopped'
+
+            // 找到对应的 tool_use 消息并更新其 Agent 状态
+            const msgs = this.messages.get(sessionId)
+            if (msgs) {
+              for (let i = msgs.length - 1; i >= 0; i--) {
+                if (msgs[i].type === 'tool_use' && msgs[i].toolUseId === targetToolUseId) {
+                  msgs[i].agentTaskStatus = agentStatus as 'starting' | 'running' | 'done' | 'failed' | 'stopped'
+                  msgs[i].agentSummary = msgSummary
+                  break
+                }
+              }
+              this.notifyMessagesChanged(sessionId)
+            }
+          }
+        } else {
+          const sysText: string = (msg.text as string) || (msg.message as string) || ''
+          const sysMsg: Message = {
+            id: 'sys-' + Date.now(),
+            type: 'system',
+            content: sysText,
+            timestamp: msg.timestamp || new Date().toISOString()
+          }
+          this.addMessage(sessionId, sysMsg)
         }
-        this.addMessage(sessionId, sysMsg)
         break
       }
     }
@@ -957,18 +1087,23 @@ export class SessionStore {
    */
   private notifyIfBackground(sessionId: string, title: string, content: string, notifyType?: string): void {
     console.info(`[SessionStore] notifyIfBackground: ${sessionId}, type=${notifyType || 'default'}`)
+    if (appState.isInForeground && this.currentSessionId === sessionId && notifyType !== 'permission') {
+      console.info(`[SessionStore] Skip notification: user is viewing this session`)
+      return
+    }
     const session = this.sessions.find(s => s.id === sessionId)
     const sessionTitle = session?.title || title
+    const aiName = getAiDisplayName(session?.aiTool)
 
     switch (notifyType) {
       case 'permission':
-        notificationHelper.notifyPermissionRequest(sessionTitle, content, sessionId)
+        notificationHelper.notifyPermissionRequest(aiName, sessionTitle, content, sessionId)
         break
       case 'question':
-        notificationHelper.notifyQuestion(sessionTitle, content, sessionId)
+        notificationHelper.notifyQuestion(aiName, sessionTitle, content, sessionId)
         break
       default:
-        notificationHelper.notifyNewMessage(sessionTitle, content, sessionId)
+        notificationHelper.notifyNewMessage(aiName, sessionTitle, content, sessionId)
         break
     }
   }
