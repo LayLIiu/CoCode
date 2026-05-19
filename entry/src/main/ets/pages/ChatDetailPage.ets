@@ -902,15 +902,27 @@ struct ChatDetailPage {
       .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
       .position({ x: 0, y: 88 })
       .zIndex(5)
-      .bindSheet($$this.showSlashSheet, this.SlashCommandsSheet(), {
-        height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
-      })
-      .bindSheet($$this.showContextDetail, this.ContextDetailSheet(), {
-        height: 380, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
-      })
-      .bindSheet($$this.showTranslateResult, this.TranslateResultSheet(), {
-        height: 420, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
-      })
+
+      // 斜杠命令 Sheet（独立 Column 避免多个 bindSheet 冲突）
+      Column()
+        .width(0).height(0)
+        .bindSheet($$this.showSlashSheet, this.SlashCommandsSheet(), {
+          height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+        })
+
+      // 上下文详情 Sheet
+      Column()
+        .width(0).height(0)
+        .bindSheet($$this.showContextDetail, this.ContextDetailSheet(), {
+          height: 380, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+        })
+
+      // 翻译结果 Sheet
+      Column()
+        .width(0).height(0)
+        .bindSheet($$this.showTranslateResult, this.TranslateResultSheet(), {
+          height: 420, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+        })
 
       // 任务面板
       this.TaskBarView()
