@@ -12,9 +12,11 @@ import { authStore } from '../stores/AuthStore'
 import { apiService } from '../services/APIService'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
+import { StatusIcon, WorkStatus } from '../components/StatusIcon'
 import { DotMatrixBackground } from '../components/DotMatrixBackground'
 import { HdsMiniBarButton } from '../components/HdsMiniBarButton'
 import { HdsGlassInput } from '../components/HdsGlassInput'
+import { translateService } from '../services/TranslateService'
 import router from '@ohos.router'
 import pasteboard from '@ohos.pasteboard'
 import vibrator from '@ohos.vibrator'
@@ -112,6 +114,12 @@ struct ChatDetailPage {
   // 复制按钮
   @State activeCopyMessageId: string = ''
 
+  // 翻译
+  @State showTranslateResult: boolean = false
+  @State translateResultText: string = ''
+  @State isTranslating: boolean = false
+  @State translateError: string = ''
+
   // thinking 自动展开/合上（与 iOS 一致：最新 thinking 自动展开，新工具/内容出现后自动合上）
   private latestThinkingId: string = ''
 
@@ -124,6 +132,7 @@ struct ChatDetailPage {
 
   // 用户触控追踪：手指在屏幕上时不自动滚动
   @State isUserTouchingList: boolean = false
+  private touchTimer: number = -1
 
   // 输入栏收缩动画
   @State animationProgress: number = 0
@@ -178,6 +187,8 @@ struct ChatDetailPage {
   aboutToAppear(): void {
     this.getRouterParams()
     this.loadMessages()
+    // 同步当前会话的工作状态（避免从对话列表页进入时状态显示为"空闲"）
+    this.chatStatus = sessionStore.getSessionStatus(this.sessionId || '')
     this.setupCallbacks()
     // 加载当前会话权限模式
     this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
@@ -208,6 +219,10 @@ struct ChatDetailPage {
       sessionStore.inputDrafts.delete(this.sessionId)
     }
     this.stopWorkTimer()
+    if (this.touchTimer >= 0) {
+      clearTimeout(this.touchTimer)
+      this.touchTimer = -1
+    }
     if (this.thinkingScrollTimer !== -1) {
       clearTimeout(this.thinkingScrollTimer)
       this.thinkingScrollTimer = -1
@@ -220,6 +235,10 @@ struct ChatDetailPage {
   onPageShow(): void {
     this.isPageActive = true
     this.getRouterParams()
+    // 回到页面时重新同步工作状态
+    if (this.sessionId) {
+      this.chatStatus = sessionStore.getSessionStatus(this.sessionId)
+    }
   }
 
   onPageHide(): void {
@@ -416,6 +435,39 @@ struct ChatDetailPage {
     }
   }
 
+  // MARK: - 翻译
+
+  private async translateMessageContent(content: string): Promise<void> {
+    if (this.isTranslating) return
+
+    this.isTranslating = true
+    this.translateError = ''
+    this.translateResultText = ''
+
+    // 显示加载中
+    this.showTranslateResult = true
+
+    try {
+      const result = await translateService.translate(content)
+      if (result.success && result.text) {
+        this.translateResultText = result.text
+        this.translateError = ''
+      } else {
+        this.translateResultText = ''
+        this.translateError = result.error || '翻译失败'
+
+        // 翻译失败时回退：复制到剪贴板
+        this.copyToClipboard(content)
+      }
+    } catch (e) {
+      this.translateError = '翻译出错'
+      this.translateResultText = ''
+      this.copyToClipboard(content)
+    }
+
+    this.isTranslating = false
+  }
+
   // MARK: - 流式消息处理（本地 buffering，与 iOS 一致）
 
   private handleStreamingMessage(msg: WSMessage): void {
@@ -530,6 +582,13 @@ struct ChatDetailPage {
           this.contextUsage = msg.percentage
         }
         break
+
+      case 'system_notification':
+        // Agent task_notification 等触发重绘以显示最新的 agentTaskStatus
+        if (msg.subtype === 'task_notification') {
+          this.messageUpdateCounter++
+        }
+        break
     }
   }
 
@@ -640,7 +699,7 @@ struct ChatDetailPage {
           }
 
           // 消息倒序排列（最新在前=视觉底部）
-          ForEach(this.getVisibleMessages().reverse(), (message: Message) => {
+          ForEach([...this.getVisibleMessages()].reverse(), (message: Message) => {
             ListItem() {
               this.MessageBubble(message)
             }
@@ -728,11 +787,17 @@ struct ChatDetailPage {
         })
         .onTouch((event: TouchEvent) => {
           if (event.type === TouchType.Down) {
+            // 清除上一个待处理的抬起重置
+            if (this.touchTimer >= 0) {
+              clearTimeout(this.touchTimer)
+              this.touchTimer = -1
+            }
             this.isUserTouchingList = true
           } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
             // 手指抬起后延迟重置，等惯性滑动结束
-            setTimeout(() => {
+            this.touchTimer = setTimeout(() => {
               this.isUserTouchingList = false
+              this.touchTimer = -1
             }, 600)
           }
         })
@@ -772,7 +837,7 @@ struct ChatDetailPage {
         if (this.chatStatus === 'idle' || this.chatStatus === 'completed') {
           Text('休闲中').fontSize(11).fontColor(Theme.TextSecondary)
         } else {
-          LoadingProgress().width(10).height(10).color(this.getStatusColor())
+          StatusIcon({ status: this.mapToWorkStatus(this.chatStatus) })
           Text(this.getStatusText()).fontSize(11).fontColor(this.getStatusColor())
           if (this.elapsedSeconds > 0) {
             Text(this.formatElapsed(this.elapsedSeconds)).fontSize(10).fontColor(Theme.TextTertiary)
@@ -789,6 +854,9 @@ struct ChatDetailPage {
       })
       .bindSheet($$this.showContextDetail, this.ContextDetailSheet(), {
         height: 380, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+      })
+      .bindSheet($$this.showTranslateResult, this.TranslateResultSheet(), {
+        height: 420, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
       })
 
       // 任务面板
@@ -864,10 +932,7 @@ struct ChatDetailPage {
   TitleStatusView() {
     Row({ space: 4 }) {
       if (this.chatStatus !== 'idle' && this.chatStatus !== 'completed') {
-        LoadingProgress()
-          .width(10)
-          .height(10)
-          .color(this.getStatusColor())
+        StatusIcon({ status: this.mapToWorkStatus(this.chatStatus) })
       }
       Text(this.getStatusText())
         .fontSize(10)
@@ -948,12 +1013,15 @@ struct ChatDetailPage {
     return session?.aiTool || ''
   }
 
-  // 获取可见消息（分页）
+  // 获取可见消息（分页），过滤掉 Agent 子工具（由 AgentToolUseBubble 嵌套渲染）
   private getVisibleMessages(): Message[] {
-    if (this.messages.length <= this.displayedMessageCount) {
-      return this.messages
+    const allMessages = this.messages
+    // 过滤：排除有 parentToolUseId 的子工具，它们在 Agent 卡片内嵌套渲染
+    const filtered = allMessages.filter(m => !(m.type === 'tool_use' && m.parentToolUseId))
+    if (filtered.length <= this.displayedMessageCount) {
+      return filtered
     }
-    return this.messages.slice(this.messages.length - this.displayedMessageCount)
+    return filtered.slice(filtered.length - this.displayedMessageCount)
   }
 
   private hasMoreMessages(): boolean {
@@ -999,7 +1067,11 @@ struct ChatDetailPage {
         } else if (message.type === 'thinking') {
           this.ThinkingBubble(message)
         } else if (message.type === 'tool_use') {
-          this.ToolUseBubble(message)
+          if (message.toolName === 'Agent') {
+            this.AgentToolUseBubble(message)
+          } else {
+            this.ToolUseBubble(message)
+          }
         } else if (message.type === 'tool_result') {
           this.ToolResultBubble(message)
         } else if (message.type === 'permission_request') {
@@ -1033,22 +1105,43 @@ struct ChatDetailPage {
         .lineHeight(22)
 
       if (this.activeCopyMessageId === message.id) {
-        Row({ space: 6 }) {
-          SymbolGlyph($r('sys.symbol.doc_text'))
-            .fontSize(12)
-            .fontColor([Theme.TextPrimary])
-          Text('复制')
-            .fontSize(11)
-            .fontColor(Theme.TextPrimary)
+        Row({ space: 4 }) {
+          // 复制按钮
+          Row({ space: 4 }) {
+            SymbolGlyph($r('sys.symbol.doc_text'))
+              .fontSize(11)
+              .fontColor([Theme.TextPrimary])
+            Text('复制')
+              .fontSize(11)
+              .fontColor(Theme.TextPrimary)
+          }
+          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+          .backgroundColor(Theme.GlassBackground)
+          .borderRadius(10)
+          .border({ width: 0.5, color: Theme.GlassBorder })
+          .onClick(() => {
+            this.copyToClipboard(message.content)
+            this.activeCopyMessageId = ''
+          })
+
+          // 翻译按钮
+          Row({ space: 4 }) {
+            SymbolGlyph($r('sys.symbol.character'))
+              .fontSize(11)
+              .fontColor([Theme.AccentBlue])
+            Text('翻译')
+              .fontSize(11)
+              .fontColor(Theme.AccentBlue)
+          }
+          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+          .backgroundColor(Theme.GlassBackground)
+          .borderRadius(10)
+          .border({ width: 0.5, color: Theme.GlassBorder })
+          .onClick(() => {
+            this.activeCopyMessageId = ''
+            this.translateMessageContent(message.content)
+          })
         }
-        .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-        .backgroundColor(Theme.GlassBackground)
-        .borderRadius(12)
-        .border({ width: 0.5, color: Theme.GlassBorder })
-        .onClick(() => {
-          this.copyToClipboard(message.content)
-          this.activeCopyMessageId = ''
-        })
       }
     }
     .padding({ left: 16, right: 16, top: 10, bottom: 10 })
@@ -1076,22 +1169,43 @@ struct ChatDetailPage {
       }
 
       if (this.activeCopyMessageId === message.id) {
-        Row({ space: 6 }) {
-          SymbolGlyph($r('sys.symbol.doc_text'))
-            .fontSize(12)
-            .fontColor([Theme.TextPrimary])
-          Text('复制')
-            .fontSize(11)
-            .fontColor(Theme.TextPrimary)
+        Row({ space: 4 }) {
+          // 复制按钮
+          Row({ space: 4 }) {
+            SymbolGlyph($r('sys.symbol.doc_text'))
+              .fontSize(11)
+              .fontColor([Theme.TextPrimary])
+            Text('复制')
+              .fontSize(11)
+              .fontColor(Theme.TextPrimary)
+          }
+          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+          .backgroundColor(Theme.GlassBackground)
+          .borderRadius(10)
+          .border({ width: 0.5, color: Theme.GlassBorder })
+          .onClick(() => {
+            this.copyToClipboard(message.content)
+            this.activeCopyMessageId = ''
+          })
+
+          // 翻译按钮
+          Row({ space: 4 }) {
+            SymbolGlyph($r('sys.symbol.character'))
+              .fontSize(11)
+              .fontColor([Theme.AccentBlue])
+            Text('翻译')
+              .fontSize(11)
+              .fontColor(Theme.AccentBlue)
+          }
+          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+          .backgroundColor(Theme.GlassBackground)
+          .borderRadius(10)
+          .border({ width: 0.5, color: Theme.GlassBorder })
+          .onClick(() => {
+            this.activeCopyMessageId = ''
+            this.translateMessageContent(message.content)
+          })
         }
-        .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-        .backgroundColor(Theme.GlassBackground)
-        .borderRadius(12)
-        .border({ width: 0.5, color: Theme.GlassBorder })
-        .onClick(() => {
-          this.copyToClipboard(message.content)
-          this.activeCopyMessageId = ''
-        })
       }
     }
     .width('100%')
@@ -1180,7 +1294,7 @@ struct ChatDetailPage {
   @Builder
   ThinkingBubble(message: Message) {
     Column({ space: 0 }) {
-      // Header - 点击展开/折叠
+      // Header
       Row({ space: 8 }) {
         // 思考图标
         SymbolGlyph($r('sys.symbol.lightbulb'))
@@ -1215,9 +1329,6 @@ struct ChatDetailPage {
       }
       .width('100%')
       .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-      .onClick(() => {
-        this.toggleThinking(message.id)
-      })
 
       // 展开内容
       if (this.expandedThinkingIds.has(message.id) && message.content) {
@@ -1247,6 +1358,9 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
+    .onClick(() => {
+      this.toggleThinking(message.id)
+    })
     .backgroundColor('rgba(255,255,255,0.10)')
     .borderRadius(10)
     .border({
@@ -1357,11 +1471,6 @@ struct ChatDetailPage {
       }
       .width('100%')
       .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-      .onClick(() => {
-        if (this.isToolExpandable(message.toolName)) {
-          this.toggleTool(message.id)
-        }
-      })
 
       // 展开区域
       if (this.expandedToolIds.has(message.id)) {
@@ -1413,6 +1522,334 @@ struct ChatDetailPage {
       width: 0.5,
       color: 'rgba(255,255,255,0.12)'
     })
+    .onClick(() => {
+      if (this.isToolExpandable(message.toolName)) {
+        this.toggleTool(message.id)
+      }
+    })
+  }
+
+  // MARK: - Agent 派遣消息
+
+  /**
+   * 获取 Agent 的子工具列表（通过 parentToolUseId 关联）
+   */
+  private getChildToolCalls(parentToolUseId: string): Message[] {
+    const children: Message[] = []
+    for (let i = 0; i < this.messages.length; i++) {
+      const m = this.messages[i]
+      if (m.type === 'tool_use' && m.parentToolUseId === parentToolUseId) {
+        children.push(m)
+      }
+    }
+    return children
+  }
+
+  /**
+   * 获取 Agent 状态文本
+   */
+  private getAgentStatusLabel(status?: string): string {
+    switch (status) {
+      case 'starting':
+        return '启动中'
+      case 'running':
+        return '工作中'
+      case 'done':
+        return '已完成'
+      case 'failed':
+        return '失败'
+      case 'stopped':
+        return '已停止'
+      default:
+        return '等待中'
+    }
+  }
+
+  /**
+   * 获取 Agent 状态颜色
+   */
+  private getAgentStatusColor(status?: string): string {
+    switch (status) {
+      case 'starting':
+        return Theme.TextSecondary
+      case 'running':
+        return Theme.WarningColor
+      case 'done':
+        return Theme.SuccessColor
+      case 'failed':
+        return Theme.ErrorColor
+      case 'stopped':
+        return Theme.TextTertiary
+      default:
+        return Theme.TextSecondary
+    }
+  }
+
+  /**
+   * 获取 Agent 状态的背景色
+   */
+  private getAgentStatusBgColor(status?: string): string {
+    switch (status) {
+      case 'running':
+        return 'rgba(255,204,0,0.12)'
+      case 'done':
+        return 'rgba(52,199,89,0.12)'
+      case 'failed':
+        return 'rgba(255,69,58,0.12)'
+      case 'stopped':
+        return 'rgba(255,255,255,0.08)'
+      default:
+        return 'rgba(255,255,255,0.08)'
+    }
+  }
+
+  @Builder
+  AgentToolUseBubble(message: Message) {
+    Column({ space: 0 }) {
+      // Header
+      Row({ space: 8 }) {
+        // Agent 图标
+        SymbolGlyph($r('sys.symbol.person_fill'))
+          .fontSize(14)
+          .fontColor([Theme.AccentBlue])
+
+        // AGENT 标签
+        Text('AGENT')
+          .fontSize(10)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Theme.TextSecondary)
+
+        // 描述（未展开时显示）
+        if (!this.expandedToolIds.has(message.id) && this.getAgentDescription(message)) {
+          Text(this.getAgentDescription(message))
+            .fontSize(11)
+            .fontColor(Theme.TextTertiary)
+            .maxLines(1)
+            .layoutWeight(1)
+        }
+
+        Blank()
+
+        // 子工具摘要（未展开时显示）
+        if (!this.expandedToolIds.has(message.id) && !this.getAgentDescription(message)) {
+          if (this.getAgentOutputSummary(message)) {
+            Text(this.getAgentOutputSummary(message).length > 30 ? this.getAgentOutputSummary(message).substring(0, 30) + '...' : this.getAgentOutputSummary(message))
+              .fontSize(11)
+              .fontColor(Theme.TextTertiary)
+              .maxLines(1)
+              .layoutWeight(1)
+          } else if (this.getAgentRecentToolsSummary(message)) {
+            Text(this.getAgentRecentToolsSummary(message))
+              .fontSize(11)
+              .fontColor(Theme.TextTertiary)
+              .maxLines(1)
+              .layoutWeight(1)
+          }
+        }
+
+        // 状态徽章
+        {
+          const s = this.getAgentStatusValue(message)
+          if (s) {
+            Text(this.getAgentStatusLabel(s))
+              .fontSize(9)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.getAgentStatusColor(s))
+              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+              .borderRadius(8)
+              .backgroundColor(this.getAgentStatusBgColor(s))
+          }
+        }
+
+        // 展开箭头
+        if (this.expandedToolIds.has(message.id)) {
+          SymbolGlyph($r('sys.symbol.chevron_down'))
+            .fontSize(10)
+            .fontColor([Theme.TextSecondary])
+        } else {
+          SymbolGlyph($r('sys.symbol.chevron_right'))
+            .fontSize(10)
+            .fontColor([Theme.TextSecondary])
+        }
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+
+      // 展开内容
+      if (this.expandedToolIds.has(message.id)) {
+        Divider()
+          .color('rgba(255,255,255,0.1)')
+          .width('100%')
+
+        Column({ space: 8 }) {
+          // 描述
+          if (this.getAgentDescription(message)) {
+            Text(this.getAgentDescription(message))
+              .fontSize(11)
+              .fontColor(Theme.TextPrimary)
+              .lineHeight(16)
+              .width('100%')
+          }
+
+          // 错误
+          if (message.toolStatus === 'failed') {
+            Row({ space: 4 }) {
+              SymbolGlyph($r('sys.symbol.exclamationmark_triangle_fill'))
+                .fontSize(12)
+                .fontColor([Theme.ErrorColor])
+              Text(message.agentSummary || '')
+                .fontSize(11)
+                .fontColor(Theme.ErrorColor)
+                .layoutWeight(1)
+            }
+            .padding(10)
+            .backgroundColor('rgba(255,69,58,0.10)')
+            .borderRadius(8)
+            .width('100%')
+          }
+
+          // 输出摘要
+          if (this.getAgentOutputSummary(message) && message.toolStatus !== 'failed') {
+            Text(this.getAgentOutputSummary(message))
+              .fontSize(11)
+              .fontColor(Theme.TextTertiary)
+              .lineHeight(16)
+              .width('100%')
+          }
+
+          // 子工具渲染（嵌套）
+          {
+            const childToolCalls = this.getChildToolCalls(message.toolUseId || '')
+            if (childToolCalls.length > 0) {
+              Column({ space: 4 }) {
+                ForEach(childToolCalls, (child: Message) => {
+                  Row({ space: 0 }) {
+                    // 连接线+节点
+                    Column() {
+                      Row()
+                        .width(8)
+                        .height(8)
+                        .borderRadius(4)
+                        .border({ width: 1, color: 'rgba(255,255,255,0.25)' })
+                        .backgroundColor('#1C1C1E')
+                        .margin({ left: 0, top: 4 })
+                    }
+                    .width(12)
+                    .alignItems(HorizontalAlign.Center)
+                    .padding({ top: 4 })
+
+                    // 子工具卡片（紧凑版）
+                    Column({ space: 0 }) {
+                      Row({ space: 6 }) {
+                        SymbolGlyph(getToolIcon(child.toolName || 'Tool').symbol)
+                          .fontSize(12)
+                          .fontColor([getToolIcon(child.toolName || 'Tool').color])
+
+                        Text(getToolIcon(child.toolName || 'Tool').label)
+                          .fontSize(10)
+                          .fontWeight(FontWeight.Medium)
+                          .fontColor(Theme.TextSecondary)
+
+                        Text(this.getToolInputSummary(child.toolName || '', child.toolInput || {}))
+                          .fontSize(10)
+                          .fontColor(Theme.TextTertiary)
+                          .maxLines(1)
+                          .layoutWeight(1)
+
+                        Blank()
+
+                        this.ToolStatusIcon(child.toolStatus)
+                      }
+                      .width('100%')
+                      .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+                      .borderRadius(6)
+                      .backgroundColor('rgba(255,255,255,0.05)')
+                    }
+                    .layoutWeight(1)
+                    .onClick(() => {
+                      this.toggleTool(child.id)
+                    })
+                  }
+                  .width('100%')
+                  .alignItems(VerticalAlign.Top)
+                }, (child: Message) => child.id + '_' + (child.toolStatus || ''))
+              }
+              .width('100%')
+            } else if (!this.getAgentOutputSummary(message) && message.toolStatus !== 'failed') {
+              Text(this.getAgentStatusValue(message) === 'starting' ? '正在启动 Agent...' : 'Agent 执行中')
+                .fontSize(11)
+                .fontColor(Theme.TextTertiary)
+            }
+          }
+
+          // INPUT（展开时显示）
+          if (message.toolInput) {
+            Column({ space: 4 }) {
+              Text('INPUT')
+                .fontSize(9)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Theme.TextSecondary)
+
+              Text(this.formatToolInput(message.toolInput))
+                .fontSize(11)
+                .fontColor(Theme.TextPrimary)
+                .fontFamily('monospace')
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+          }
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+      }
+    }
+    .width('100%')
+    .backgroundColor('rgba(255,255,255,0.13)')
+    .borderRadius(10)
+    .border({
+      width: 0.5,
+      color: 'rgba(255,255,255,0.12)'
+    })
+    .onClick(() => {
+      this.toggleTool(message.id)
+    })
+  }
+
+  private getAgentStatusValue(message: Message): string {
+    const childToolCalls = this.getChildToolCalls(message.toolUseId || '')
+    const result = message.agentTaskStatus || (
+      childToolCalls.length > 0 ? 'running' :
+      message.toolStatus === 'running' ? 'starting' : 'done'
+    )
+    return result
+  }
+
+  private getAgentDescription(message: Message): string {
+    const input = message.toolInput || {}
+    return input['description'] as string || ''
+  }
+
+  private getAgentOutputSummary(message: Message): string {
+    const s = this.getAgentStatusValue(message)
+    if ((s === 'done' || s === 'stopped') && message.agentSummary) {
+      return message.agentSummary
+    }
+    return ''
+  }
+
+  private getAgentRecentToolsSummary(message: Message): string {
+    const childToolCalls = this.getChildToolCalls(message.toolUseId || '')
+    if (childToolCalls.length === 0) return ''
+    const recent = childToolCalls.slice(-2)
+    const parts: string[] = []
+    for (let i = 0; i < recent.length; i++) {
+      const tc = recent[i]
+      const name = tc.toolName || 'Tool'
+      const summary = this.getToolInputSummary(name, tc.toolInput || {})
+      const suffix = tc.toolStatus === 'completed' ? ' ✓' : tc.toolStatus === 'failed' ? ' ✗' : ' ···'
+      parts.push(summary ? `${name} ${summary}${suffix}` : `${name}${suffix}`)
+    }
+    return parts.join('  ')
   }
 
   @Builder
@@ -1439,7 +1876,7 @@ struct ChatDetailPage {
 
   private isToolExpandable(toolName?: string): boolean {
     if (!toolName) return false
-    return ['Edit', 'Write', 'Bash', 'Read', 'Grep', 'WebFetch'].indexOf(toolName) >= 0
+    return ['Edit', 'Write', 'Bash', 'Read', 'Grep', 'WebFetch', 'Agent'].indexOf(toolName) >= 0
   }
 
   private toggleTool(id: string): void {
@@ -1906,6 +2343,91 @@ struct ChatDetailPage {
     .width('100%').padding(Theme.SpacingLG)
   }
 
+  // MARK: - 翻译结果
+
+  @Builder
+  TranslateResultSheet() {
+    Column({ space: 12 }) {
+      // 标题栏
+      Row() {
+        Text('翻译结果')
+          .fontSize(18).fontWeight(FontWeight.Bold).fontColor(Theme.TextPrimary)
+          .layoutWeight(1).textAlign(TextAlign.Center)
+        Button() {
+          SymbolGlyph($r('sys.symbol.xmark'))
+            .fontSize(16).fontColor([Theme.TextSecondary])
+        }
+        .width(32).height(32)
+        .backgroundColor(Color.Transparent)
+        .onClick(() => {
+          this.showTranslateResult = false
+        })
+      }
+      .width('100%').padding({ bottom: 8 })
+
+      // 原文
+      if (this.isTranslating) {
+        Row({ space: 8 }) {
+          LoadingProgress().width(16).height(16).color(Theme.PrimaryColor)
+          Text('翻译中...').fontSize(13).fontColor(Theme.TextSecondary)
+        }
+        .width('100%').justifyContent(FlexAlign.Center).padding({ top: 20, bottom: 20 })
+      } else if (this.translateError) {
+        Column({ space: 8 }) {
+          Row({ space: 6 }) {
+            SymbolGlyph($r('sys.symbol.exclamationmark_triangle_fill'))
+              .fontSize(16).fontColor([Theme.WarningColor])
+            Text('翻译失败').fontSize(14).fontWeight(FontWeight.Medium).fontColor(Theme.WarningColor)
+          }
+          Text(this.translateError)
+            .fontSize(12).fontColor(Theme.TextTertiary)
+          Text('已将原文复制到剪贴板')
+            .fontSize(11).fontColor(Theme.TextTertiary)
+        }
+        .width('100%')
+        .padding(16)
+        .backgroundColor('rgba(255,204,0,0.08)')
+        .borderRadius(12)
+      } else if (this.translateResultText) {
+        // 翻译后的文本
+        Text(this.translateResultText)
+          .fontSize(15)
+          .fontColor(Theme.TextPrimary)
+          .lineHeight(24)
+          .width('100%')
+
+        // 操作按钮
+        Row({ space: 12 }) {
+          Button() {
+            Text('复制翻译结果').fontSize(13).fontColor(Theme.TextOnPrimary)
+          }
+          .backgroundColor(Theme.PrimaryColor)
+          .borderRadius(10)
+          .layoutWeight(1)
+          .height(40)
+          .onClick(() => {
+            this.copyToClipboard(this.translateResultText)
+            this.showTranslateResult = false
+          })
+
+          Button() {
+            Text('关闭').fontSize(13).fontColor(Theme.TextPrimary)
+          }
+          .backgroundColor(Theme.GlassBackground)
+          .borderRadius(10)
+          .layoutWeight(1)
+          .height(40)
+          .onClick(() => {
+            this.showTranslateResult = false
+          })
+        }
+        .width('100%')
+        .padding({ top: 8 })
+      }
+    }
+    .width('100%').padding(Theme.SpacingLG)
+  }
+
   private formatTokens(count: number): string {
     if (count >= 1000000) return (count / 1000000).toFixed(1) + 'M'
     if (count >= 1000) return (count / 1000).toFixed(1) + 'K'
@@ -1989,42 +2511,25 @@ struct ChatDetailPage {
             this.inputText = value
           })
 
-        // 发送按钮 - 沉浸光感浮动按钮
-        if (this.inputText || this.pendingAttachments.length > 0) {
-          // 有内容：实心高亮按钮
-          HdsMiniBarButton({
-            barWidth: 36,
-            barHeight: 36,
-            contentPadding: 4,
-            iconResource: $r('sys.symbol.arrow_up'),
-            iconSize: 16,
-            iconColor: [Theme.TextOnPrimary],
-            maskColor: Theme.PrimaryColor,
-            barBottomMargin: 0,
-            materialType: hdsMaterial.MaterialType.ADAPTIVE,
-            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
-            onButtonClick: () => {
+        // 始终显示发送按钮（不显示停止按钮，以免阻塞用户发送新消息）
+        HdsMiniBarButton({
+          barWidth: 36,
+          barHeight: 36,
+          contentPadding: 4,
+          iconResource: this.inputText.trim() || this.pendingAttachments.length > 0 ?
+            $r('sys.symbol.arrow_up') : $r('sys.symbol.arrow_up'),
+          iconSize: 16,
+          iconColor: this.inputText.trim() || this.pendingAttachments.length > 0 ?
+            [Theme.TextOnPrimary] : [Theme.TextSecondary],
+          maskColor: this.inputText.trim() || this.pendingAttachments.length > 0 ?
+            Theme.PrimaryColor : 'rgba(255,255,255,0.15)',
+          barBottomMargin: 0,
+          onButtonClick: () => {
+            if (this.inputText.trim() || this.pendingAttachments.length > 0) {
               this.sendMessage()
             }
-          })
-        } else {
-          // 无内容：液态玻璃效果
-          HdsMiniBarButton({
-            barWidth: 36,
-            barHeight: 36,
-            contentPadding: 4,
-            iconResource: $r('sys.symbol.arrow_up'),
-            iconSize: 16,
-            iconColor: [Theme.TextSecondary],
-            maskColor: 'rgba(255,255,255,0.15)',
-            barBottomMargin: 0,
-            materialType: hdsMaterial.MaterialType.IMMERSIVE,
-            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
-            onButtonClick: () => {
-              this.sendMessage()
-            }
-          })
-        }
+          }
+        })
       }
       .width('100%')
       .alignItems(VerticalAlign.Bottom)
@@ -2633,6 +3138,10 @@ struct ChatDetailPage {
       clearInterval(this.workTimer)
       this.workTimer = -1
     }
+    // 停止吉祥物脉冲动画，回到静止状态
+    animateTo({ duration: 300 }, () => {
+      this.mascotScale = 0.85
+    })
   }
 
   private formatElapsed(seconds: number): string {
@@ -2669,6 +3178,18 @@ struct ChatDetailPage {
         return Theme.SuccessColor
       default:
         return Theme.TextSecondary
+    }
+  }
+
+  private mapToWorkStatus(status: SessionStatus): WorkStatus {
+    switch (status) {
+      case 'thinking': return WorkStatus.THINKING
+      case 'streaming': return WorkStatus.STREAMING
+      case 'tool_executing': return WorkStatus.TOOL_EXECUTING
+      case 'permission_pending': return WorkStatus.PERMISSION_PENDING
+      case 'question_pending': return WorkStatus.QUESTION_PENDING
+      case 'completed': return WorkStatus.COMPLETED
+      default: return WorkStatus.IDLE
     }
   }
 

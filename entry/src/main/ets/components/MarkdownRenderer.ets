@@ -435,7 +435,7 @@ export struct MarkdownRenderer {
         } else if (node.type === MDNodeType.HR) { this.HorizontalRuleView()
         } else if (node.type === MDNodeType.IMAGE) { this.ImageView(node)
         } else if (node.type === MDNodeType.PARAGRAPH) { this.ParagraphView(node)
-        } else if (node.type === MDNodeType.SPACER) { Row().height(4) }
+        } else if (node.type === MDNodeType.SPACER) { Row().height(2) }
       }, (node: MDNode, index: number) => `md-${index}`)
     }
     .width('100%')
@@ -457,7 +457,7 @@ export struct MarkdownRenderer {
         Blank()
         SymbolGlyph($r('sys.symbol.doc_text')).fontSize(11).fontColor(['#FFFFFF99'])
       }
-      .width('100%').padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .width('100%').padding({ left: 10, right: 10, top: 6, bottom: 6 })
       .borderRadius({ topLeft: 8, topRight: 8 })
       .onClick(() => { this.copyCode(node.code) })
 
@@ -473,18 +473,18 @@ export struct MarkdownRenderer {
         }
       }
       .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Auto)
-      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-      .constraintSize({ maxHeight: this.shouldCollapseCode(node) && this.expandedCodeIdx !== idx ? 420 : 5000 })
+      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .constraintSize({ maxHeight: this.shouldCollapseCode(node) && this.expandedCodeIdx !== idx ? 280 : 5000 })
 
       if (this.shouldCollapseCode(node) && this.expandedCodeIdx !== idx) {
         Row({ space: 4 }) {
           Text('展开全部').fontSize(11).fontColor(Theme.AccentBlue)
         }
-        .width('100%').justifyContent(FlexAlign.Center).padding({ top: 4, bottom: 8 })
+        .width('100%').justifyContent(FlexAlign.Center).padding({ top: 2, bottom: 6 })
         .onClick(() => { this.expandedCodeIdx = idx })
       }
     }
-    .width('100%').borderRadius(8).margin({ top: 4, bottom: 4 }).clip(true)
+    .width('100%').borderRadius(8).margin({ top: 3, bottom: 3 }).clip(true)
   }
 
   private shouldCollapseCode(node: MDNode): boolean {
@@ -507,8 +507,8 @@ export struct MarkdownRenderer {
   @Builder
   HeadingView(node: MDNode) {
     Text(node.text)
-      .fontSize(24 - node.level * 2).fontWeight(FontWeight.Bold).fontColor(Theme.TextPrimary)
-      .width('100%').margin({ top: node.level === 1 ? 8 : 4, bottom: 2 })
+      .fontSize(22 - node.level * 2).fontWeight(FontWeight.Bold).fontColor(Theme.TextPrimary)
+      .width('100%').margin({ top: node.level === 1 ? 6 : 3, bottom: 1 })
   }
 
   // ── 表格 ──
@@ -528,14 +528,14 @@ export struct MarkdownRenderer {
             .fontColor(Theme.TextPrimary)
             .textAlign(cell.alignment === 'center' ? TextAlign.Center :
               cell.alignment === 'right' ? TextAlign.End : TextAlign.Start)
-            .layoutWeight(1).padding({ left: 8, right: 8, top: 6, bottom: 6 })
+            .layoutWeight(1).padding({ left: 6, right: 6, top: 4, bottom: 4 })
           }, (cell: TableCell, ci: number) => `tc-${ri}-${ci}`)
         }
         .width('100%')
       }, (row: TableRow, ri: number) => `tr-${ri}`)
     }
     .width('100%').border({ width: 0.5, color: '#FFFFFF1A' }).borderRadius(8)
-    .margin({ top: 4, bottom: 4 }).clip(true)
+    .margin({ top: 3, bottom: 3 }).clip(true)
   }
 
   // ── 图片 ──
@@ -545,20 +545,20 @@ export struct MarkdownRenderer {
     Column({ space: 4 }) {
       if (node.imageUrl) {
         Image(node.imageUrl).width('100%').objectFit(ImageFit.Contain)
-          .borderRadius(8).constraintSize({ maxHeight: 300 })
+          .borderRadius(8).constraintSize({ maxHeight: 250 })
       }
       if (node.imageAlt) {
         Text(node.imageAlt).fontSize(11).fontColor(Theme.TextTertiary).textAlign(TextAlign.Center)
       }
     }
-    .width('100%').borderRadius(8).margin({ top: 4, bottom: 4 })
+    .width('100%').borderRadius(8).margin({ top: 3, bottom: 3 })
   }
 
   // ── 分割线 ──
 
   @Builder
   HorizontalRuleView() {
-    Divider().color('#FFFFFF33').width('100%').margin({ top: 8, bottom: 8 })
+    Divider().color('#FFFFFF33').width('100%').margin({ top: 6, bottom: 6 })
   }
 
   // ── 段落 ──
@@ -571,7 +571,7 @@ export struct MarkdownRenderer {
           this.renderInlineFragment(frag)
         }, (frag: InlineFragment, fi: number) => `frag-${fi}`)
       }
-      .lineHeight(22).width('100%')
+      .lineHeight(20).width('100%')
     }
   }
 
@@ -611,10 +611,10 @@ export struct MarkdownRenderer {
           this.ListBullet(node, itemIdx)
           this.InlineFormattedText(item)
         }
-        .width('100%').margin({ bottom: 2 }).alignItems(VerticalAlign.Top)
+        .width('100%').margin({ bottom: 1 }).alignItems(VerticalAlign.Top)
       }, (item: string, itemIdx: number) => `ul-${itemIdx}`)
     }
-    .width('100%').padding({ left: 4 }).margin({ top: 2, bottom: 2 })
+    .width('100%').padding({ left: 4 }).margin({ top: 1, bottom: 1 })
   }
 
   @Builder
@@ -640,21 +640,21 @@ export struct MarkdownRenderer {
           Text((itemIdx + 1) + '.').fontSize(15).fontColor(Theme.TextSecondary).width(22).textAlign(TextAlign.End)
           this.InlineFormattedText(item)
         }
-        .width('100%').margin({ bottom: 2 }).alignItems(VerticalAlign.Top)
+        .width('100%').margin({ bottom: 1 }).alignItems(VerticalAlign.Top)
       }, (item: string, itemIdx: number) => `ol-${itemIdx}`)
     }
-    .width('100%').padding({ left: 4 }).margin({ top: 2, bottom: 2 })
+    .width('100%').padding({ left: 4 }).margin({ top: 1, bottom: 1 })
   }
 
   // ── 引用 ──
 
   @Builder
   BlockquoteView(node: MDNode) {
-    Row({ space: 8 }) {
+    Row({ space: 6 }) {
       Column().width(3).height('100%').backgroundColor(Theme.TextSecondary).borderRadius(2)
       Text(node.text).fontSize(15).fontStyle(FontStyle.Italic).fontColor(Theme.TextSecondary).layoutWeight(1)
     }
-    .width('100%').padding({ left: 4 }).margin({ top: 4, bottom: 4 })
+    .width('100%').padding({ left: 8, right: 8 }).margin({ top: 3, bottom: 3 })
   }
 
   // ── 列表行内格式 ──
@@ -666,6 +666,6 @@ export struct MarkdownRenderer {
         this.renderInlineFragment(frag)
       }, (frag: InlineFragment, fi: number) => `ilf-${fi}`)
     }
-    .lineHeight(22).layoutWeight(1)
+    .lineHeight(20).layoutWeight(1)
   }
 }
