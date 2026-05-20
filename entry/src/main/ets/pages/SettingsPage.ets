@@ -12,6 +12,7 @@ import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import router from '@ohos.router'
 import http from '@ohos.net.http'
 import { openScanner } from '../services/ScanService'
+import { connectionManager, ConnectionType, ConnectionQuality } from '../services/ConnectionManager'
 
 @Component
 export struct SettingsPage {
@@ -47,18 +48,33 @@ export struct SettingsPage {
   @State showDeleteConfirm: boolean = false
   @State deleteProfileId: string = ''
 
+  // 智能连接状态
+  @State connectionType: ConnectionType = 'unknown'
+  @State connectionQuality: ConnectionQuality = 'unavailable'
+  @State connectionLatency: number = -1
+
   private readonly appVersion: string = '1.0.0'
   private readonly buildTime: string = '2026-05-08'
   private modelsChangedListener: (() => void) | null = null
 
   aboutToAppear(): void {
     this.loadSettings()
+    this.updateConnectionStatus()
   }
 
   aboutToDisappear(): void {
     if (this.modelsChangedListener) {
       appState.removeModelsChangedListener(this.modelsChangedListener)
       this.modelsChangedListener = null
+    }
+  }
+
+  private updateConnectionStatus(): void {
+    const status = connectionManager.getStatus()
+    if (status) {
+      this.connectionType = status.type
+      this.connectionQuality = status.quality
+      this.connectionLatency = status.latency
     }
   }
 
@@ -280,10 +296,10 @@ export struct SettingsPage {
             Row({ space: 6 }) {
               Text('●')
                 .fontSize(8)
-                .fontColor(Theme.SuccessColor)
-              Text(this.getProfileDisplayName())
+                .fontColor(this.getConnectionQualityColor())
+              Text(this.getConnectionStatusText())
                 .fontSize(Theme.FontCaption)
-                .fontColor(Theme.SuccessColor)
+                .fontColor(this.getConnectionQualityColor())
             }
           } else {
             Text('未连接')
@@ -294,16 +310,27 @@ export struct SettingsPage {
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
 
+        // 连接类型标签
+        if (this.connectionType !== 'unknown') {
+          Text(this.getConnectionTypeText())
+            .fontSize(Theme.FontTiny)
+            .fontColor(this.connectionType === 'lan' ? Theme.AccentGreen : Theme.AccentBlue)
+            .backgroundColor(this.connectionType === 'lan' ? Theme.AccentGreen + '20' : Theme.AccentBlue + '20')
+            .borderRadius(4)
+            .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+            .margin({ right: 8 })
+        }
+
         // 连接速度
         if (this.testingLatency) {
           LoadingProgress()
             .width(20)
             .height(20)
             .color(Theme.PrimaryColor)
-        } else if (this.latency > 0) {
-          Text(this.formatLatency(this.latency))
+        } else if (this.connectionLatency > 0) {
+          Text(this.formatLatency(this.connectionLatency))
             .fontSize(Theme.FontCaption)
-            .fontColor(this.getLatencyColor(this.latency))
+            .fontColor(this.getLatencyColor(this.connectionLatency))
         } else {
           Text('测速').fontSize(Theme.FontCaption).fontColor(Theme.TextSecondary)
         }
@@ -311,7 +338,7 @@ export struct SettingsPage {
       .width('100%')
       .onClick(() => {
         if (!this.testingLatency && this.currentUrl.length > 0) {
-          this.testLatency()
+          this.testSmartConnection()
         }
       })
 
@@ -1153,5 +1180,55 @@ export struct SettingsPage {
     router.replaceUrl({
       url: 'pages/Index'
     })
+  }
+
+  // MARK: - 智能连接辅助方法
+
+  private getConnectionTypeText(): string {
+    switch (this.connectionType) {
+      case 'lan': return '局域网'
+      case 'tunnel': return '远程隧道'
+      default: return '未知'
+    }
+  }
+
+  private getConnectionStatusText(): string {
+    const profileName = this.getProfileDisplayName()
+    const qualityText = this.getQualityText()
+    return `${profileName} · ${qualityText}`
+  }
+
+  private getQualityText(): string {
+    switch (this.connectionQuality) {
+      case 'good': return '连接良好'
+      case 'poor': return '连接较差'
+      default: return '已连接'
+    }
+  }
+
+  private getConnectionQualityColor(): ResourceColor {
+    switch (this.connectionQuality) {
+      case 'good': return Theme.SuccessColor
+      case 'poor': return Theme.WarningColor
+      default: return Theme.TextSecondary
+    }
+  }
+
+  private async testSmartConnection(): Promise<void> {
+    this.testingLatency = true
+
+    try {
+      const status = await connectionManager.smartConnect()
+      this.connectionType = status.type
+      this.connectionQuality = status.quality
+      this.connectionLatency = status.latency
+      this.currentUrl = authStore.serverUrl
+      this.serverProfiles = [...authStore.serverProfiles]
+      this.activeProfileId = authStore.activeProfileId
+    } catch (e) {
+      console.error(`[Settings] Smart connect error: ${e}`)
+    }
+
+    this.testingLatency = false
   }
 }

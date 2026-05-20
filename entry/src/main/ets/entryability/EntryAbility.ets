@@ -15,6 +15,7 @@ import { storageService } from '../services/StorageService'
 import { notificationHelper } from '../services/NotificationHelper'
 import { liveViewService } from '../services/LiveViewService'
 import { initScanService } from '../services/ScanService'
+import { connectionManager } from '../services/ConnectionManager'
 
 const DOMAIN = 0x0000
 
@@ -192,6 +193,12 @@ export default class EntryAbility extends UIAbility {
       wsService.setServerUrl(authStore.serverUrl)
       wsService.forceReconnectAll()
       hilog.info(DOMAIN, 'testTag', 'WebSocket reconnected on foreground')
+
+      // 智能连接检查（LAN 优先，Tunnel 回退）
+      connectionManager.smartConnect().then((status) => {
+        hilog.info(DOMAIN, 'testTag', 'Smart connect: %{public}s, latency: %{public}dms',
+          status.type, status.latency)
+      })
     }
 
     // 刷新数据

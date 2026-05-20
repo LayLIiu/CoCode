@@ -8,6 +8,8 @@ import { Message, Session, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskSt
 import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial, HdsTabs, hdsEffect } from '@kit.UIDesignKit'
 import { curves, RectShape } from '@kit.ArkUI'
+import { speechRecognizer } from '@kit.CoreSpeechKit'
+import { BusinessError } from '@kit.BasicServicesKit'
 import { sessionStore } from '../stores/SessionStore'
 import { authStore } from '../stores/AuthStore'
 import { apiService } from '../services/APIService'
@@ -186,6 +188,11 @@ struct ChatDetailPage {
   @State scrollOffset: number = 0
   private readonly blurThreshold: number = 30
 
+  // 语音输入
+  @State isVoiceMode: boolean = false
+  @State isRecording: boolean = false
+  @State voiceText: string = ''
+
   private scroller: Scroller = new Scroller()
 
   // 流式 thinking 自动滚动
@@ -223,6 +230,9 @@ struct ChatDetailPage {
     this.showPermSheet = false
     this.showAttachSheet = false
 
+    // 初始化语音识别引擎
+    this.initSpeechEngine()
+
     // 键盘避让
     try {
       this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE)
@@ -257,6 +267,13 @@ struct ChatDetailPage {
       this.thinkingScrollTimer = -1
     }
     if (this.contextPollTimer >= 0) { clearInterval(this.contextPollTimer); this.contextPollTimer = -1 }
+    // 释放语音识别引擎
+    if (this.asrEngine) {
+      try {
+        this.asrEngine.shutdown()
+      } catch (e) {}
+      this.asrEngine = null
+    }
     this.removeCallbacks()
     sessionStore.setCurrentSession(null)
   }
@@ -314,6 +331,98 @@ struct ChatDetailPage {
       name: fileName || 'file',
       path: filePath
     }]
+  }
+
+  // MARK: - 语音输入
+  private asrEngine: speechRecognizer.SpeechRecognitionEngine | null = null
+
+  private initSpeechEngine(): void {
+    let extraParam: Record<string, Object> = { "locate": "CN", "recognizerMode": "short" }
+    let initParamsInfo: speechRecognizer.CreateEngineParams = {
+      language: 'zh-CN',
+      online: 1,
+      extraParams: extraParam
+    }
+    try {
+      speechRecognizer.createEngine(initParamsInfo, (err: BusinessError, engine: speechRecognizer.SpeechRecognitionEngine) => {
+        if (!err && engine) {
+          this.asrEngine = engine
+          // 设置识别结果监听器
+          engine.setListener({
+            onResult: (sessionId: string, result: speechRecognizer.SpeechRecognitionResult) => {
+              console.info('[Voice] 识别结果: ' + result.result)
+              if (result.result) {
+                this.voiceText = result.result
+                // 将识别结果填入输入框
+                this.inputText = this.inputText ? this.inputText + this.voiceText : this.voiceText
+              }
+            },
+            onError: (sessionId: string, errorCode: number, errorMessage: string) => {
+              console.error('[Voice] 识别错误: ' + errorMessage)
+              this.isRecording = false
+            },
+            onStart: (sessionId: string) => {
+              console.info('[Voice] 识别开始: ' + sessionId)
+            },
+            onComplete: (sessionId: string) => {
+              console.info('[Voice] 识别完成: ' + sessionId)
+              this.isRecording = false
+            },
+            onEvent: (sessionId: string, eventCode: number, eventMessage: string) => {
+              console.info('[Voice] 识别事件: ' + eventCode + ' - ' + eventMessage)
+            }
+          })
+          console.info('[Voice] 语音识别引擎初始化成功')
+        } else {
+          console.error('[Voice] 引擎初始化失败: ' + JSON.stringify(err))
+        }
+      })
+    } catch (error) {
+      console.error('[Voice] 创建引擎异常: ' + JSON.stringify(error))
+    }
+  }
+
+  private startVoiceRecording(): void {
+    if (!this.asrEngine) {
+      this.initSpeechEngine()
+      setTimeout(() => this.startVoiceRecording(), 500)
+      return
+    }
+    this.isRecording = true
+    this.voiceText = ''
+    console.info('[Voice] 开始录音')
+
+    try {
+      let audioInfo: speechRecognizer.AudioInfo = { 
+        audioType: 'pcm', 
+        sampleRate: 16000,
+        soundChannel: 1,
+        sampleBit: 16
+      }
+      let extraParams: Record<string, Object> = { "locate": "CN", "recognizerMode": "short" }
+      let recognizerParams: speechRecognizer.StartParams = {
+        sessionId: 'voice-session-' + Date.now(),
+        audioInfo: audioInfo,
+        extraParams: extraParams
+      }
+      this.asrEngine.startListening(recognizerParams)
+    } catch (error) {
+      console.error('[Voice] 启动识别失败: ' + JSON.stringify(error))
+      this.isRecording = false
+    }
+  }
+
+  private stopVoiceRecording(): void {
+    console.info('[Voice] 停止录音')
+
+    if (this.asrEngine && this.isRecording) {
+      try {
+        this.asrEngine.finish('voice-session')
+      } catch (error) {
+        console.error('[Voice] 停止识别失败: ' + JSON.stringify(error))
+      }
+    }
+    this.isRecording = false
   }
 
   private async loadMessages(): Promise<void> {
@@ -1521,7 +1630,7 @@ struct ChatDetailPage {
         this.InputAreaContent()
       }
       .width('100%')
-      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, bottom: 28 })
+      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, bottom: 20 })
       .backgroundColor(Color.Transparent)
       .position({ x: 0, y: '100%' })
       .translate({ y: '-100%' })
@@ -1783,7 +1892,7 @@ struct ChatDetailPage {
       }
     }
     .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-    .backgroundColor('rgba(255,255,255,0.22)')
+    .backgroundColor('#3A3A3C')
     .borderRadius(18)
     .gesture(
       LongPressGesture()
@@ -1848,7 +1957,7 @@ struct ChatDetailPage {
     }
     .width('100%')
     .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-    .backgroundColor('rgba(255,255,255,0.16)')
+    .backgroundColor('#2C2C2E')
     .borderRadius(18)
     .gesture(
       LongPressGesture()
@@ -1871,7 +1980,7 @@ struct ChatDetailPage {
       }
       .width('100%')
       .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-      .backgroundColor('rgba(255,255,255,0.16)')
+      .backgroundColor('#2C2C2E')
       .borderRadius(18)
     }
     .width('100%')
@@ -1910,7 +2019,7 @@ struct ChatDetailPage {
         .padding({ left: 12, right: 12, bottom: 10 })
       }
       .width('100%')
-      .backgroundColor('rgba(255,255,255,0.10)')
+      .backgroundColor('#2C2C2E')
       .borderRadius(10)
       .border({ width: 0.5, color: 'rgba(255,255,255,0.1)' })
     }
@@ -1999,7 +2108,7 @@ struct ChatDetailPage {
     .onClick(() => {
       this.toggleThinking(message.id)
     })
-    .backgroundColor('rgba(255,255,255,0.10)')
+    .backgroundColor('#2C2C2E')
     .borderRadius(10)
     .border({
       width: 0.5,
@@ -2175,7 +2284,7 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
-    .backgroundColor('rgba(255,255,255,0.13)')
+    .backgroundColor('#2C2C2E')
     .borderRadius(10)
     .border({
       width: 0.5,
@@ -2463,7 +2572,7 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
-    .backgroundColor('rgba(255,255,255,0.13)')
+    .backgroundColor('#2C2C2E')
     .borderRadius(10)
     .border({
       width: 0.5,
@@ -2615,7 +2724,7 @@ struct ChatDetailPage {
     }
     .width('100%')
     .padding(12)
-    .backgroundColor('rgba(255,255,255,0.16)')
+    .backgroundColor('#2C2C2E')
     .borderRadius(12)
   }
 
@@ -3584,68 +3693,118 @@ struct ChatDetailPage {
   @Builder
   InputAreaContent() {
     Stack() {
-      // 输入框 — 保持原样
-      TextArea({ placeholder: this.pendingAttachments.length > 0 ? '添加描述...' : 'Chat with Claude', text: this.inputText })
-        .width('100%')
-        .constraintSize({ minHeight: 52, maxHeight: 150 })
-        .backgroundColor('#141414')
-        .borderRadius(24)
-        .border({ width: 1, color: '#2d2d2d' })
-        .fontColor(Theme.TextPrimary)
-        .placeholderColor('rgba(142,142,142,0.6)')
-        .fontSize(14)
-        .textAlign(TextAlign.Start)
-        .padding({ left: 16, right: 16, top: 14, bottom: 50 })
-        .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-        .onChange((value: string) => {
-          this.inputText = value
-        })
-
-      // 按钮行 — 左右分布在底部
-      Row() {
-        // 左下角 ＋ 按钮
-        HdsMiniBarButton({
-          barWidth: 36,
-          barHeight: 36,
-          contentPadding: 4,
-          iconResource: $r('sys.symbol.plus'),
-          iconSize: 16,
-          iconColor: [Theme.TextSecondary],
-          maskColor: 'rgba(255,255,255,0.15)',
-          barBottomMargin: 0,
-          onButtonClick: () => {
-            this.showMenu = !this.showMenu
-          }
-        })
-
-        Blank()
-
-        // 右下角 ↑ 发送按钮
-        HdsMiniBarButton({
-          barWidth: 36,
-          barHeight: 36,
-          contentPadding: 4,
-          iconResource: $r('sys.symbol.arrow_up'),
-          iconSize: 16,
-          iconColor: this.inputText.trim() || this.pendingAttachments.length > 0 ?
-            [Theme.TextOnPrimary] : [Theme.TextSecondary],
-          maskColor: this.inputText.trim() || this.pendingAttachments.length > 0 ?
-            Theme.PrimaryColor : 'rgba(255,255,255,0.15)',
-          barBottomMargin: 0,
-          onButtonClick: () => {
-            if (this.inputText.trim() || this.pendingAttachments.length > 0) {
-              this.sendMessage()
-            }
-          }
-        })
+      // 底层：HdsTabs 液态玻璃效果（纯装饰，触摸穿透）
+      HdsTabs() {
+        TabContent() {
+          Column()
+            .width('100%')
+            .height('100%')
+        }
+        .tabBar('')
       }
-      .width('100%')
-      .justifyContent(FlexAlign.SpaceBetween)
-      .padding({ left: 3, right: 3, bottom: 6 })
-      .alignSelf(ItemAlign.End)
+      .barWidth('100%')
+      .barHeight(0)
+      .barOverlap(true)
+      .barPosition(BarPosition.End)
+      .scrollable(false)
+      .animationDuration(0)
+      .barFloatingStyle({
+        gradientMask: { maskColor: 'rgba(0,0,0,0)' },
+        barBottomMargin: 0,
+        systemMaterialEffect: {
+          materialType: hdsMaterial.MaterialType.IMMERSIVE,
+          materialLevel: hdsMaterial.MaterialLevel.EXQUISITE
+        }
+      })
+      .backgroundColor(Color.Transparent)
+      .border({ width: 0 })
+      .shadow({ radius: 0 })
       .hitTestBehavior(HitTestMode.Transparent)
 
-      // 沉浸光感追光组件（覆盖在 Stack 上层）
+      // 上层：输入框和按钮（正常接收触摸）
+      Stack() {
+        // 输入框
+        TextArea({ placeholder: this.pendingAttachments.length > 0 ? '添加描述...' : 'Chat with Claude', text: this.inputText })
+          .width('100%')
+          .constraintSize({ minHeight: 48, maxHeight: 120 })
+          .backgroundColor(Color.Transparent)
+          .fontColor(Theme.TextPrimary)
+          .placeholderColor('rgba(200, 200, 200, 0.6)')
+          .fontSize(14)
+          .textAlign(TextAlign.Start)
+          .padding({ left: 16, right: 16, top: 10, bottom: 42 })
+          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .onChange((value: string) => {
+            this.inputText = value
+          })
+
+        // 按钮行
+        Row() {
+          HdsMiniBarButton({
+            barWidth: 36,
+            barHeight: 36,
+            contentPadding: 2,
+            iconResource: $r('sys.symbol.plus'),
+            iconSize: 16,
+            iconColor: [Theme.TextSecondary],
+            maskColor: 'rgba(255,255,255,0.15)',
+            barBottomMargin: 0,
+            onButtonClick: () => {
+              this.showMenu = !this.showMenu
+            }
+          })
+
+          Blank()
+
+          Row({ space: 4 }) {
+            HdsMiniBarButton({
+              barWidth: 36,
+              barHeight: 36,
+              contentPadding: 2,
+              iconResource: $r('sys.symbol.mic'),
+              iconSize: 16,
+              iconColor: this.isRecording ? [Theme.ErrorColor] : [Theme.TextSecondary],
+              maskColor: this.isRecording ? 'rgba(255, 100, 100, 0.3)' : 'rgba(255,255,255,0.15)',
+              barBottomMargin: 0,
+              onButtonClick: () => {
+                if (this.isRecording) {
+                  this.stopVoiceRecording()
+                } else {
+                  this.startVoiceRecording()
+                }
+              }
+            })
+
+            HdsMiniBarButton({
+              barWidth: 36,
+              barHeight: 36,
+              contentPadding: 2,
+              iconResource: $r('sys.symbol.arrow_up'),
+              iconSize: 16,
+              iconColor: this.inputText.trim() || this.pendingAttachments.length > 0 ?
+                [Theme.TextOnPrimary] : [Theme.TextSecondary],
+              maskColor: this.inputText.trim() || this.pendingAttachments.length > 0 ?
+                Theme.PrimaryColor : 'rgba(255,255,255,0.15)',
+              barBottomMargin: 0,
+              onButtonClick: () => {
+                if (this.inputText.trim() || this.pendingAttachments.length > 0) {
+                  this.sendMessage()
+                }
+              }
+            })
+          }
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.SpaceBetween)
+        .padding({ left: 4, right: 4, bottom: 6 })
+        .alignSelf(ItemAlign.End)
+      }
+      .width('100%')
+      .constraintSize({ minHeight: 48, maxHeight: 120 })
+      .alignContent(Alignment.Bottom)
+      .hitTestBehavior(HitTestMode.Default)
+
+      // 沉浸光感追光组件
       if (this.lightIntensity > 0) {
         Flex()
           .size({ width: 1, height: 1 })
@@ -3665,14 +3824,12 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
+    .constraintSize({ minHeight: 48, maxHeight: 120 })
     .alignContent(Alignment.Bottom)
     .borderRadius(24)
+    .backgroundColor(Color.Transparent)
+    .border({ width: 1, color: 'rgba(255, 255, 255, 0.3)' })
     .clip(true)
-    .clipShape(new RectShape({
-      width: '100%',
-      height: '100%',
-      radius: 24
-    }))
     .visualEffect(
       new hdsEffect.HdsEffectBuilder()
         .pointLight({
@@ -3682,14 +3839,12 @@ struct ChatDetailPage {
     )
     .onTouch((event: TouchEvent) => {
       if (event.type === TouchType.Down) {
-        // 手指按下渐入
         animateTo({ duration: 100, curve: Curve.EaseIn }, () => {
           this.lightIntensity = 2.5
         })
         this.lightFingerX = event.touches[0].x
         this.lightFingerY = event.touches[0].y
       } else if (event.type === TouchType.Move) {
-        // 手指移动跟随
         animateTo({
           curve: curves.responsiveSpringMotion(0.5, 0.5)
         }, () => {
@@ -3697,7 +3852,6 @@ struct ChatDetailPage {
           this.lightFingerY = event.touches[0].y
         })
       } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        // 手指松开渐出
         animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
           this.lightIntensity = 0
         })

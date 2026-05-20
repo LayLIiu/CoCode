@@ -11,6 +11,7 @@ import { wsService } from '../services/WebSocketService'
 import { User, DiscoveredServer } from '../models/Models'
 import { mdnsDiscoveryService } from '../services/MdnsDiscoveryService'
 import { openScanner } from '../services/ScanService'
+import { connectionManager } from '../services/ConnectionManager'
 
 type ConnectionMode = 'pairing' | 'manual'
 
@@ -458,6 +459,9 @@ export struct LoginPage {
         const user: User = { id: '1', name: '用户', email: '' }
         await authStore.login(user)
 
+        // 启动智能连接管理器（LAN 优先，Tunnel 回退）
+        connectionManager.startPeriodicCheck()
+
         // 跳转到主页
         try {
           await router.pushUrl({
@@ -482,6 +486,43 @@ export struct LoginPage {
 
     this.isConnecting = true
     this.errorMessage = ''
+
+    // 检测是否为云服务器中继地址：/relay/desktop_xxx
+    const relayMatch = url.match(/^(https?:\/\/[^\/]+\/relay\/desktop_[^\/]+)/i)
+    if (relayMatch) {
+      // 云服务器中继格式：http://ip/relay/desktop_xxx
+      console.info(`[Login] Cloud relay address detected: ${url}`)
+      try {
+        apiService.setBaseUrl(url)
+        wsService.setServerUrl(url)
+
+        // 测试服务器连通性
+        await apiService.getSessions()
+
+        // 保存到多服务器配置（类型为 tunnel）
+        await authStore.addFromLogin(url)
+
+        // 登录成功
+        const user: User = { id: '1', name: '用户', email: '' }
+        await authStore.login(user)
+
+        // 启动智能连接管理器
+        connectionManager.startPeriodicCheck()
+
+        // 跳转到主页
+        try {
+          await router.pushUrl({
+            url: 'pages/Index'
+          })
+        } catch (e) {
+          console.error(`[Login] Router push error: ${e}`)
+        }
+      } catch (e) {
+        this.errorMessage = '连接失败: ' + this.getErrorMessage(e)
+      }
+      this.isConnecting = false
+      return
+    }
 
     // 处理 host:port:token 格式（仅对非 IPv6 的 URL）
     const isIpv6 = url.includes('[') || (url.match(/:/g) || []).length > 2
@@ -514,6 +555,9 @@ export struct LoginPage {
       // 登录成功
       const user: User = { id: '1', name: '用户', email: '' }
       await authStore.login(user)
+
+      // 启动智能连接管理器（LAN 优先，Tunnel 回退）
+      connectionManager.startPeriodicCheck()
 
       // 跳转到主页
       try {

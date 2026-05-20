@@ -3,61 +3,70 @@ import { hdsMaterial, HdsTabs } from '@kit.UIDesignKit';
 /**
  * HdsGlassInput 液态玻璃输入框组件
  * 使用 HdsTabs 的沉浸光感作为背景，支持多行自适应高度
+ * 注意：HdsTabs 内部会处理触摸事件，但不影响外部组件
  */
 @ComponentV2
 export struct HdsGlassInput {
   @Param inputText: string = '';
   @Param placeholder: string = '发送消息...';
-  @Param minHeight: number = 36;
-  @Param maxHeight: number = 120;
+  @Param minHeight: number = 52;
+  @Param maxHeight: number = 150;
   @Param onTextChange: ((text: string) => void) | undefined = undefined;
 
   build() {
-    Row() {
+    Stack() {
+      // 底层：沉浸光感材质层（HdsTabs）
       HdsTabs() {
         TabContent() {
-          TextArea({ placeholder: this.placeholder, text: this.inputText })
+          // 占位内容，用于撑开高度
+          Column()
             .width('100%')
-            .constraintSize({ minHeight: this.minHeight, maxHeight: this.maxHeight })
-            .backgroundColor(Color.Transparent)
-            .fontColor(Color.White)
-            .placeholderColor('rgba(255,255,255,0.3)')
-            .fontSize(14)
-            .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-            .caretColor(Color.White)
-            .onChange((value: string) => {
-              if (this.onTextChange) {
-                this.onTextChange(value);
-              }
-            })
+            .height('100%')
         }
         .tabBar('')
       }
       .barWidth('100%')
-      .barHeight(this.minHeight)
+      .barHeight(0)
       .barOverlap(true)
       .barPosition(BarPosition.End)
       .scrollable(false)
       .animationDuration(0)
       .barFloatingStyle({
         gradientMask: {
-          maskColor: 'rgba(0,0,0,0)'  // 完全透明，隐藏方框
+          maskColor: 'rgba(0,0,0,0)'
         },
         barBottomMargin: 0,
         systemMaterialEffect: {
           materialType: hdsMaterial.MaterialType.IMMERSIVE,
-          materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+          materialLevel: hdsMaterial.MaterialLevel.EXQUISITE
         }
       })
       .backgroundColor(Color.Transparent)
       .border({ width: 0 })
       .shadow({ radius: 0 })
+      .hitTestBehavior(HitTestMode.Transparent)
+
+      // 上层：透明输入框
+      TextArea({ placeholder: this.placeholder, text: this.inputText })
+        .width('100%')
+        .constraintSize({ minHeight: this.minHeight, maxHeight: this.maxHeight })
+        .backgroundColor(Color.Transparent)
+        .fontColor(Color.White)
+        .placeholderColor('rgba(255,255,255,0.5)')
+        .fontSize(14)
+        .padding({ left: 16, right: 16, top: 14, bottom: 14 })
+        .caretColor(Color.White)
+        .onChange((value: string) => {
+          if (this.onTextChange) {
+            this.onTextChange(value);
+          }
+        })
     }
     .width('100%')
-    .layoutWeight(1)
     .constraintSize({ minHeight: this.minHeight, maxHeight: this.maxHeight })
     .backgroundColor(Color.Transparent)
-    .borderRadius(18)
-    .clip(false)
+    .borderRadius(24)
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.15)' })
+    .clip(true)
   }
 }

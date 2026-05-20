@@ -118,6 +118,7 @@ export struct HdsMiniBarButton {
     SymbolGlyph(this.iconResource)
       .fontSize(this.iconSize)
       .fontColor(this.iconColor)
+      .margin({ left: -2 })
   }
 
   /**
