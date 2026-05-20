@@ -299,7 +299,7 @@ export class WebSocketService {
   }
 
   private handleGlobalMessage(text: string): void {
-    console.info(`[WS-Global] Received: ${text.substring(0, 200)}`)
+    console.info(`[WS-Global] Received: ${text.substring(0, 1000)}`)
 
     try {
       const json = JSON.parse(text) as WSMessage
@@ -493,7 +493,7 @@ export class WebSocketService {
   }
 
   private handleMessage(sessionId: string, text: string): void {
-    console.info(`[WS] Received for ${sessionId}: ${text.substring(0, 200)}`)
+    console.info(`[WS] Received for ${sessionId}: ${text.substring(0, 1000)}`)
 
     try {
       const json = JSON.parse(text) as WSMessage

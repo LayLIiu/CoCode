@@ -67,6 +67,7 @@ export struct StatusIcon {
     new Tentacle(t.id, t.angle, t.length, t.baseW / ROOT_WIDTH_SCALE, t.tipW / TIP_WIDTH_SCALE)
   )
   private ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D()
+  private breathScale: number = 1.0  // 整体呼吸缩放值
 
   aboutToAppear(): void {
     this.startAnimation()
@@ -93,8 +94,36 @@ export struct StatusIcon {
     const now = Date.now()
     const elapsed = now - this.startTime
     const mode = this.status
-    const isThinking = mode === WorkStatus.THINKING || mode === WorkStatus.STREAMING || mode === WorkStatus.TOOL_EXECUTING
+    const isThinking = mode === WorkStatus.THINKING
+    const isWaiting = mode === WorkStatus.STREAMING || mode === WorkStatus.TOOL_EXECUTING
     const isBreathing = mode === WorkStatus.PERMISSION_PENDING || mode === WorkStatus.QUESTION_PENDING
+
+    // 整体呼吸脉动
+    if (isThinking) {
+      // 思考状态只有螺旋旋转，呼吸回到 1.0 不叠加
+      this.breathScale += (1.0 - this.breathScale) * 0.2
+    } else if (isWaiting) {
+      // 等待状态呼吸：收缩 250ms，膨胀 550ms，暂停 250ms
+      const breathPeriod = 1050
+      const breathProgress = elapsed % breathPeriod
+      const tShrink = 250
+      const tExpand = 550
+
+      let rawBreath: number
+      if (breathProgress < tShrink) {
+        rawBreath = Math.cos((breathProgress / tShrink) * Math.PI / 2)
+      } else if (breathProgress < tShrink + tExpand) {
+        rawBreath = Math.sin(((breathProgress - tShrink) / tExpand) * Math.PI / 2)
+      } else {
+        rawBreath = 1
+      }
+      // 0.85 ~ 1.0 之间脉动
+      this.breathScale += (0.85 + rawBreath * 0.15 - this.breathScale) * 0.15
+    } else if (isBreathing) {
+      this.breathScale += (1.0 - this.breathScale) * 0.2
+    } else {
+      this.breathScale += (1.0 - this.breathScale) * 0.2
+    }
 
     // 更新触手物理
     for (let i = 0; i < this.tentacles.length; i++) {
@@ -127,8 +156,8 @@ export struct StatusIcon {
         t.animTipW += (targetTipW - t.animTipW) * 0.6
         t.jL = (Math.random() - 0.5) * 0.05
         t.animLength *= (1 + t.jL)
-      } else if (isBreathing) {
-        // 呼吸动画 — 完全复刻桌面端
+      } else if (isWaiting || isBreathing) {
+        // 呼吸动画 — 等待/权限请求状态
         const t_shrink = 250
         const t_expand = 550
         const t_pause = 250
@@ -165,7 +194,7 @@ export struct StatusIcon {
     const size = 28
     const cx = size / 2
     const cy = size / 2
-    const canvasScale = size / 240 * 0.85
+    const canvasScale = size / 240 * 0.85 * this.breathScale
 
     ctx.clearRect(0, 0, size, size)
     ctx.save()

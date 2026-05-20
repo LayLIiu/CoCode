@@ -6,7 +6,7 @@
 import http from '@ohos.net.http'
 import { UrlUtils } from '../common/UrlUtils'
 import {
-  Session, Message, Provider, NetworkInfo, ModelInfo,
+  Session, Message, Provider, NetworkInfo, ModelInfo, TaskItem,
   RecentProject, EffortResponse, ProviderInput, ProviderTestOverrides,
   ProviderTestResultResponse, ProviderResponse, TunnelResponse, RecentProjectsResponse
 } from '../models/Models'
@@ -195,6 +195,19 @@ export class APIService {
   async getMessages(sessionId: string): Promise<Message[]> {
     const response = await this.request<MessagesResponse>('/api/sessions/' + sessionId + '/messages', 'GET', '')
     return this.transformMessages(response.messages)
+  }
+
+  // 从服务器获取任务列表
+  async getTasks(sessionId: string): Promise<TaskItem[]> {
+    try {
+      const response = await this.request<Record<string, Object>>('/api/sessions/' + sessionId + '/tasks', 'GET', '')
+      if (response['tasks'] && Array.isArray(response['tasks'])) {
+        return response['tasks'] as TaskItem[]
+      }
+    } catch (e) {
+      console.info(`[APIService] Tasks endpoint not available: ${e}`)
+    }
+    return []
   }
 
   // MARK: - 网络 API

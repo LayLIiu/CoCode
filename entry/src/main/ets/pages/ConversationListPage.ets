@@ -422,7 +422,7 @@ export struct ConversationListPage {
     .backgroundColor('#FF3B30')
     .margin({ right: 8 })
     .onClick(() => {
-      // 直接调用删除
+      // 本地隐藏，服务端保留，可通过导入恢复
       sessionStore.deleteLocalSession(sessionId)
     })
   }

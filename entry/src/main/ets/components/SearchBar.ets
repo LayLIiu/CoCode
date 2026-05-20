@@ -1,14 +1,21 @@
 import { Theme } from '../common/Theme'
+import { hdsEffect } from '@kit.UIDesignKit'
+import { curves, RectShape } from '@kit.ArkUI'
 
 /**
- * 搜索栏组件 - 鸿蒙6.1.0液态玻璃效果
- * 液态玻璃：backgroundBlurStyle + backgroundBlur + 半透明背景 + 光泽渐变
+ * 搜索栏组件 - 沉浸光感效果
+ * 使用 hdsEffect 点光源实现手指追光
  */
 @Component
 export struct SearchBar {
   @Link searchText: string
   placeholder: string = '搜索对话...'
   onSearchChange: () => void = () => {}
+
+  // 沉浸光感追光状态
+  @State lightIntensity: number = 0
+  @State lightFingerX: number = 0
+  @State lightFingerY: number = 0
 
   build() {
     Stack() {
@@ -66,12 +73,64 @@ export struct SearchBar {
       .width('100%')
       .height('100%')
       .padding({ left: Theme.SpacingMD, right: Theme.SpacingMD })
+
+      // 沉浸光感追光组件
+      if (this.lightIntensity > 0) {
+        Flex()
+          .size({ width: 1, height: 1 })
+          .backgroundColor(Color.Transparent)
+          .visualEffect(
+            new hdsEffect.HdsEffectBuilder()
+              .pointLight({
+                options: {
+                  color: Color.White,
+                  intensity: this.lightIntensity,
+                  height: 100
+                }
+              })
+              .buildEffect()
+          )
+          .position({ x: this.lightFingerX, y: this.lightFingerY })
+      }
     }
     .width('100%')
     .height(48)
     .borderRadius(24)
+    .clip(true)
+    .clipShape(new RectShape({
+      width: '100%',
+      height: '100%',
+      radius: 24
+    }))
     .backgroundColor('#08FFFFFF')
     .backdropBlur(24)
     .border({ width: 0.5, color: '#30FFFFFF' })
+    .visualEffect(
+      new hdsEffect.HdsEffectBuilder()
+        .pointLight({
+          illuminatedType: hdsEffect.PointLightIlluminatedType.BORDER_CONTENT,
+        })
+        .buildEffect()
+    )
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        animateTo({ duration: 100, curve: Curve.EaseIn }, () => {
+          this.lightIntensity = 2.5
+        })
+        this.lightFingerX = event.touches[0].x
+        this.lightFingerY = event.touches[0].y
+      } else if (event.type === TouchType.Move) {
+        animateTo({
+          curve: curves.responsiveSpringMotion(0.5, 0.5)
+        }, () => {
+          this.lightFingerX = event.touches[0].x
+          this.lightFingerY = event.touches[0].y
+        })
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+          this.lightIntensity = 0
+        })
+      }
+    })
   }
 }

@@ -134,6 +134,9 @@ export class SessionStore {
       if (localSessions.length > 0) {
         this.sessions = localSessions
 
+        // 过滤掉本地已删除的会话（防止本地存储写入失败导致旧数据残留）
+        this.sessions = this.sessions.filter(s => !this.locallyDeletedSessionIds.has(s.id))
+
         // 预加载所有会话的本地消息
         for (let i = 0; i < localSessions.length; i++) {
           const session = localSessions[i]
@@ -302,6 +305,12 @@ export class SessionStore {
 
       wsService.disconnectSession(sessionId)
 
+      // 记录到本地已删除列表，防止服务器缓存未清除前的 fetchSessions 重新拉回
+      this.locallyDeletedSessionIds.add(sessionId)
+      const deletedIdsArray: string[] = []
+      this.locallyDeletedSessionIds.forEach(id => deletedIdsArray.push(id))
+      await storageService.saveString('locally_deleted_session_ids', JSON.stringify(deletedIdsArray))
+
       // 删除本地数据
       await storageService.deleteMessages(sessionId)
       await storageService.saveSessions(this.sessions)
@@ -386,6 +395,117 @@ export class SessionStore {
     this.currentSessionId = sessionId
     this.taskBarExpanded = false
     this.taskBarDismissed = false
+
+    // 切换会话时从已有消息中提取任务列表
+    if (sessionId) {
+      this.refreshTasksFromMessages(sessionId)
+      // 延迟重试：等 loadMessages/syncMessagesFromServer 完成后再次提取
+      setTimeout(() => {
+        this.refreshTasksFromMessages(sessionId)
+      }, 3000)
+    }
+  }
+
+  // 从会话消息中提取任务列表（TaskCreate / TaskUpdate 工具调用）
+  refreshTasksFromMessages(sessionId: string): void {
+    const messages = this.messages.get(sessionId)
+    if (!messages || messages.length === 0) {
+      console.info(`[SessionStore] refreshTasks: ${sessionId} has 0 messages`)
+      return
+    }
+
+    // DEBUG: 统计消息中 tool_use 的类型
+    let toolUseCount = 0
+    const toolNames = new Set<string>()
+    for (const msg of messages) {
+      if (msg.type === 'tool_use' && msg.toolName) {
+        toolUseCount++
+        toolNames.add(msg.toolName)
+      }
+    }
+    console.info(`[SessionStore] refreshTasks: ${sessionId} has ${messages.length} msgs, ${toolUseCount} tool_use (${Array.from(toolNames).join(',')})`)
+
+    // 任务 ID 生成器：TaskCreate 用 subject 的前 8 个字符哈希作为 id
+    // 但有些 TaskCreate 不传 id，TaskUpdate 引用的是自增序号
+    const taskMap: Map<string, TaskItem> = new Map()
+    let taskCounter = 0
+
+    for (const msg of messages) {
+      if (msg.type === 'tool_use' && msg.toolName === 'TaskCreate' && msg.toolInput) {
+        taskCounter++
+        const id = String(msg.toolInput['taskId'] || taskCounter)
+        const subject = String(msg.toolInput['subject'] || '')
+        const description = String(msg.toolInput['description'] || '')
+        const activeForm = msg.toolInput['activeForm'] as string || ''
+        taskMap.set(id, {
+          id: id,
+          content: subject || description,
+          status: 'pending',
+          activeForm: activeForm
+        })
+      } else if (msg.type === 'tool_use' && msg.toolName === 'TaskUpdate' && msg.toolInput) {
+        const taskId = String(msg.toolInput['taskId'] || msg.toolInput['id'] || '')
+        const status = String(msg.toolInput['status'] || '')
+        if (taskId && taskMap.has(taskId)) {
+          const existing = taskMap.get(taskId)!
+          if (status === 'in_progress') existing.status = 'in_progress'
+          else if (status === 'completed') existing.status = 'completed'
+          else if (status === 'failed') existing.status = 'failed'
+          // 有时 TaskUpdate 也会带 activeForm
+          if (msg.toolInput['activeForm']) {
+            existing.activeForm = msg.toolInput['activeForm'] as string
+          }
+        }
+      }
+    }
+
+    if (taskMap.size > 0) {
+      const tasks = Array.from(taskMap.values())
+      this.sessionTasks.set(sessionId, tasks)
+      this.taskBarDismissed = false
+      this.notifySessionsChanged()
+      console.info(`[SessionStore] Extracted ${tasks.length} tasks from messages for ${sessionId}`)
+    }
+  }
+
+  // 更新单个任务的 WS 实时状态
+  private updateTaskFromWS(sessionId: string, toolName: string, input: Record<string, Object> | undefined): void {
+    if (!input) return
+    const currentTasks = this.sessionTasks.get(sessionId) || []
+    const taskMap = new Map(currentTasks.map(t => [t.id, t]))
+
+    if (toolName === 'TaskCreate') {
+      const id = String(input['taskId'] || Date.now())
+      const subject = String(input['subject'] || '')
+      const description = String(input['description'] || '')
+      const activeForm = input['activeForm'] as string || ''
+      if (!taskMap.has(id)) {
+        taskMap.set(id, {
+          id: id,
+          content: subject || description,
+          status: 'pending',
+          activeForm: activeForm
+        })
+      }
+    } else if (toolName === 'TaskUpdate') {
+      const taskId = String(input['taskId'] || input['id'] || '')
+      const status = String(input['status'] || '')
+      if (taskId && taskMap.has(taskId)) {
+        const existing = taskMap.get(taskId)!
+        if (status === 'in_progress') existing.status = 'in_progress'
+        else if (status === 'completed') existing.status = 'completed'
+        else if (status === 'failed') existing.status = 'failed'
+        if (input['activeForm']) {
+          existing.activeForm = input['activeForm'] as string
+        }
+      }
+    }
+
+    if (taskMap.size > 0) {
+      this.sessionTasks.set(sessionId, Array.from(taskMap.values()))
+      this.taskBarDismissed = false
+      this.notifySessionsChanged()
+    }
   }
 
   // 保存会话到本地存储
@@ -397,21 +517,29 @@ export class SessionStore {
   // MARK: - 消息操作
 
   async loadMessages(sessionId: string): Promise<void> {
-    // 检查内存中是否已有消息，避免重复加载覆盖内存数据
-    const existing = this.messages.get(sessionId)
-    if (existing && existing.length > 0) {
-      // 内存中已有消息，跳过本地存储加载（防止覆盖 WebSocket 实时消息）
-      console.info(`[SessionStore] loadMessages: ${sessionId} already has ${existing.length} messages in memory, skip local load`)
-    } else {
-      // 先加载本地缓存（快速展示）
-      const localMessages = await storageService.loadMessages(sessionId)
-      if (localMessages.length > 0) {
-        this.messages.set(sessionId, localMessages)
-        this.notifyMessagesChanged(sessionId)
+    try {
+      // 检查内存中是否已有消息，避免重复加载覆盖内存数据
+      const existing = this.messages.get(sessionId)
+      if (existing && existing.length > 0) {
+        // 内存中已有消息，跳过本地存储加载（防止覆盖 WebSocket 实时消息）
+        console.info(`[SessionStore] loadMessages: ${sessionId} already has ${existing.length} messages in memory, skip local load`)
+      } else {
+        // 先加载本地缓存（快速展示）
+        const localMessages = await storageService.loadMessages(sessionId)
+        if (localMessages.length > 0) {
+          this.messages.set(sessionId, localMessages)
+          this.notifyMessagesChanged(sessionId)
+        }
       }
+    } catch (e) {
+      console.error(`[SessionStore] loadMessages storage error: ${e}`)
     }
 
+    // 从现有消息中提取任务列表
+    this.refreshTasksFromMessages(sessionId)
+
     // 后台静默同步服务器消息（不阻塞页面渲染）
+    console.info(`[SessionStore] syncMessagesFromServer calling for ${sessionId}`)
     this.syncMessagesFromServer(sessionId)
   }
 
@@ -424,8 +552,41 @@ export class SessionStore {
       const currentLocal = this.messages.get(sessionId) || []
       const merged = this.mergeMessages(currentLocal, serverMessages)
 
+      // 检查 merge 计算期间是否有新的 WS 消息到达（避免覆盖丢失）
+      const afterMerge = this.messages.get(sessionId) || []
+      if (afterMerge.length > currentLocal.length) {
+        for (let i = currentLocal.length; i < afterMerge.length; i++) {
+          if (!merged.some(m => m.id === afterMerge[i].id)) {
+            merged.push(afterMerge[i])
+          }
+        }
+        merged.sort((a, b) =>
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        )
+      }
+
       this.messages.set(sessionId, merged)
       this.notifyMessagesChanged(sessionId)
+
+      // 打印所有 tool_use 消息的工具名
+      const toolNamesInMerge = merged.filter(m => m.type === 'tool_use' && m.toolName).map(m => m.toolName)
+      console.info(`[SessionStore] syncMessagesFromServer merged ${merged.length} msgs, tool_use names: [${toolNamesInMerge.join(', ')}]`)
+
+      // 同步后重新提取任务列表
+      this.refreshTasksFromMessages(sessionId)
+
+      // 尝试从专用 API 获取任务列表
+      try {
+        const apiTasks = await apiService.getTasks(sessionId)
+        if (apiTasks.length > 0) {
+          console.info(`[SessionStore] Tasks from API: ${apiTasks.length} tasks`)
+          this.sessionTasks.set(sessionId, apiTasks)
+          this.taskBarDismissed = false
+          this.notifySessionsChanged()
+        }
+      } catch (e) {
+        console.info(`[SessionStore] Tasks API error (non-fatal): ${e}`)
+      }
 
       // 保存到本地
       await storageService.saveMessages(sessionId, merged)
@@ -497,13 +658,16 @@ export class SessionStore {
     })
 
     // 最终去重：同类型同内容只保留一条（不含时间戳比对，避免本地/服务器时间戳差异导致重复）
+    // 使用完整内容去重，避免超长消息的截断误判
     const finalResult: Message[] = []
-    const seenFinal: Set<string> = new Set()
+    const seenFinal: Map<string, boolean> = new Map()
     for (let i = 0; i < result.length; i++) {
       const m = result[i]
-      const finalKey = m.type + '|' + (m.toolUseId || '') + '|' + (m.content || m.toolResult || '').substring(0, 200)
-      if (seenFinal.has(finalKey)) continue
-      seenFinal.add(finalKey)
+      const contentFull = m.content || m.toolResult || ''
+      const finalKey = m.type + '|' + (m.toolUseId || '') + '|' + contentFull
+      const existing = seenFinal.get(finalKey)
+      if (existing) continue
+      seenFinal.set(finalKey, true)
       finalResult.push(m)
     }
 
@@ -732,6 +896,35 @@ export class SessionStore {
 
     if (!messageType) return
 
+    // 独立处理 tasks：无论消息类型是什么，只要带有 tasks 数组就更新任务列表
+    // （桌面端可能将 tasks 合并在 status 或其他消息中一起发送）
+    if (msg.tasks && msg.tasks.length > 0) {
+      console.info(`[SessionStore] Tasks found in WS msg type=${msg.type}: ${msg.tasks.length} tasks`)
+      this.sessionTasks.set(sessionId, msg.tasks)
+      this.taskBarDismissed = false
+      this.notifySessionsChanged()
+    }
+    // 每次收到重要 WS 消息时，尝试从已加载的消息中刷新任务列表
+    if (msg.type === 'status' || msg.type === 'tool_use_complete' || msg.type === 'tool_result' || msg.type === 'message_complete' || msg.type === 'task_list' || msg.type === 'task_update') {
+      this.refreshTasksFromMessages(sessionId)
+    }
+
+    // DEBUG: 记录所有消息的完整结构，用于排查任务列表问题
+    try {
+      const debugMsg = JSON.stringify(msg)
+      if (debugMsg.length > 800) {
+        console.info(`[SessionStore] WS msg debug (truncated): ${debugMsg.substring(0, 800)}`)
+      } else {
+        console.info(`[SessionStore] WS msg debug: ${debugMsg}`)
+      }
+      // 特别检查是否有 tasks 相关字段
+      if ((msg as Record<string, Object>)['tasks'] || (msg as Record<string, Object>)['task_list'] || (msg as Record<string, Object>)['taskData']) {
+        console.info(`[SessionStore] *** FOUND TASK DATA in msg type=${messageType} ***`)
+      }
+    } catch (e) {
+      console.info(`[SessionStore] WS msg debug error: ${e}`)
+    }
+
     switch (messageType) {
       case 'session_title_updated':
         if (msg.title) {
@@ -742,6 +935,11 @@ export class SessionStore {
       case 'status':
         if (msg.state) {
           this.updateSessionStatusFromState(sessionId, msg.state)
+
+          // 有工具执行时刷新任务列表
+          if (msg.state === 'tool_executing' || msg.state === 'streaming') {
+            this.refreshTasksFromMessages(sessionId)
+          }
         }
         // 解析权限模式/模型/努力度同步
         if (msg.verb) {
@@ -818,6 +1016,11 @@ export class SessionStore {
             parentToolUseId: msg.parentToolUseId as string | undefined
           }
           this.addMessage(sessionId, toolMessage)
+
+          // 跟踪 TaskCreate / TaskUpdate 工具调用（实时更新任务列表）
+          if (msg.toolName === 'TaskCreate' || msg.toolName === 'TaskUpdate') {
+            this.updateTaskFromWS(sessionId, msg.toolName, msg.input)
+          }
         }
         break
 
@@ -825,6 +1028,8 @@ export class SessionStore {
         if (msg.toolUseId && msg.content !== undefined && msg.content !== null) {
           this.updateToolResult(sessionId, msg.toolUseId, msg.content, msg.isError === true)
         }
+        // 工具执行完成后重新提取任务列表，更新进度
+        this.refreshTasksFromMessages(sessionId)
         break
 
       case 'message_complete':
@@ -844,6 +1049,8 @@ export class SessionStore {
           }
           this.notifyMessagesChanged(sessionId)
         }
+        // 消息完成时重新提取任务列表，刷新完成进度
+        this.refreshTasksFromMessages(sessionId)
         // 后台通知 - 从最后一条 AI 消息获取内容
         {
           const messages = this.messages.get(sessionId)
@@ -1000,10 +1207,15 @@ export class SessionStore {
 
       case 'task_list':
       case 'task_update':
-        if (msg.tasks) {
+        // 任务已在通用处理器中更新（msg.tasks），此处再处理一次确保不漏
+        if (msg.tasks && msg.tasks.length > 0) {
+          console.info(`[SessionStore] Task ${messageType} with ${msg.tasks.length} tasks`)
           this.sessionTasks.set(sessionId, msg.tasks)
           this.taskBarDismissed = false
           this.notifySessionsChanged()
+        } else {
+          // 没有 tasks 字段时也尝试从消息列表刷新
+          this.refreshTasksFromMessages(sessionId)
         }
         break
 
@@ -1097,6 +1309,16 @@ export class SessionStore {
           }
           console.info(`[SessionStore] Session broadcast for ${msg.sessionId}`)
           this.handleWSMessage(msg.sessionId, msg.message as WSMessage)
+        }
+        break
+
+      default:
+        // DEBUG: 记录未知全局消息类型，排查任务列表问题
+        try {
+          const debugStr = JSON.stringify(msg)
+          console.info(`[SessionStore] Global WS default: ${msg.type}, data: ${debugStr.substring(0, 500)}`)
+        } catch (e) {
+          console.info(`[SessionStore] Global WS default: ${msg.type}, keys: ${Object.keys(msg).join(',')}`)
         }
         break
     }
@@ -1212,6 +1434,7 @@ export class SessionStore {
         type: 'tool_use',
         content: '',
         timestamp: new Date().toISOString(),
+        toolUseId: toolUseId,
         toolResult: resultString,
         toolStatus: isError ? 'failed' : 'completed'
       }
@@ -1249,6 +1472,13 @@ export class SessionStore {
   toggleTaskBarExpanded(): void {
     this.taskBarExpanded = !this.taskBarExpanded
     this.notifySessionsChanged()
+  }
+
+  collapseTaskBar(): void {
+    if (this.taskBarExpanded) {
+      this.taskBarExpanded = false
+      this.notifySessionsChanged()
+    }
   }
 
   dismissTaskBar(): void {
