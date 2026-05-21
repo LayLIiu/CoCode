@@ -222,6 +222,7 @@ export interface AttachmentRef {
   path?: string
   data?: string  // base64 编码的图片数据
   mimeType?: string
+  size?: number  // 文件大小（字节）
 }
 
 // MARK: - 发送消息类型

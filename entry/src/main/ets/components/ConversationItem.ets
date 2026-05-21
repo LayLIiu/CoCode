@@ -12,12 +12,30 @@ export struct ConversationItem {
   @State scaleValue: number = 1.0
   @State pressed: boolean = false
   private touchTimer: number = -1
+  private pendingTimers: number[] = []
+  private isDestroyed: boolean = false
 
   aboutToDisappear(): void {
+    this.isDestroyed = true
+    this.pendingTimers.forEach(id => clearTimeout(id))
+    this.pendingTimers = []
     if (this.touchTimer !== -1) {
       clearTimeout(this.touchTimer)
       this.touchTimer = -1
     }
+  }
+
+  private scheduleTimer(callback: () => void, delay: number): void {
+    const id = setTimeout(() => {
+      const idx = this.pendingTimers.indexOf(id)
+      if (idx >= 0) {
+        this.pendingTimers.splice(idx, 1)
+      }
+      if (!this.isDestroyed) {
+        callback()
+      }
+    }, delay)
+    this.pendingTimers.push(id)
   }
 
   build() {
@@ -107,7 +125,7 @@ export struct ConversationItem {
           Text('💤')
             .fontSize(20)
           
-          Text('zzz')
+          Text('休眠中')
             .fontSize(10)
             .fontColor(Theme.TextSecondary)
             .margin({ top: -4 })
@@ -131,11 +149,11 @@ export struct ConversationItem {
    */
   private navigateToChatDetail() {
     this.scaleValue = 0.95
-    setTimeout(() => {
+    this.scheduleTimer(() => {
       this.scaleValue = 1.02
-      setTimeout(() => {
+      this.scheduleTimer(() => {
         this.scaleValue = 1.0
-        
+
         router.pushUrl({
           url: 'pages/ChatDetailPage',
           params: {

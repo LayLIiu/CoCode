@@ -7,6 +7,13 @@
     "pages/StorageManagementPage",
     "pages/ProvidersPage",
     "pages/WorkspacePage",
-    "pages/FileViewPage"
+    "pages/FileViewPage",
+    "pages/DashboardPage",
+    "pages/SkillsPage",
+    "pages/MemorySettingsPage",
+    "pages/UpdatesPage",
+    "pages/ProfilePage",
+    "pages/AgentsPage",
+    "pages/ScheduledTasksPage"
   ]
 }

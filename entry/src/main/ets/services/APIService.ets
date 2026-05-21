@@ -125,6 +125,158 @@ export class FileInfoResult {
   name: string = ''
 }
 
+// MARK: - Status API 响应类型
+
+export class ServerStatusResponse {
+  status: string = ''
+  version: string = ''
+  uptime: number = 0
+}
+
+export class UsageResponse {
+  totalInputTokens: number = 0
+  totalOutputTokens: number = 0
+  totalCost: number = 0
+}
+
+export class UserStatusResponse {
+  configDir: string = ''
+  projects: string[] = []
+}
+
+export class ActivityStatsResponse {
+  stats: Record<string, Object> = {}
+  range: string = ''
+  generatedAt: string = ''
+}
+
+export class DiagnosticsStatusResponse {
+  logDir: string = ''
+  retention: number = 0
+  counters: Record<string, number> = {}
+}
+
+export class DiagnosticsEventsResponse {
+  events: DiagnosticsEventItem[] = []
+}
+
+export class DiagnosticsEventItem {
+  type: string = ''
+  severity: string = ''
+  summary: string = ''
+  timestamp: string = ''
+}
+
+// MARK: - Skills API 响应类型
+
+export class SkillsListResponse {
+  skills: SkillMeta[] = []
+}
+
+export class SkillMeta {
+  name: string = ''
+  displayName: string = ''
+  description: string = ''
+  source: string = ''
+  userInvocable: boolean = false
+  version: string = ''
+  contentLength: number = 0
+}
+
+// MARK: - Agents API 响应类型
+
+export class AgentListItem {
+  agentType: string = ''
+  description: string = ''
+  model: string = ''
+  modelDisplay: string = ''
+  tools: string[] = []
+  systemPrompt: string = ''
+  color: string = ''
+  source: string = ''
+  baseDir: string = ''
+  isActive: boolean = false
+}
+
+export class ResolvedAgentItem extends AgentListItem {
+  overriddenBy: string = ''
+}
+
+export class AgentsListResponse {
+  activeAgents: AgentListItem[] = []
+  allAgents: ResolvedAgentItem[] = []
+}
+
+export class AgentDefinition {
+  name: string = ''
+  description: string = ''
+  model: string = ''
+  tools: string[] = []
+  systemPrompt: string = ''
+  color: string = ''
+}
+
+export class AgentDetailResponse {
+  agent: AgentDefinition = new AgentDefinition()
+}
+
+// MARK: - Scheduled Tasks API 响应类型
+
+export class TaskNotificationConfig {
+  enabled: boolean = false
+  channels: string[] = []
+}
+
+export class CronTask {
+  id: string = ''
+  name: string = ''
+  description: string = ''
+  cron: string = ''
+  prompt: string = ''
+  createdAt: number = 0
+  lastFiredAt: string = ''
+  enabled: boolean = true
+  recurring: boolean = true
+  permanent: boolean = false
+  permissionMode: string = ''
+  model: string = ''
+  providerId: string = ''
+  folderPath: string = ''
+  useWorktree: boolean = false
+  notification: TaskNotificationConfig = new TaskNotificationConfig()
+}
+
+export class ScheduledTasksListResponse {
+  tasks: CronTask[] = []
+}
+
+export class ScheduledTaskResponse {
+  task: CronTask = new CronTask()
+}
+
+export class TaskRunItem {
+  id: string = ''
+  taskId: string = ''
+  taskName: string = ''
+  startedAt: string = ''
+  completedAt: string = ''
+  status: string = ''
+  prompt: string = ''
+  output: string = ''
+  error: string = ''
+  exitCode: number = 0
+  durationMs: number = 0
+  sessionId: string = ''
+}
+
+export class TaskRunsResponse {
+  runs: TaskRunItem[] = []
+}
+
+export class OkResponse {
+  ok: boolean = false
+}
+
 export class APIError extends Error {
   code: number = 0
 
@@ -472,6 +624,91 @@ export class APIService {
       result.name = name
       return result
     }
+  }
+
+  // MARK: - Status API
+
+  async getServerStatus(): Promise<ServerStatusResponse> {
+    return await this.request<ServerStatusResponse>('/api/status', 'GET', '')
+  }
+
+  async getUsage(): Promise<UsageResponse> {
+    return await this.request<UsageResponse>('/api/status/usage', 'GET', '')
+  }
+
+  async getUserStatus(): Promise<UserStatusResponse> {
+    return await this.request<UserStatusResponse>('/api/status/user', 'GET', '')
+  }
+
+  // MARK: - Activity Stats API
+
+  async getActivityStats(range?: string): Promise<ActivityStatsResponse> {
+    const path = range ? `/api/activity-stats/${range}` : '/api/activity-stats'
+    return await this.request<ActivityStatsResponse>(path, 'GET', '')
+  }
+
+  // MARK: - Diagnostics API
+
+  async getDiagnosticsStatus(): Promise<DiagnosticsStatusResponse> {
+    return await this.request<DiagnosticsStatusResponse>('/api/diagnostics/status', 'GET', '')
+  }
+
+  async getDiagnosticsEvents(limit?: number): Promise<DiagnosticsEventsResponse> {
+    const path = limit ? `/api/diagnostics/events?limit=${limit}` : '/api/diagnostics/events'
+    return await this.request<DiagnosticsEventsResponse>(path, 'GET', '')
+  }
+
+  // MARK: - Skills API
+
+  async getSkills(): Promise<SkillsListResponse> {
+    return await this.request<SkillsListResponse>('/api/skills', 'GET', '')
+  }
+
+  // MARK: - Agents API
+
+  async getAgents(): Promise<AgentsListResponse> {
+    return await this.request<AgentsListResponse>('/api/agents', 'GET', '')
+  }
+
+  async getAgentDetail(name: string): Promise<AgentDetailResponse> {
+    return await this.request<AgentDetailResponse>('/api/agents/' + encodeURIComponent(name), 'GET', '')
+  }
+
+  // MARK: - Scheduled Tasks API
+
+  async getScheduledTasks(): Promise<ScheduledTasksListResponse> {
+    return await this.request<ScheduledTasksListResponse>('/api/scheduled-tasks', 'GET', '')
+  }
+
+  async createScheduledTask(data: Record<string, Object>): Promise<ScheduledTaskResponse> {
+    return await this.request<ScheduledTaskResponse>('/api/scheduled-tasks', 'POST', JSON.stringify(data))
+  }
+
+  async updateScheduledTask(id: string, data: Record<string, Object>): Promise<ScheduledTaskResponse> {
+    return await this.request<ScheduledTaskResponse>('/api/scheduled-tasks/' + encodeURIComponent(id), 'PUT',
+      JSON.stringify(data))
+  }
+
+  async deleteScheduledTask(id: string): Promise<OkResponse> {
+    return await this.request<OkResponse>('/api/scheduled-tasks/' + encodeURIComponent(id), 'DELETE', '')
+  }
+
+  async executeScheduledTask(id: string): Promise<OkResponse> {
+    return await this.request<OkResponse>('/api/scheduled-tasks/' + encodeURIComponent(id) + '/run', 'POST', '')
+  }
+
+  async getScheduledTaskRuns(id: string): Promise<TaskRunsResponse> {
+    return await this.request<TaskRunsResponse>('/api/scheduled-tasks/' + encodeURIComponent(id) + '/runs', 'GET', '')
+  }
+
+  // MARK: - Settings API
+
+  async getUserSettings(): Promise<Record<string, Object>> {
+    return await this.request<Record<string, Object>>('/api/settings/user', 'GET', '')
+  }
+
+  async updateUserSettings(settings: Record<string, Object>): Promise<void> {
+    await this.request<Record<string, Object>>('/api/settings/user', 'PUT', JSON.stringify(settings))
   }
 
   // MARK: - 私有方法

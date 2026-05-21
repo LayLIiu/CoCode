@@ -9,6 +9,8 @@ import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavi
 import { hdsMaterial, HdsTabs, hdsEffect } from '@kit.UIDesignKit'
 import { curves, RectShape } from '@kit.ArkUI'
 import { speechRecognizer } from '@kit.CoreSpeechKit'
+import { audio } from '@kit.AudioKit'
+import { abilityAccessCtrl, common } from '@kit.AbilityKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { sessionStore } from '../stores/SessionStore'
 import { authStore } from '../stores/AuthStore'
@@ -18,6 +20,7 @@ import { FileAttachmentBubble } from '../components/FileAttachmentBubble'
 import { ImagePreviewDialog } from '../components/ImagePreviewDialog'
 import { fileService, FileInfo } from '../services/FileService'
 import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
+
 import { StatusIcon, WorkStatus } from '../components/StatusIcon'
 import { DotMatrixBackground } from '../components/DotMatrixBackground'
 import { HdsMiniBarButton } from '../components/HdsMiniBarButton'
@@ -147,6 +150,9 @@ struct ChatDetailPage {
   // 强制重绘计数器（ArkTS @State 不追踪嵌套对象属性变更）
   @State messageUpdateCounter: number = 0
 
+  // 任务列表本地 @State 副本（@Builder 读取全局 Store 不被 ArkTS 追踪）
+  @State taskItems: TaskItem[] = []
+
   // "最新消息"浮动按钮
   @State showNewMessageButton: boolean = false
 
@@ -192,6 +198,10 @@ struct ChatDetailPage {
   @State isVoiceMode: boolean = false
   @State isRecording: boolean = false
   @State voiceText: string = ''
+  @State showVoiceToast: boolean = false
+  @State voiceToastText: string = ''
+  private audioCapturer: audio.AudioCapturer | null = null
+  private audioFeedTimer: number = -1
 
   private scroller: Scroller = new Scroller()
 
@@ -223,6 +233,8 @@ struct ChatDetailPage {
     this.setupCallbacks()
     // 加载当前会话权限模式
     this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
+    // 同步任务列表本地 @State 副本
+    this.taskItems = sessionStore.getCurrentTasks()
     // 恢复输入框草稿
     // 确保弹窗不会在进入页面时意外弹出
     this.showModelSheet = false
@@ -267,6 +279,16 @@ struct ChatDetailPage {
       this.thinkingScrollTimer = -1
     }
     if (this.contextPollTimer >= 0) { clearInterval(this.contextPollTimer); this.contextPollTimer = -1 }
+    // 停止音频采集
+    if (this.audioFeedTimer !== -1) {
+      clearInterval(this.audioFeedTimer)
+      this.audioFeedTimer = -1
+    }
+    if (this.audioCapturer) {
+      try { this.audioCapturer.stop() } catch (e) {}
+      try { this.audioCapturer.release() } catch (e) {}
+      this.audioCapturer = null
+    }
     // 释放语音识别引擎
     if (this.asrEngine) {
       try {
@@ -335,12 +357,13 @@ struct ChatDetailPage {
 
   // MARK: - 语音输入
   private asrEngine: speechRecognizer.SpeechRecognitionEngine | null = null
+  private voiceSessionId: string = ''
 
   private initSpeechEngine(): void {
     let extraParam: Record<string, Object> = { "locate": "CN", "recognizerMode": "short" }
     let initParamsInfo: speechRecognizer.CreateEngineParams = {
       language: 'zh-CN',
-      online: 1,
+      online: 0, // 0=云端识别, 1=离线
       extraParams: extraParam
     }
     try {
@@ -350,22 +373,26 @@ struct ChatDetailPage {
           // 设置识别结果监听器
           engine.setListener({
             onResult: (sessionId: string, result: speechRecognizer.SpeechRecognitionResult) => {
-              console.info('[Voice] 识别结果: ' + result.result)
+              console.info('[Voice] onResult sessionId=' + sessionId + ' result="' + result.result + '" isFinal=' + result.isFinal + ' isLast=' + result.isLast)
+              // 无论 isFinal 还是中间结果，只要有文本就显示到输入框
               if (result.result) {
                 this.voiceText = result.result
-                // 将识别结果填入输入框
-                this.inputText = this.inputText ? this.inputText + this.voiceText : this.voiceText
+                this.inputText = result.result
               }
             },
             onError: (sessionId: string, errorCode: number, errorMessage: string) => {
-              console.error('[Voice] 识别错误: ' + errorMessage)
+              console.error('[Voice] 识别错误: ' + errorMessage + ' (code=' + errorCode + ')')
               this.isRecording = false
             },
             onStart: (sessionId: string) => {
               console.info('[Voice] 识别开始: ' + sessionId)
             },
             onComplete: (sessionId: string) => {
-              console.info('[Voice] 识别完成: ' + sessionId)
+              console.info('[Voice] 识别完成: ' + sessionId + ' voiceText="' + this.voiceText + '"')
+              // onComplete 时如果 voiceText 有内容，确保填入输入框
+              if (this.voiceText) {
+                this.inputText = this.voiceText
+              }
               this.isRecording = false
             },
             onEvent: (sessionId: string, eventCode: number, eventMessage: string) => {
@@ -382,47 +409,145 @@ struct ChatDetailPage {
     }
   }
 
+  private requestMicrophonePermission(): void {
+    try {
+      const atManager = abilityAccessCtrl.createAtManager()
+      const ctx = getContext(this) as common.UIAbilityContext
+      atManager.requestPermissionsFromUser(ctx, ['ohos.permission.MICROPHONE'])
+        .then(() => {
+          console.info('[Voice] 麦克风权限已获取')
+        })
+        .catch((err: BusinessError) => {
+          console.error('[Voice] 麦克风权限被拒绝: ' + err.message)
+        })
+    } catch (error) {
+      console.error('[Voice] 请求权限异常: ' + JSON.stringify(error))
+    }
+  }
+
   private startVoiceRecording(): void {
+    // 1. 请求麦克风权限（异步弹窗，不阻塞）
+    this.requestMicrophonePermission()
+
+    // 2. 确保引擎已初始化（createEngine 是异步回调，备份检查）
     if (!this.asrEngine) {
       this.initSpeechEngine()
-      setTimeout(() => this.startVoiceRecording(), 500)
+      this.voiceToastText = '语音引擎初始化中，请稍后重试'
+      this.showVoiceToast = true
+      setTimeout(() => { this.showVoiceToast = false }, 2000)
+      console.warn('[Voice] 语音引擎尚未就绪，请稍后再试')
       return
     }
+
+    // 3. 启动语音识别引擎
     this.isRecording = true
     this.voiceText = ''
-    console.info('[Voice] 开始录音')
+    this.voiceSessionId = 'voice-session-' + Date.now()
+    console.info('[Voice] 开始录音, sessionId=' + this.voiceSessionId)
 
     try {
-      let audioInfo: speechRecognizer.AudioInfo = { 
-        audioType: 'pcm', 
+      let audioInfo: speechRecognizer.AudioInfo = {
+        audioType: 'pcm',
         sampleRate: 16000,
         soundChannel: 1,
         sampleBit: 16
       }
       let extraParams: Record<string, Object> = { "locate": "CN", "recognizerMode": "short" }
-      let recognizerParams: speechRecognizer.StartParams = {
-        sessionId: 'voice-session-' + Date.now(),
+      let startParams: speechRecognizer.StartParams = {
+        sessionId: this.voiceSessionId,
         audioInfo: audioInfo,
         extraParams: extraParams
       }
-      this.asrEngine.startListening(recognizerParams)
+      // 必须先 startListening，然后才能 writeAudio
+      this.asrEngine.startListening(startParams)
+
+      // 4. 创建 AudioCapturer 采集麦克风音频
+      let capturerOptions: audio.AudioCapturerOptions = {
+        streamInfo: {
+          samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_16000,
+          channels: audio.AudioChannel.CHANNEL_1,
+          sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
+          encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW
+        },
+        capturerInfo: {
+          source: audio.SourceType.SOURCE_TYPE_MIC,
+          capturerFlags: 0
+        }
+      }
+
+      audio.createAudioCapturer(capturerOptions).then((capturer: audio.AudioCapturer) => {
+        this.audioCapturer = capturer
+        return capturer.start()
+      }).then(() => {
+        console.info('[Voice] AudioCapturer 已启动')
+        // 5. 开始循环喂音频数据给识别引擎
+        this.startAudioFeeder()
+      }).catch((err: BusinessError) => {
+        console.error('[Voice] 麦克风采集启动失败: ' + JSON.stringify(err))
+        this.isRecording = false
+        this.voiceToastText = '麦克风启动失败: ' + err.message
+        this.showVoiceToast = true
+        setTimeout(() => { this.showVoiceToast = false }, 2500)
+      })
     } catch (error) {
-      console.error('[Voice] 启动识别失败: ' + JSON.stringify(error))
+      console.error('[Voice] 启动语音识别失败: ' + JSON.stringify(error))
       this.isRecording = false
+      this.voiceToastText = '语音识别启动失败: ' + (error as BusinessError).message
+      this.showVoiceToast = true
+      setTimeout(() => { this.showVoiceToast = false }, 2500)
     }
+  }
+
+  private startAudioFeeder(): void {
+    // 每 40ms 读取 1280 字节音频（16kHz 16bit 单声道 40ms 的数据量）
+    const CHUNK_SIZE = 1280
+    this.audioFeedTimer = setInterval(() => {
+      if (!this.isRecording || !this.asrEngine || !this.audioCapturer) {
+        clearInterval(this.audioFeedTimer)
+        this.audioFeedTimer = -1
+        return
+      }
+      this.audioCapturer.read(CHUNK_SIZE, false).then((buffer: ArrayBuffer) => {
+        if (buffer && buffer.byteLength > 0 && this.asrEngine) {
+          let audioData = new Uint8Array(buffer)
+          this.asrEngine.writeAudio(this.voiceSessionId, audioData)
+        }
+      }).catch(() => {
+        // 读取失败不中断，继续下一轮
+      })
+    }, 40)
   }
 
   private stopVoiceRecording(): void {
     console.info('[Voice] 停止录音')
 
-    if (this.asrEngine && this.isRecording) {
+    // 1. 停止音频采集
+    if (this.audioFeedTimer !== -1) {
+      clearInterval(this.audioFeedTimer)
+      this.audioFeedTimer = -1
+    }
+    if (this.audioCapturer) {
       try {
-        this.asrEngine.finish('voice-session')
+        this.audioCapturer.stop()
+        this.audioCapturer.release()
+      } catch (e) {
+        console.error('[Voice] 释放录音器失败: ' + JSON.stringify(e))
+      }
+      this.audioCapturer = null
+    }
+
+    // 2. 结束语音识别获取最终结果
+    if (this.asrEngine && this.voiceSessionId) {
+      try {
+        // finish 会触发 onComplete 回调（isRecording 在 onComplete 里置 false）
+        this.asrEngine.finish(this.voiceSessionId)
       } catch (error) {
         console.error('[Voice] 停止识别失败: ' + JSON.stringify(error))
+        this.isRecording = false
       }
+    } else {
+      this.isRecording = false
     }
-    this.isRecording = false
   }
 
   private async loadMessages(): Promise<void> {
@@ -477,6 +602,8 @@ struct ChatDetailPage {
   private sessionsChangedListener = () => {
     // 触发重绘以更新 TaskBarView
     this.messageUpdateCounter++
+    // 同步本地 @State 副本（@Builder 读取全局 Store 不被 ArkTS 追踪）
+    this.taskItems = sessionStore.getCurrentTasks()
     // 同步权限模式（服务端或其他端更改时更新）
     this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
   }
@@ -932,7 +1059,7 @@ struct ChatDetailPage {
 
   private getBottomSpacerHeight(): number {
     const inputAreaHeight = 120
-    const tasks = sessionStore.getCurrentTasks()
+    const tasks = this.taskItems
     if (tasks.length === 0 || sessionStore.taskBarDismissed) {
       return inputAreaHeight
     }
@@ -948,7 +1075,7 @@ struct ChatDetailPage {
 
   @Builder
   TaskBarView() {
-    if (sessionStore.getCurrentTasks() && sessionStore.getCurrentTasks().length > 0 && !sessionStore.taskBarDismissed) {
+    if (this.taskItems && this.taskItems.length > 0 && !sessionStore.taskBarDismissed) {
       Column({ space: 0 }) {
         Divider()
           .color('rgba(255,255,255,0.08)')
@@ -971,16 +1098,16 @@ struct ChatDetailPage {
 
             Row() {
               Row()
-                .width(this.getTaskProgress(sessionStore.getCurrentTasks()) + '%')
+                .width(this.getTaskProgress(this.taskItems) + '%')
                 .height('100%')
-                .backgroundColor(this.areAllTasksCompleted(sessionStore.getCurrentTasks()) ? Theme.SuccessColor : Theme.AccentBlue)
+                .backgroundColor(this.areAllTasksCompleted(this.taskItems) ? Theme.SuccessColor : Theme.AccentBlue)
                 .borderRadius(2)
             }
             .width(120).height(4)
             .backgroundColor('rgba(255,255,255,0.1)')
             .borderRadius(2)
 
-            Text(this.getCompletedTaskCount(sessionStore.getCurrentTasks()) + '/' + sessionStore.getCurrentTasks().length)
+            Text(this.getCompletedTaskCount(this.taskItems) + '/' + this.taskItems.length)
               .fontSize(11).fontFamily('monospace').fontColor(Theme.TextSecondary)
 
             Blank()
@@ -988,6 +1115,7 @@ struct ChatDetailPage {
             SymbolGlyph($r('sys.symbol.chevron_down'))
               .fontSize(11).fontColor([Theme.TextSecondary])
               .rotate({ angle: this.showTaskBarExpanded ? 0 : 180 })
+              .animation({ duration: 200, curve: Curve.EaseInOut })
           }
           .width('100%')
           .onClick(() => {
@@ -996,9 +1124,9 @@ struct ChatDetailPage {
           })
 
           // 展开的任务列表
-          if (this.showTaskBarExpanded && sessionStore.getCurrentTasks().length > 0) {
+          if (this.showTaskBarExpanded && this.taskItems.length > 0) {
             Column({ space: 4 }) {
-              ForEach(sessionStore.getCurrentTasks(), (task: TaskItem) => {
+              ForEach(this.taskItems, (task: TaskItem) => {
                 Row({ space: 8 }) {
                   SymbolGlyph(task.status === 'completed' 
                     ? $r('sys.symbol.checkmark_circle_fill')
@@ -1352,11 +1480,27 @@ struct ChatDetailPage {
   AttachmentPreviewRow() {
     Row({ space: 6 }) {
       ForEach(this.pendingAttachments, (att: AttachmentRef) => {
-        Text(att.name || '附件')
-          .fontSize(12).fontColor(Theme.TextSecondary)
-          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-          .backgroundColor('rgba(255,255,255,0.08)')
-          .borderRadius(8)
+        Row({ space: 4 }) {
+          // 文件类型标签
+          if (att.mimeType) {
+            Text(this.getAttachmentTypeLabel(att.mimeType))
+              .fontSize(10).fontWeight(FontWeight.Bold)
+              .fontColor(this.getAttachmentTypeColor(att.mimeType))
+          }
+
+          Text(att.name || '附件')
+            .fontSize(12).fontColor(Theme.TextSecondary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+          if (att.size && att.size > 0) {
+            Text(this.formatFileSize(att.size))
+              .fontSize(10).fontColor(Theme.TextTertiary)
+          }
+        }
+        .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+        .backgroundColor('rgba(255,255,255,0.08)')
+        .borderRadius(8)
       })
     }
     .width('100%')
@@ -1655,6 +1799,22 @@ struct ChatDetailPage {
         })
       }
 
+      // 语音提示 Toast
+      if (this.showVoiceToast) {
+        Column() {
+          Text(this.voiceToastText)
+            .fontSize(13)
+            .fontColor(Color.White)
+            .textAlign(TextAlign.Center)
+        }
+        .width('100%')
+        .padding({ left: 24, right: 24, top: 12, bottom: 12 })
+        .backgroundColor(Color.Black)
+        .borderRadius(20)
+        .position({ x: 0, y: 100 })
+        .zIndex(100)
+      }
+
     }
     .width('100%')
     .height('100%')
@@ -1664,8 +1824,6 @@ struct ChatDetailPage {
     .bindSheet($$this.showPermSheet, this.PermissionSheet(), {
       height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
     })
-    .width('100%')
-    .height('100%')
   }
 
   // 标题栏状态行（与 iOS 一致：状态指示器 + 状态文字 + 上下文用量）
@@ -3640,6 +3798,27 @@ struct ChatDetailPage {
     .width('100%').padding(Theme.SpacingLG)
   }
 
+  private getAttachmentTypeLabel(mimeType: string): string {
+    if (mimeType.startsWith('image/')) return 'IMG'
+    if (mimeType.startsWith('audio/')) return 'AUDIO'
+    if (mimeType === 'application/pdf') return 'PDF'
+    if (mimeType.startsWith('video/')) return 'VIDEO'
+    return 'FILE'
+  }
+
+  private getAttachmentTypeColor(mimeType: string): ResourceColor {
+    if (mimeType.startsWith('image/')) return '#30D158'
+    if (mimeType.startsWith('audio/')) return '#BF5AF2'
+    if (mimeType === 'application/pdf') return '#FF3B30'
+    return '#0A84FF'
+  }
+
+  private formatFileSize(bytes: number): string {
+    if (bytes < 1024) return bytes + 'B'
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'KB'
+    return (bytes / (1024 * 1024)).toFixed(1) + 'MB'
+  }
+
   private sendMessage(): void {
     const text = this.inputText.trim()
     if (!text && this.pendingAttachments.length === 0) return
@@ -3651,12 +3830,14 @@ struct ChatDetailPage {
   private async pickImage(): Promise<void> {
     try {
       const picker = new photoViewPicker.PhotoViewPicker()
-      const result = await picker.select({
+      const result: photoViewPicker.PhotoSelectResult = await picker.select({
         MIMEType: photoViewPicker.PhotoViewMIMETypes.IMAGE_TYPE,
         maxSelectNumber: 5
       })
-      if (result.photoUris && result.photoUris.length > 0) {
-        for (const uri of result.photoUris) {
+      const uris: string[] = result.photoUris as string[] || []
+      if (uris.length > 0) {
+        for (let i = 0; i < uris.length; i++) {
+          const uri: string = uris[i]
           this.pendingAttachments.push({
             type: 'image',
             path: uri,
@@ -3671,17 +3852,47 @@ struct ChatDetailPage {
 
   private async pickFile(): Promise<void> {
     try {
-      const picker = new photoViewPicker.PhotoViewPicker()
-      const result = await picker.select({
-        MIMEType: photoViewPicker.PhotoViewMIMETypes.IMAGE_TYPE,
+      const docPicker = new photoViewPicker.DocumentViewPicker()
+      const result: string[] = await docPicker.select({
         maxSelectNumber: 5
       })
-      if (result.photoUris && result.photoUris.length > 0) {
-        for (const uri of result.photoUris) {
+      if (result && result.length > 0) {
+        for (let i = 0; i < result.length; i++) {
+          const uri: string = result[i]
+          const name: string = uri.split('/').pop() || 'file'
+          const parts: string[] = name.split('.')
+          const ext: string = parts.length > 1 ? parts[parts.length - 1].toLowerCase() : ''
+          const mimeMap: Record<string, string> = {
+            'pdf': 'application/pdf',
+            'mp3': 'audio/mpeg',
+            'wav': 'audio/wav',
+            'ogg': 'audio/ogg',
+            'aac': 'audio/aac',
+            'm4a': 'audio/mp4',
+            'wma': 'audio/x-ms-wma',
+            'flac': 'audio/flac',
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'gif': 'image/gif',
+            'webp': 'image/webp',
+            'svg': 'image/svg+xml',
+            'bmp': 'image/bmp',
+            'doc': 'application/msword',
+            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'xls': 'application/vnd.ms-excel',
+            'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'zip': 'application/zip',
+            'txt': 'text/plain',
+            'json': 'application/json',
+            'csv': 'text/csv'
+          }
+          const mimeType: string = mimeMap[ext] || 'application/octet-stream'
           this.pendingAttachments.push({
-            type: 'file',
+            type: mimeType.startsWith('image/') ? 'image' : 'file',
             path: uri,
-            name: uri.split('/').pop() || 'file'
+            name: name,
+            mimeType: mimeType
           })
         }
       }

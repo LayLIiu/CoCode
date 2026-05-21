@@ -11,11 +11,14 @@ function getFileTypeIconResource(ext: string): Resource {
   const codeExts = ['ts', 'tsx', 'js', 'jsx', 'py', 'rs', 'go', 'java', 'kt',
     'swift', 'css', 'html', 'json', 'xml', 'yaml', 'yml', 'md', 'sh', 'c', 'cpp']
   const archiveExts = ['zip', 'tar', 'gz', 'rar', '7z']
+  const audioExts = ['mp3', 'wav', 'ogg', 'aac', 'm4a', 'wma', 'flac', 'opus']
+  const docExts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx']
 
   if (imgExts.indexOf(ext) >= 0) return $r('sys.symbol.arrow_down_circle')
   if (codeExts.indexOf(ext) >= 0) return $r('sys.symbol.chevron_forward')
   if (archiveExts.indexOf(ext) >= 0) return $r('sys.symbol.folder')
-  if (ext === 'pdf') return $r('sys.symbol.doc_text')
+  if (audioExts.indexOf(ext) >= 0) return $r('sys.symbol.mic')
+  if (docExts.indexOf(ext) >= 0) return $r('sys.symbol.doc_text')
   if (['txt', 'log', 'cfg', 'ini', 'env'].indexOf(ext) >= 0) return $r('sys.symbol.doc_text')
   return $r('sys.symbol.doc_text')
 }
@@ -25,11 +28,14 @@ function getFileTypeColor(ext: string): string {
   const codeExts = ['ts', 'tsx', 'js', 'jsx', 'py', 'rs', 'go', 'java', 'kt',
     'swift', 'css', 'html', 'json', 'xml', 'yaml', 'yml', 'md', 'sh', 'c', 'cpp']
   const archiveExts = ['zip', 'tar', 'gz', 'rar', '7z']
+  const audioExts = ['mp3', 'wav', 'ogg', 'aac', 'm4a', 'wma', 'flac', 'opus']
+  const docExts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx']
 
   if (imgExts.indexOf(ext) >= 0) return '#30D158'
   if (codeExts.indexOf(ext) >= 0) return '#0A84FF'
   if (archiveExts.indexOf(ext) >= 0) return '#FF9F0A'
-  if (ext === 'pdf') return '#FF3B30'
+  if (audioExts.indexOf(ext) >= 0) return '#BF5AF2'
+  if (docExts.indexOf(ext) >= 0) return '#FF3B30'
   if (['txt', 'log', 'cfg', 'ini', 'env'].indexOf(ext) >= 0) return '#8E8E93'
   return '#636366'
 }

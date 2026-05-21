@@ -152,7 +152,9 @@ export struct ImagePreviewDialog {
               if (Math.abs(this.offsetY) > 150) {
                 this.dismiss()
               } else {
-                this.offsetY = 0
+                animateTo({ duration: 250, curve: Curve.FastOutSlowIn }, () => {
+                  this.offsetY = 0
+                })
               }
             })
         )
@@ -161,6 +163,7 @@ export struct ImagePreviewDialog {
     .width('100%')
     .height('100%')
     .clip(true)
+    .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
   }
 
   /**
