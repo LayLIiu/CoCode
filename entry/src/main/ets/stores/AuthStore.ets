@@ -99,7 +99,7 @@ export class AuthStore {
   /**
    * 添加服务器配置
    */
-  async addProfile(name: string, url: string, type: 'lan' | 'pgy' | 'tunnel'): Promise<string> {
+  async addProfile(name: string, url: string, type: 'lan' | 'pgy' | 'tunnel' | 'cloud_relay'): Promise<string> {
     const id = 'server_' + Date.now()
     const profile: ServerProfile = {
       id: id,
@@ -168,7 +168,7 @@ export class AuthStore {
   /**
    * 登录时自动添加配置（兼容旧版登录流程）
    */
-  async addFromLogin(url: string): Promise<void> {
+  async addFromLogin(url: string, hintType?: 'lan' | 'pgy' | 'tunnel' | 'cloud_relay'): Promise<void> {
     const normalized = UrlUtils.normalizeUrl(url)
 
     // 检查是否已有相同 URL 的配置
@@ -179,8 +179,10 @@ export class AuthStore {
     }
 
     // 判断连接类型
-    let type: 'lan' | 'pgy' | 'tunnel' = 'lan'
-    if (normalized.startsWith('https://')) {
+    let type: 'lan' | 'pgy' | 'tunnel' | 'cloud_relay' = 'lan'
+    if (hintType) {
+      type = hintType
+    } else if (normalized.startsWith('https://')) {
       type = 'tunnel'
     } else if (normalized.includes('10.') || normalized.includes('172.')) {
       type = 'pgy'
@@ -188,7 +190,7 @@ export class AuthStore {
 
     // 生成默认名称
     const count = this.serverProfiles.length + 1
-    let name = type === 'tunnel' ? `隧道 ${count}` : type === 'pgy' ? `蒲公英 ${count}` : `局域网 ${count}`
+    let name = type === 'tunnel' ? `隧道 ${count}` : type === 'pgy' ? `蒲公英 ${count}` : type === 'cloud_relay' ? `云中继 ${count}` : `局域网 ${count}`
 
     await this.addProfile(name, normalized, type)
     // 自动切换到新配置

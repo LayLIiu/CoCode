@@ -14,6 +14,7 @@ export interface ScannedAddresses {
   lan: string | null
   pgy: string | null
   tunnel: string | null
+  cloudRelay: string | null
 }
 
 let abilityContext: common.UIAbilityContext | null = null
@@ -73,18 +74,19 @@ function parseQRContent(raw: string): ScannedAddresses | null {
     if (typeof data !== 'object' || data === null) {
       // 不是 JSON，直接当文本 URL 使用
       const url = normalize(raw)
-      return { bestUrl: url, lan: null, pgy: null, tunnel: null }
+      return { bestUrl: url, lan: null, pgy: null, tunnel: null, cloudRelay: null }
     }
 
     const lan = normalize(typeof data.lan === 'string' ? data.lan : null)
     const pgy = normalize(typeof data.pgy === 'string' ? data.pgy : null)
     const tunnel = normalize(typeof data.tunnel === 'string' ? data.tunnel : null)
-    const bestUrl = tunnel || pgy || lan
+    const cloudRelay = normalize(typeof data.cloud_relay === 'string' ? data.cloud_relay : null)
+    const bestUrl = tunnel || pgy || lan || cloudRelay
 
-    return { bestUrl, lan, pgy, tunnel }
+    return { bestUrl, lan, pgy, tunnel, cloudRelay }
   } catch (_) {
     // 不是 JSON，直接当文本 URL 使用
     const url = normalize(raw)
-    return { bestUrl: url, lan: null, pgy: null, tunnel: null }
+    return { bestUrl: url, lan: null, pgy: null, tunnel: null, cloudRelay: null }
   }
 }

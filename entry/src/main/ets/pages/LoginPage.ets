@@ -25,6 +25,7 @@ export struct LoginPage {
   @State errorMessage: string = ''
   @State discoveredServers: DiscoveredServer[] = []
   @State isSearching: boolean = false
+  private scannedType: 'lan' | 'pgy' | 'tunnel' | 'cloud_relay' | null = null
 
   aboutToAppear(): void {
     this.startDiscovery()
@@ -216,6 +217,16 @@ export struct LoginPage {
             const result = await openScanner()
             if (result?.bestUrl) {
               this.serverUrl = result.bestUrl
+              // 推断扫码得到的连接类型
+              if (result.tunnel === result.bestUrl) {
+                this.scannedType = 'tunnel'
+              } else if (result.pgy === result.bestUrl) {
+                this.scannedType = 'pgy'
+              } else if (result.cloudRelay === result.bestUrl) {
+                this.scannedType = 'cloud_relay'
+              } else {
+                this.scannedType = 'lan'
+              }
             }
           })
         }
@@ -549,8 +560,9 @@ export struct LoginPage {
       // 测试服务器连通性
       await apiService.getSessions()
 
-      // 保存到多服务器配置
-      await authStore.addFromLogin(url)
+      // 保存到多服务器配置（扫码时保留类型信息）
+      const typeForAdd = this.scannedType || undefined
+      await authStore.addFromLogin(url, typeForAdd)
 
       // 登录成功
       const user: User = { id: '1', name: '用户', email: '' }

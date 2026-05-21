@@ -292,6 +292,14 @@ export class SessionStore {
   async deleteSession(sessionId: string): Promise<void> {
     try {
       await apiService.deleteSession(sessionId)
+
+      // 记录到本地已删除列表，防止服务器缓存未清除前的 fetchSessions 重新拉回（先保存删除标记）
+      this.locallyDeletedSessionIds.add(sessionId)
+      const deletedIdsArray: string[] = []
+      this.locallyDeletedSessionIds.forEach(id => deletedIdsArray.push(id))
+      await storageService.saveString('locally_deleted_session_ids', JSON.stringify(deletedIdsArray))
+
+      // 更新内存数据
       this.sessions = this.sessions.filter(s => s.id !== sessionId)
       this.messages.delete(sessionId)
       this.sessionStatuses.delete(sessionId)
@@ -305,12 +313,6 @@ export class SessionStore {
 
       wsService.disconnectSession(sessionId)
 
-      // 记录到本地已删除列表，防止服务器缓存未清除前的 fetchSessions 重新拉回
-      this.locallyDeletedSessionIds.add(sessionId)
-      const deletedIdsArray: string[] = []
-      this.locallyDeletedSessionIds.forEach(id => deletedIdsArray.push(id))
-      await storageService.saveString('locally_deleted_session_ids', JSON.stringify(deletedIdsArray))
-
       // 删除本地数据
       await storageService.deleteMessages(sessionId)
       await storageService.saveSessions(this.sessions)
@@ -323,7 +325,13 @@ export class SessionStore {
   }
 
   async deleteLocalSession(sessionId: string): Promise<void> {
-    // 只删除本地数据，不删除服务器数据
+    // 记录到本地已删除列表，防止从服务器重新加载（先保存删除标记，确保原子性）
+    this.locallyDeletedSessionIds.add(sessionId)
+    const deletedIdsArray: string[] = []
+    this.locallyDeletedSessionIds.forEach(id => deletedIdsArray.push(id))
+    await storageService.saveString('locally_deleted_session_ids', JSON.stringify(deletedIdsArray))
+
+    // 更新内存数据
     this.sessions = this.sessions.filter(s => s.id !== sessionId)
     this.messages.delete(sessionId)
     this.sessionStatuses.delete(sessionId)
@@ -335,13 +343,7 @@ export class SessionStore {
       this.completedTimers.delete(sessionId)
     }
 
-    // 记录到本地已删除列表，防止从服务器重新加载
-    this.locallyDeletedSessionIds.add(sessionId)
-    const deletedIdsArray: string[] = []
-    this.locallyDeletedSessionIds.forEach(id => deletedIdsArray.push(id))
-    await storageService.saveString('locally_deleted_session_ids', JSON.stringify(deletedIdsArray))
-
-    // 删除本地数据
+    // 删除本地数据（先删除消息，再保存更新后的会话列表）
     await storageService.deleteMessages(sessionId)
     await storageService.saveSessions(this.sessions)
     await storageService.saveSessionStatuses(this.sessionStatuses)

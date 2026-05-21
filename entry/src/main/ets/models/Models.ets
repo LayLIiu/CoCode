@@ -250,6 +250,7 @@ export interface NetworkInfo {
   lanUrl?: string
   tailscaleUrl?: string
   tunnelUrl?: string
+  cloudRelayUrl?: string
   tunnelEnabled: boolean
   serverPort: number
 }
@@ -289,7 +290,7 @@ export interface ServerProfile {
   id: string
   name: string        // "家里", "办公室" 等
   url: string
-  type: 'lan' | 'pgy' | 'tunnel'
+  type: 'lan' | 'pgy' | 'tunnel' | 'cloud_relay'
   lastUsed: number    // 时间戳
 }
 

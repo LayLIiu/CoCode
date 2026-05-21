@@ -11,7 +11,7 @@ import { HdsNavigation, ScrollEffectType, HdsNavigationTitleMode } from '@hms.hd
 import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import router from '@ohos.router'
 import http from '@ohos.net.http'
-import { openScanner } from '../services/ScanService'
+import { openScanner, ScannedAddresses } from '../services/ScanService'
 import { connectionManager, ConnectionType, ConnectionQuality } from '../services/ConnectionManager'
 
 @Component
@@ -977,6 +977,19 @@ export struct SettingsPage {
           const result = await openScanner()
           if (result?.bestUrl) {
             this.newProfileUrl = result.bestUrl
+            // 立即添加其他地址为独立配置
+            if (result.lan && result.lan !== result.bestUrl) {
+              authStore.addFromLogin(result.lan, 'lan')
+            }
+            if (result.pgy && result.pgy !== result.bestUrl) {
+              authStore.addFromLogin(result.pgy, 'pgy')
+            }
+            if (result.tunnel && result.tunnel !== result.bestUrl) {
+              authStore.addFromLogin(result.tunnel, 'tunnel')
+            }
+            if (result.cloudRelay && result.cloudRelay !== result.bestUrl) {
+              authStore.addFromLogin(result.cloudRelay, 'cloud_relay')
+            }
           }
         })
       }
