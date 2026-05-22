@@ -147,6 +147,9 @@ struct ChatDetailPage {
   // thinking 自动展开/合上（与 iOS 一致：最新 thinking 自动展开，新工具/内容出现后自动合上）
   private latestThinkingId: string = ''
 
+  // 工具组折叠状态
+  @State toolGroupExpanded: boolean = true
+
   // 强制重绘计数器（ArkTS @State 不追踪嵌套对象属性变更）
   @State messageUpdateCounter: number = 0
 
@@ -569,6 +572,8 @@ struct ChatDetailPage {
       if (msgs) {
         this.messages = msgs
       }
+      // 消息变化时同步任务列表状态（最新任务状态在 sessionStore 里更新）
+      this.taskItems = sessionStore.getCurrentTasks()
       // 查看历史或用户触控时不强制滚动，避免打断用户
       if (!this.userIsViewingHistory && !this.isUserTouchingList) {
         this.scrollToBottom()
@@ -892,6 +897,7 @@ struct ChatDetailPage {
       case 'system_notification':
         // Agent task_notification 等触发重绘以显示最新的 agentTaskStatus
         if (msg.subtype === 'task_notification') {
+          this.taskItems = sessionStore.getCurrentTasks()
           this.messageUpdateCounter++
         }
         break
@@ -1549,10 +1555,20 @@ struct ChatDetailPage {
             .rotate({ angle: 180 })
           }
 
-          // 消息倒序排列（最新在前=视觉底部）
+          // 消息倒序排列（最新在前=视觉底部），工具消息合组
           ForEach([...this.getVisibleMessages()].reverse(), (message: Message) => {
             ListItem() {
-              this.MessageBubble(message)
+              if (message.type === 'tool_use' && (message.toolName === 'Agent' || message.toolName === 'AskUserQuestion')) {
+                // Agent / AskUserQuestion 有特殊渲染，不参与合组
+                this.MessageBubble(message)
+              } else if ((message.type === 'tool_use' || message.type === 'tool_result') && !message.parentToolUseId) {
+                // 工具组：仅在组内第一条渲染 ToolGroupBubble，其余跳过
+                if (this.isFirstToolInReverseGroup(message)) {
+                  this.ToolGroupBubble(this.collectToolGroup(message))
+                }
+              } else {
+                this.MessageBubble(message)
+              }
             }
             .rotate({ angle: 180 })
           }, (message: Message) => {
@@ -1921,6 +1937,84 @@ struct ChatDetailPage {
       return filtered
     }
     return filtered.slice(filtered.length - this.displayedMessageCount)
+  }
+
+  /**
+   * 在逆序列表中判断当前 tool 消息是否是组的第一个（即最新的一条）。
+   * 用于在 ForEach 逆序渲染时，只在第一条渲染 ToolGroupBubble，
+   * 其余工具消息跳过（渲染空 Column）。
+   * Agent / AskUserQuestion 有特殊渲染，不参与合组。
+   */
+  private isFirstToolInReverseGroup(message: Message): boolean {
+    if (message.type !== 'tool_use' && message.type !== 'tool_result') return false
+    if (message.parentToolUseId) return false
+    if (message.toolName === 'Agent' || message.toolName === 'AskUserQuestion') return false
+    const reversed = [...this.getVisibleMessages()].reverse()
+    let idx = reversed.indexOf(message)
+    // 引用不匹配时用 ID 回退（组件重建后引用会变）
+    if (idx < 0) {
+      for (let i = 0; i < reversed.length; i++) {
+        if (reversed[i].id === message.id) { idx = i; break }
+      }
+    }
+    if (idx <= 0) return true
+    const prev = reversed[idx - 1]
+    // Agent / AskUserQuestion 会打断连续的工具组
+    if (prev.toolName === 'Agent' || prev.toolName === 'AskUserQuestion') return true
+    return prev.type !== 'tool_use' && prev.type !== 'tool_result'
+  }
+
+  /**
+   * 从当前 tool 消息开始收集连续的 tool_use/tool_result 消息（按正序）
+   * 遇到 Agent / AskUserQuestion 时停止收集。
+   * 先向后找到组起点，再向前收集全部，解决逆序渲染时 first 是组内最后一条的问题。
+   */
+  private collectToolGroup(anyToolInGroup: Message): Message[] {
+    const group: Message[] = []
+    const allMessages = this.messages
+    // 先用引用匹配，失败后用 ID 回退（组件重建后引用会变）
+    let startIdx = allMessages.indexOf(anyToolInGroup)
+    if (startIdx < 0) {
+      startIdx = 0
+      for (let i = 0; i < allMessages.length; i++) {
+        if (allMessages[i].id === anyToolInGroup.id) {
+          startIdx = i
+          break
+        }
+      }
+    }
+    // 仍找不到 → 只返回自身
+    if (startIdx >= allMessages.length || allMessages[startIdx].id !== anyToolInGroup.id) {
+      return [anyToolInGroup]
+    }
+
+    // 向后找组的起点（第一个 tool 消息）
+    let groupStart = startIdx
+    for (let i = startIdx - 1; i >= 0; i--) {
+      const m = allMessages[i]
+      if ((m.type === 'tool_use' || m.type === 'tool_result') &&
+        !m.parentToolUseId &&
+        m.toolName !== 'Agent' &&
+        m.toolName !== 'AskUserQuestion') {
+        groupStart = i
+      } else {
+        break
+      }
+    }
+
+    // 从起点向前收集全部工具消息
+    for (let i = groupStart; i < allMessages.length; i++) {
+      const m = allMessages[i]
+      if ((m.type === 'tool_use' || m.type === 'tool_result') &&
+        !m.parentToolUseId &&
+        m.toolName !== 'Agent' &&
+        m.toolName !== 'AskUserQuestion') {
+        group.push(m)
+      } else {
+        break
+      }
+    }
+    return group
   }
 
   private hasMoreMessages(): boolean {
@@ -2453,6 +2547,106 @@ struct ChatDetailPage {
         this.toggleTool(message.id)
       }
     })
+  }
+
+  // MARK: - 工具组折叠容器
+
+  /**
+   * 工具组折叠容器 — 将连续的 tool_use/tool_result 合并为一个可折叠气泡
+   */
+  @Builder
+  ToolGroupBubble(messages: Message[]) {
+    Column({ space: 0 }) {
+      // Header: 图标 + 摘要 + 进度 + 箭头
+      Row({ space: 8 }) {
+        SymbolGlyph($r('sys.symbol.hammer_fill'))
+          .fontSize(12)
+          .fontColor([Theme.AccentBlue])
+
+        Text(this.getToolGroupSummary(messages))
+          .fontSize(12)
+          .fontColor(Theme.TextPrimary)
+          .layoutWeight(1)
+
+        Text(this.getToolGroupCountText(messages))
+          .fontSize(10)
+          .fontColor(Theme.TextTertiary)
+          .maxLines(1)
+
+        SymbolGlyph(this.toolGroupExpanded
+          ? $r('sys.symbol.chevron_up')
+          : $r('sys.symbol.chevron_down'))
+          .fontSize(10)
+          .fontColor([Theme.TextSecondary])
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+
+      // 展开内容：逐个渲染工具气泡
+      if (this.toolGroupExpanded) {
+        Divider().color('rgba(255,255,255,0.1)').width('100%')
+
+        Column({ space: 0 }) {
+          ForEach(messages, (msg: Message) => {
+            if (msg.type === 'tool_use') {
+              this.ToolUseBubble(msg)
+            } else if (msg.type === 'tool_result') {
+              this.ToolResultBubble(msg)
+            }
+          }, (msg: Message) => msg.id + '_' + (msg.toolStatus || ''))
+        }
+        .width('100%')
+      }
+    }
+    .width('100%')
+    .backgroundColor('#2C2C2E')
+    .borderRadius(10)
+    .border({ width: 0.5, color: 'rgba(255,255,255,0.12)' })
+    .margin({ bottom: Theme.SpacingMD })
+    .onClick(() => {
+      this.toolGroupExpanded = !this.toolGroupExpanded
+    })
+  }
+
+  // MARK: - 工具组辅助方法
+
+  /**
+   * 工具组折叠态摘要文字（如 "调用 3 个工具 · 执行 2 个命令"）
+   */
+  private getToolGroupSummary(messages: Message[]): string {
+    const toolNames: string[] = []
+    let bashCount = 0
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i]
+      if (m.type === 'tool_use' && m.toolName) {
+        if (toolNames.indexOf(m.toolName) === -1) {
+          toolNames.push(m.toolName)
+        }
+        if (m.toolName === 'Bash') bashCount++
+      }
+    }
+    let text = '调用 ' + toolNames.length + ' 个工具'
+    if (bashCount > 0) {
+      text += ' · 执行 ' + bashCount + ' 个命令'
+    }
+    return text
+  }
+
+  /**
+   * 工具组右侧进度文字（如 "已完成" 或 "2/3"）
+   */
+  private getToolGroupCountText(messages: Message[]): string {
+    let toolCount = 0
+    let doneCount = 0
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i]
+      if (m.type === 'tool_use') {
+        toolCount++
+        if (m.toolStatus === 'completed') doneCount++
+      }
+    }
+    if (doneCount === toolCount) return '已完成'
+    return doneCount + '/' + toolCount
   }
 
   // MARK: - Agent 派遣消息
