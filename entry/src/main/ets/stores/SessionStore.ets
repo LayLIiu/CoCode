@@ -19,8 +19,11 @@ export class SessionStore {
   sessions: Session[] = []
   currentSessionId: string | null = null
 
-  // 消息存储
+  // 消息存储 (Tail: 已提交消息)
   messages: Map<string, Message[]> = new Map()
+
+  // 流式消息缓冲 (Head: 活跃流式增量)
+  streamHeads: Map<string, Message[]> = new Map()
 
   // 输入框草稿
   inputDrafts: Map<string, string> = new Map()
@@ -851,6 +854,52 @@ export class SessionStore {
     }
   }
 
+  // MARK: - Head/Tail 流式缓冲
+
+  /** 将流式 Head 缓冲刷新到 Tail (messages) */
+  flushHeadToTail(sessionId: string): void {
+    const head = this.streamHeads.get(sessionId)
+    if (!head || head.length === 0) return
+
+    const tail = this.messages.get(sessionId) || []
+    let changed = false
+
+    for (let i = 0; i < head.length; i++) {
+      const headMsg = head[i]
+      // Head 中的消息已不再流式
+      headMsg.isStreaming = false
+
+      // 去重检查
+      let exists = false
+      for (let j = tail.length - 1; j >= 0 && j >= tail.length - 5; j--) {
+        if (tail[j].id === headMsg.id) {
+          exists = true
+          break
+        }
+      }
+      if (!exists) {
+        tail.push(headMsg)
+        changed = true
+      }
+    }
+
+    if (changed) {
+      this.messages.set(sessionId, tail)
+      // 将合并后的消息持久化到本地存储（移除 isStreaming 标记后）
+      storageService.saveMessages(sessionId, tail)
+      this.notifyMessagesChanged(sessionId)
+    }
+    this.streamHeads.set(sessionId, [])
+  }
+
+  /** 获取展示用消息列表 (Tail + Head 合并) */
+  getMessagesForDisplay(sessionId: string): Message[] {
+    const tail = this.messages.get(sessionId) || []
+    const head = this.streamHeads.get(sessionId) || []
+    if (head.length === 0) return tail
+    return [...tail, ...head]
+  }
+
   // MARK: - WebSocket
 
   subscribeToAllSessions(): void {
@@ -1125,10 +1174,51 @@ export class SessionStore {
 
       case 'content_delta':
       case 'thinking':
-        // 流式消息处理在 ChatDetailPage 中处理
+        // 流式增量更新 Head 缓冲
+        {
+          const deltaText = typeof msg.text === 'string' ? msg.text as string : ''
+          if (deltaText) {
+            let head = this.streamHeads.get(sessionId)
+            if (!head) {
+              head = []
+            }
+
+            if (messageType === 'content_delta') {
+              if (head.length > 0 && head[head.length - 1].type === 'assistant') {
+                const last = head[head.length - 1]
+                last.content = (last.content || '') + deltaText
+              } else {
+                head.push({
+                  id: 'stream-' + Date.now(),
+                  type: 'assistant',
+                  content: deltaText,
+                  isStreaming: true,
+                  timestamp: new Date().toISOString(),
+                })
+              }
+            } else { // thinking
+              if (head.length > 0 && head[head.length - 1].type === 'thinking') {
+                const last = head[head.length - 1]
+                last.content = (last.content || '') + deltaText
+              } else {
+                head.push({
+                  id: 'thinking-' + Date.now(),
+                  type: 'thinking',
+                  content: deltaText,
+                  isStreaming: true,
+                  timestamp: new Date().toISOString(),
+                })
+              }
+            }
+
+            this.streamHeads.set(sessionId, head)
+          }
+        }
         break
 
       case 'tool_use_complete':
+        // 非流式事件：先将 Head 刷新到 Tail
+        this.flushHeadToTail(sessionId)
         this.updateSessionStatus(sessionId, 'tool_executing')
 
         if (msg.toolName) {
@@ -1180,6 +1270,8 @@ export class SessionStore {
         break
 
       case 'tool_result':
+        // 非流式事件：先将 Head 刷新到 Tail
+        this.flushHeadToTail(sessionId)
         if (msg.toolUseId && msg.content !== undefined && msg.content !== null) {
           this.updateToolResult(sessionId, msg.toolUseId, msg.content, msg.isError === true)
         }
@@ -1189,6 +1281,8 @@ export class SessionStore {
 
       case 'message_complete':
         console.info(`[SessionStore] Message complete for ${sessionId}`)
+        // 最终化：将 Head 刷新到 Tail 并清空 Head
+        this.flushHeadToTail(sessionId)
         this.updateSessionStatus(sessionId, 'completed')
         // 结束实况窗
         liveViewService.showComplete(sessionId)
@@ -1225,6 +1319,8 @@ export class SessionStore {
         break
 
       case 'permission_request':
+        // 非流式事件：先将 Head 刷新到 Tail
+        this.flushHeadToTail(sessionId)
         this.updateSessionStatus(sessionId, 'permission_pending')
 
         // 设置 pendingPermission 状态
@@ -1257,6 +1353,8 @@ export class SessionStore {
 
       case 'question':
       case 'questions':
+        // 非流式事件：先将 Head 刷新到 Tail
+        this.flushHeadToTail(sessionId)
         this.updateSessionStatus(sessionId, 'question_pending')
 
         let questionId: string
