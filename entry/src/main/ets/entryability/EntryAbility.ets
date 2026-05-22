@@ -188,11 +188,15 @@ export default class EntryAbility extends UIAbility {
     // 停止后台任务后清除标志
     this.isBackgroundTaskRunning = false
 
-    // 重连 WebSocket
+    // 重连 WebSocket — 先检查连接是否健康，健康则不重复断开
     if (authStore.serverUrl) {
       wsService.setServerUrl(authStore.serverUrl)
-      wsService.forceReconnectAll()
-      hilog.info(DOMAIN, 'testTag', 'WebSocket reconnected on foreground')
+      if (wsService.isHealthy()) {
+        hilog.info(DOMAIN, 'testTag', 'WS connections healthy, skipping reconnect')
+      } else {
+        wsService.forceReconnectAll()
+        hilog.info(DOMAIN, 'testTag', 'WebSocket reconnected on foreground')
+      }
 
       // 智能连接检查（LAN 优先，Tunnel 回退）
       connectionManager.smartConnect().then((status) => {
@@ -201,15 +205,20 @@ export default class EntryAbility extends UIAbility {
       })
     }
 
-    // 刷新数据
-    try {
-      await sessionStore.fetchSessions()
-      if (sessionStore.currentSessionId) {
-        await sessionStore.loadMessages(sessionStore.currentSessionId)
+    // 刷新数据 — 30 秒内刚拉过则跳过
+    const dataAgeMs = Date.now() - sessionStore.lastFetchedAt
+    if (dataAgeMs < 30_000) {
+      hilog.info(DOMAIN, 'testTag', 'Data fetched %{public}dms ago, skipping refresh', dataAgeMs)
+    } else {
+      try {
+        await sessionStore.fetchSessions()
+        if (sessionStore.currentSessionId) {
+          await sessionStore.loadMessages(sessionStore.currentSessionId)
+        }
+        hilog.info(DOMAIN, 'testTag', 'Data refreshed on foreground')
+      } catch (e) {
+        hilog.error(DOMAIN, 'testTag', 'Data refresh error: %{public}s', JSON.stringify(e))
       }
-      hilog.info(DOMAIN, 'testTag', 'Data refreshed on foreground')
-    } catch (e) {
-      hilog.error(DOMAIN, 'testTag', 'Data refresh error: %{public}s', JSON.stringify(e))
     }
   }
 

@@ -81,6 +81,16 @@ export interface Message {
 
   // 任务列表
   tasks?: TaskItem[]
+
+  // 工具结果中的图片内容（Claude 通过 image_generation 等工具生成的图片）
+  images?: MessageImage[]
+}
+
+// MARK: - 图片内容
+
+export interface MessageImage {
+  data: string
+  mediaType: string
 }
 
 // MARK: - 任务

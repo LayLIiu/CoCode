@@ -54,16 +54,16 @@ export class DownloadService {
       const downloadUrl = apiService.getBaseUrl() + tokenInfo.downloadUrl
       console.info(`[DownloadService] Downloading: ${downloadUrl}`)
 
-      // 使用 expectDataType: Uint8Array 获取二进制数据
+      // 使用 expectDataType: ARRAY_BUFFER 获取二进制数据
       const response = await httpRequest.request(downloadUrl, {
         method: http.RequestMethod.GET,
         connectTimeout: 60000,
         readTimeout: 60000,
-        expectDataType: http.HttpDataType.UINT8_ARRAY,
+        expectDataType: http.HttpDataType.ARRAY_BUFFER,
       })
 
       if (response.responseCode >= 200 && response.responseCode < 300) {
-        const data = response.result as Uint8Array
+        const data = response.result as ArrayBuffer
         // 写入文件
         const file = fileIo.openSync(destPath, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY)
         fileIo.writeSync(file.fd, data)
@@ -72,19 +72,19 @@ export class DownloadService {
         if (onProgress) {
           const p = new DownloadProgress()
           p.percent = 1.0
-          p.bytesWritten = data.length
-          p.totalBytes = data.length
+          p.bytesWritten = data.byteLength
+          p.totalBytes = data.byteLength
           onProgress(p)
         }
 
-        console.info(`[DownloadService] Saved to: ${destPath} (${data.length} bytes)`)
+        console.info(`[DownloadService] Saved to: ${destPath} (${data.byteLength} bytes)`)
         return destPath
       } else {
         throw new Error(`Download failed: ${response.responseCode}`)
       }
     } catch (e) {
       console.error(`[DownloadService] Error: ${e}`)
-      throw e
+      throw new Error(`Download error: ${e}`)
     } finally {
       httpRequest.destroy()
     }

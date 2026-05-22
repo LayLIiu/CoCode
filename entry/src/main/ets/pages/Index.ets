@@ -17,8 +17,6 @@ struct Index {
   @State isLocked: boolean = false
   @State authFailed: boolean = false
   private authTimer: number = -1
-  private subscribeTimer: number = -1
-  private appStateTimer: number = -1
 
   async aboutToAppear(): Promise<void> {
     // 等待 authStore 初始化
@@ -45,14 +43,6 @@ struct Index {
       clearTimeout(this.authTimer)
       this.authTimer = -1
     }
-    if (this.subscribeTimer >= 0) {
-      clearTimeout(this.subscribeTimer)
-      this.subscribeTimer = -1
-    }
-    if (this.appStateTimer >= 0) {
-      clearTimeout(this.appStateTimer)
-      this.appStateTimer = -1
-    }
   }
 
   private authenticate(): void {
@@ -63,28 +53,24 @@ struct Index {
   }
 
   private initData(): void {
-    // 获取会话列表
+    // 并发执行所有初始化任务，无需延迟等待
     sessionStore.fetchSessions().then(() => {
       console.info('[Index] Sessions loaded')
     }).catch((e: Error) => {
       console.error(`[Index] Load sessions error: ${e.message}`)
     })
 
-    // 延迟订阅 WebSocket
-    this.subscribeTimer = setTimeout(() => {
-      try {
-        sessionStore.subscribeToAllSessions()
-      } catch (e) {
-        console.error(`[Index] Subscribe error: ${e}`)
-      }
-    }, 300)
+    // 立即订阅 WebSocket
+    try {
+      sessionStore.subscribeToAllSessions()
+    } catch (e) {
+      console.error(`[Index] Subscribe error: ${e}`)
+    }
 
-    // 延迟初始化应用状态
-    this.appStateTimer = setTimeout(() => {
-      appState.initialize().catch((e: Error) => {
-        console.error(`[Index] Init app state error: ${e.message}`)
-      })
-    }, 500)
+    // 立即初始化应用状态
+    appState.initialize().catch((e: Error) => {
+      console.error(`[Index] Init app state error: ${e.message}`)
+    })
   }
 
   build() {

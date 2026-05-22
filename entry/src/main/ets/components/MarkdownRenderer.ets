@@ -6,6 +6,7 @@
 import { Theme } from '../common/Theme'
 import pasteboard from '@ohos.pasteboard'
 import { fileService } from '../services/FileService'
+import { common } from '@kit.AbilityKit'
 
 // ── 辅助类型 ──
 
@@ -111,6 +112,7 @@ export struct MarkdownRenderer {
   @Prop @Watch('onContentChange') content: string = ''
   @State private nodes: MDNode[] = []
   @State private expandedCodeIdx: number = -1
+  onLinkClick?: (url: string) => void
 
   aboutToAppear(): void { this.nodes = this.parseMarkdown(this.content) }
   onContentChange(): void { this.nodes = this.parseMarkdown(this.content) }
@@ -592,9 +594,45 @@ export struct MarkdownRenderer {
 
   // ── 段落 ──
 
+  // 检查段落中是否有需要特殊处理的片段（链接、图片）
+  private hasSpecialFragment(fragments: InlineFragment[]): boolean {
+    for (let i = 0; i < fragments.length; i++) {
+      if (fragments[i].type === InlineFragmentType.LINK || fragments[i].type === InlineFragmentType.IMG) {
+        return true
+      }
+    }
+    return false
+  }
+
+  // 打开链接（通过回调或系统浏览器）
+  private openLink(url: string): void {
+    try {
+      if (this.onLinkClick) {
+        this.onLinkClick(url)
+      } else {
+        // 默认：通过系统 Intent 打开
+        let context = getContext(this) as common.UIAbilityContext
+        context.startAbility({
+          action: 'ohos.want.action.viewData',
+          uri: url,
+          type: 'text/html'
+        }).catch((err: Error) => {
+          console.error('[Markdown] Open link error:', err.message)
+        })
+      }
+    } catch (e) {
+      console.error('[Markdown] Open link error:', e)
+    }
+  }
+
   @Builder
   ParagraphView(node: MDNode) {
-    if (node.fragments.length === 0) { Text('') } else {
+    if (node.fragments.length === 0) { Text('') } else if (this.hasSpecialFragment(node.fragments)) {
+      Column() {
+        this.ClickableParagraph(node.fragments)
+      }
+      .width('100%')
+    } else {
       Text() {
         ForEach(node.fragments, (frag: InlineFragment, fi: number) => {
           this.renderInlineFragment(frag)
@@ -602,6 +640,34 @@ export struct MarkdownRenderer {
       }
       .lineHeight(20).width('100%')
     }
+  }
+
+  @Builder
+  ClickableParagraph(fragments: InlineFragment[]) {
+    Text() {
+      ForEach(fragments, (frag: InlineFragment, fi: number) => {
+        if (frag.type === InlineFragmentType.LINK) {
+          Span(frag.content).fontSize(15).fontColor(Theme.AccentBlue)
+            .decoration({ type: TextDecorationType.Underline })
+        } else if (frag.type === InlineFragmentType.IMG) {
+          Span('[图片]').fontSize(13).fontColor(Theme.TextTertiary)
+        } else {
+          this.renderInlineFragment(frag)
+        }
+      }, (frag: InlineFragment, fi: number) => `frag-${fi}`)
+    }
+    .lineHeight(20)
+    .width('100%')
+    .onClick((event: ClickEvent) => {
+      // 点击段落时检测是否点到链接
+      // 由于无法精确检测哪个 Span 被点击，遍历所有 LINK 片段
+      for (let i = 0; i < fragments.length; i++) {
+        if (fragments[i].type === InlineFragmentType.LINK) {
+          this.openLink(fragments[i].url)
+          break // 打开第一个链接
+        }
+      }
+    })
   }
 
   @Builder

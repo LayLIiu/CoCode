@@ -8,7 +8,7 @@ import { UrlUtils } from '../common/UrlUtils'
 import {
   Session, Message, Provider, NetworkInfo, ModelInfo, TaskItem,
   RecentProject, EffortResponse, ProviderInput, ProviderTestOverrides,
-  ProviderTestResultResponse, ProviderResponse, TunnelResponse, RecentProjectsResponse
+  ProviderTestResultResponse, ProviderResponse, TunnelResponse, RecentProjectsResponse, MessageImage
 } from '../models/Models'
 
 // 请求体类型定义
@@ -115,6 +115,7 @@ export class ContentBlock {
   text: string = ''
   name: string = ''
   input: Record<string, Object> = {}
+  source?: Record<string, Object>
 }
 
 export class RawMessage {
@@ -331,16 +332,17 @@ export class APIService {
     }
   }
 
-  /**
-    return this.baseUrl
-  }
-
   // MARK: - 会话 API
 
-  async getSessions(providerId?: string): Promise<Session[]> {
+  async getSessions(providerId?: string, limit?: number): Promise<Session[]> {
     let path = '/api/sessions'
+    let sep = '?'
     if (providerId) {
       path += '?providerId=' + providerId
+      sep = '&'
+    }
+    if (limit !== undefined && limit > 0) {
+      path += sep + 'limit=' + limit
     }
     const response = await this.request<SessionsResponse>(path, 'GET', '')
     return response.sessions
@@ -373,8 +375,12 @@ export class APIService {
     await this.request<Object>('/api/sessions/' + sessionId, 'PATCH', JSON.stringify(req))
   }
 
-  async getMessages(sessionId: string): Promise<Message[]> {
-    const response = await this.request<MessagesResponse>('/api/sessions/' + sessionId + '/messages', 'GET', '')
+  async getMessages(sessionId: string, limit?: number): Promise<Message[]> {
+    let path = '/api/sessions/' + sessionId + '/messages'
+    if (limit !== undefined && limit > 0) {
+      path += '?limit=' + limit
+    }
+    const response = await this.request<MessagesResponse>(path, 'GET', '')
     return this.transformMessages(response.messages)
   }
 
@@ -929,15 +935,26 @@ export class APIService {
       // tool_result 消息
       if (msg.type === 'tool_result') {
         let resultContent = ''
+        const extractedImages: MessageImage[] = []
         if (msg.content) {
           if (typeof msg.content === 'string') {
             resultContent = msg.content as string
           } else if (Array.isArray(msg.content)) {
-            const arr = msg.content as ContentBlock[]
+            const blocks = msg.content as ContentBlock[]
             const texts: string[] = []
-            for (let i = 0; i < arr.length; i++) {
-              if (arr[i].text) {
-                texts.push(arr[i].text)
+            for (let i = 0; i < blocks.length; i++) {
+              const block = blocks[i]
+              if (block.type === 'text' && block.text) {
+                texts.push(block.text)
+              } else if (block.type === 'image' && block.source) {
+                const source = block.source
+                if (source['data'] && source['media_type']) {
+                  const img: MessageImage = {
+                    data: String(source['data']),
+                    mediaType: String(source['media_type'])
+                  }
+                  extractedImages.push(img)
+                }
               }
             }
             resultContent = texts.join('')
@@ -951,7 +968,8 @@ export class APIService {
             content: '',
             timestamp: timestamp,
             toolResult: resultContent,
-            toolStatus: msg.isError ? 'failed' : 'completed'
+            toolStatus: msg.isError ? 'failed' : 'completed',
+            images: extractedImages.length > 0 ? extractedImages : undefined
           }
           result.push(resultMsg)
         }
@@ -986,6 +1004,9 @@ export class APIService {
           if (messages[j].type === 'tool_use' && !messages[j].toolResult) {
             messages[j].toolResult = messages[i].toolResult
             messages[j].toolStatus = messages[i].toolStatus
+            if (messages[i].images && messages[i].images!.length > 0) {
+              messages[j].images = messages[i].images
+            }
             break
           }
         }

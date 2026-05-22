@@ -24,7 +24,7 @@ export enum ConnectionState {
 // Pong 超时检测常量
 const PING_INTERVAL_MS = 25000    // 每 25s 发一次 ping
 const PONG_TIMEOUT_MS = 15000     // 发 ping 后 15s 无 pong 视为断连
-const MAX_PONG_MISSED = 2         // 连续 2 次超时才触发重连（容忍偶尔丢包）
+const MAX_PONG_MISSED = 4         // 连续 4 次超时才触发重连（云中继容忍丢包 + 抖动）
 
 export class WSSessionConnection {
   ws: webSocket.WebSocket | null = null
@@ -118,6 +118,20 @@ export class WebSocketService {
   /** 检查是否已有直接 WebSocket 连接到指定会话（用于避免全局广播重复处理） */
   isSubscribed(sessionId: string): boolean {
     return this.subscribedSessions.has(sessionId)
+  }
+
+  /** 检查连接是否健康（至少有一个会话 WS 在连接中，用于 onForeground 避免全量重连） */
+  isHealthy(): boolean {
+    // 检查会话级连接
+    let anyConnected = false
+    this.connections.forEach((conn) => {
+      if (conn.status === 'connected') {
+        anyConnected = true
+      }
+    })
+    if (anyConnected) return true
+    // 检查全局连接
+    return this.globalConn !== null && this.globalConn.status === 'connected'
   }
 
   // MARK: - 连接状态监听
@@ -326,14 +340,21 @@ export class WebSocketService {
     return (isSecure ? 'wss://' : 'ws://') + hostPart + pathSuffix
   }
 
+  private globalConnecting: boolean = false
+
   connectGlobal(): void {
     if (!this.serverUrl) {
       console.error('[WS-Global] serverUrl is empty')
       return
     }
 
-    if (this.globalConn && this.globalConn.status === 'connected' && this.globalConn.ws) {
-      console.info('[WS-Global] Already connected')
+    if (this.globalConn && (this.globalConn.status === 'connected' || this.globalConn.status === 'connecting') && this.globalConn.ws) {
+      console.info('[WS-Global] Already connected or connecting, skipping')
+      return
+    }
+
+    if (this.globalConnecting) {
+      console.info('[WS-Global] Connection already in progress, skipping')
       return
     }
 
@@ -353,8 +374,10 @@ export class WebSocketService {
     }
 
     this.globalConn = conn
+    this.globalConnecting = true
 
     ws.connect(wsUrl, (err, value) => {
+      this.globalConnecting = false
       if (err) {
         console.error(`[WS-Global] Connect failed: ${err.message}`)
         this.handleGlobalDisconnect()
@@ -371,6 +394,7 @@ export class WebSocketService {
 
     ws.on('close', (err, value) => {
       console.info('[WS-Global] Connection closed')
+      this.globalConnecting = false
       if (this.globalConn && this.globalConn.ws === ws) {
         this.handleGlobalDisconnect()
       }
@@ -378,6 +402,7 @@ export class WebSocketService {
 
     ws.on('error', (err) => {
       console.error(`[WS-Global] Error: ${err.message}`)
+      this.globalConnecting = false
       if (this.globalConn && this.globalConn.ws === ws) {
         this.globalConn.status = 'error'
         this.scheduleGlobalReconnect()
@@ -386,6 +411,7 @@ export class WebSocketService {
   }
 
   disconnectGlobal(): void {
+    this.globalConnecting = false
     if (this.globalConn && this.globalConn.ws) {
       this.globalConn.ws.close((err) => {
         if (err) {
@@ -743,8 +769,10 @@ export class WebSocketService {
 
     conn.reconnectAttempts++
     this.notifyConnectionState(sessionId, ConnectionState.RECONNECTING)
-    // 无限重连，退避上限 30 秒
-    const delay = Math.min(1000 * Math.pow(2, conn.reconnectAttempts), 30000)
+    // 无限重连，退避上限 30 秒，附加 ±20% 随机抖动防雷雨
+    const baseDelay = Math.min(1000 * Math.pow(2, conn.reconnectAttempts), 30000)
+    const jitter = baseDelay * (0.8 + Math.random() * 0.4) // 0.8x ~ 1.2x
+    const delay = Math.round(jitter)
 
     console.info(`[WS] Reconnecting to ${sessionId} in ${delay}ms (attempt ${conn.reconnectAttempts})`)
 

@@ -4,7 +4,7 @@
  */
 
 import { Theme } from '../common/Theme'
-import { Message, Session, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus, AttachmentRef, QuestionOption, QuestionItem, PermissionMode, PendingPermission, getPermissionModeDisplayName, getPermissionModeDescription } from '../models/Models'
+import { Message, Session, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus, AttachmentRef, QuestionOption, QuestionItem, PermissionMode, PendingPermission, getPermissionModeDisplayName, getPermissionModeDescription, MessageImage } from '../models/Models'
 import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial, HdsTabs, hdsEffect } from '@kit.UIDesignKit'
 import { curves, RectShape } from '@kit.ArkUI'
@@ -20,6 +20,7 @@ import { FileAttachmentBubble } from '../components/FileAttachmentBubble'
 import { ImagePreviewDialog } from '../components/ImagePreviewDialog'
 import { toastManager } from '../services/ToastManager'
 import { fileService, FileInfo } from '../services/FileService'
+import { downloadService } from '../services/DownloadService'
 import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
 
 import { StatusIcon, WorkStatus } from '../components/StatusIcon'
@@ -1899,9 +1900,10 @@ struct ChatDetailPage {
     return session?.aiTool || ''
   }
 
-  // 获取可见消息（分页），过滤掉 Agent 子工具（由 AgentToolUseBubble 嵌套渲染）
+  // 获取可见消息（分页 + 展示层内容去重），过滤掉 Agent 子工具（由 AgentToolUseBubble 嵌套渲染）
   private getVisibleMessages(): Message[] {
-    const allMessages = this.messages
+    // 用 getDedupedMessages 作为展示层安全网，过滤内容重复的消息
+    const allMessages = sessionStore.getDedupedMessages(this.sessionId)
     // 过滤：排除有 parentToolUseId 的子工具，它们在 Agent 卡片内嵌套渲染
     const filtered = allMessages.filter(m => !(m.type === 'tool_use' && m.parentToolUseId))
     if (filtered.length <= this.displayedMessageCount) {
@@ -2135,7 +2137,7 @@ struct ChatDetailPage {
       if (this.shouldHideContent(message.content)) {
         // 隐藏工具调用 JSON
       } else {
-        MarkdownRenderer({ content: message.content })
+        MarkdownRenderer({ content: message.content, onLinkClick: (url: string) => { this.openExternalLink(url) } })
       }
 
       if (this.activeCopyMessageId === message.id) {
@@ -2199,7 +2201,7 @@ struct ChatDetailPage {
   StreamingTextBubble() {
     Row() {
       Column() {
-        MarkdownRenderer({ content: this.streamingText })
+        MarkdownRenderer({ content: this.streamingText, onLinkClick: (url: string) => { this.openExternalLink(url) } })
       }
       .width('100%')
       .padding({ left: 14, right: 14, top: 10, bottom: 10 })
@@ -2475,7 +2477,8 @@ struct ChatDetailPage {
                 .fontColor(Theme.TextSecondary)
 
               MarkdownRenderer({ content: message.toolResult.length > 2000 ?
-                message.toolResult.substring(0, 2000) + '...' : message.toolResult })
+                message.toolResult.substring(0, 2000) + '...' : message.toolResult,
+                onLinkClick: (url: string) => { this.openExternalLink(url) } })
             }
             .width('100%')
             .alignItems(HorizontalAlign.Start)
@@ -2483,7 +2486,7 @@ struct ChatDetailPage {
 
           // 文件附件预览（Write/Edit 工具）
           if (message.toolStatus === 'completed') {
-            if (message.toolName === 'Write' || message.toolName === 'Edit') {
+            if (message.toolInput && message.toolInput['file_path']) {
               Column({ space: 4 }) {
                 Text('FILE')
                   .fontSize(9)
@@ -2491,7 +2494,7 @@ struct ChatDetailPage {
                   .fontColor(Theme.TextSecondary)
 
                 FileAttachmentBubble({
-                  filePath: (message.toolInput ? message.toolInput['file_path'] : '') as string,
+                  filePath: message.toolInput['file_path'] as string,
                   onImageTap: (src: string, alt: string, name: string) => {
                     this.openFilePreview(src, alt, name)
                   }
@@ -3012,6 +3015,62 @@ struct ChatDetailPage {
     this.showFilePreview = true
   }
 
+  // 从 toolResult 文本中检测文件路径
+  private detectFilePath(toolResult: string): string | null {
+    if (!toolResult) return null
+    const trimmed = toolResult.trim()
+    // 文件协议路径
+    if (trimmed.startsWith('file://')) return trimmed
+    // 绝对路径（如 /Users/xxx/project/file.txt）
+    if (trimmed.startsWith('/') && trimmed.length < 300 && !trimmed.includes('\n')) return trimmed
+    // 相对路径（如 ./output/file.txt）
+    if (trimmed.startsWith('./') && trimmed.length < 300 && !trimmed.includes('\n')) return trimmed
+    return null
+  }
+
+  // @Builder 辅助方法：判断是否展示文件附件（替代本地变量声明，ArkTS @Builder 限制）
+  private shouldShowFileAttachment(message: Message): boolean {
+    return message.toolStatus === 'completed' && (this.getFileAttachmentPath(message).length > 0)
+  }
+
+  // @Builder 辅助方法：从消息中提取文件附件路径
+  private getFileAttachmentPath(message: Message): string {
+    if (message.toolInput && message.toolInput['file_path']) {
+      return message.toolInput['file_path'] as string
+    }
+    const detected = this.detectFilePath(message.toolResult || '')
+    return detected !== null ? detected : ''
+  }
+
+  // 打开外部链接（系统浏览器）
+  private openExternalLink(url: string): void {
+    try {
+      let context = getContext(this) as common.UIAbilityContext
+      context.startAbility({
+        action: 'ohos.want.action.viewData',
+        uri: url,
+        type: 'text/html'
+      }).catch((err: Error) => {
+        console.error('[ChatDetail] Open link error:', err.message)
+        toastManager.error('无法打开链接')
+      })
+    } catch (e) {
+      console.error('[ChatDetail] Open link error:', e)
+    }
+  }
+
+  // 保存图片到相册（用于 ToolResultBubble 的保存按钮）
+  private async saveImageToGallery(dataUri: string, baseName: string): Promise<void> {
+    try {
+      toastManager.info('正在保存图片...')
+      await downloadService.downloadImage(dataUri, baseName + '.png')
+      toastManager.success('已保存到相册')
+    } catch (e) {
+      console.error('[ChatDetail] Save image error:', e)
+      toastManager.error('保存失败')
+    }
+  }
+
 
   // 工具结果气泡（独立显示，与 iOS toolResultBubble 一致）
   @Builder
@@ -3041,8 +3100,51 @@ struct ChatDetailPage {
       }
       .width('100%')
 
+      // 渲染 Claude 生成的图片（来自 tool_result content blocks）
+      if (message.images && message.images.length > 0) {
+        ForEach(message.images, (img: MessageImage, idx: number) => {
+          Column({ space: 6 }) {
+            Image('data:' + img.mediaType + ';base64,' + img.data)
+              .width('100%')
+              .constraintSize({ maxHeight: 300 })
+              .objectFit(ImageFit.Contain)
+              .borderRadius(8)
+              .onClick(() => {
+                this.openFilePreview('data:' + img.mediaType + ';base64,' + img.data,
+                  'Claude 图片', 'claude_image_' + idx + '.png')
+              })
+
+            // 保存按钮
+            Row({ space: 4 }) {
+              Text('↓')
+                .fontSize(16)
+                .fontColor(Theme.AccentBlue)
+              Text('保存到相册')
+                .fontSize(12)
+                .fontColor(Theme.AccentBlue)
+            }
+            .padding({ top: 4, bottom: 4, left: 12, right: 12 })
+            .onClick(() => {
+              this.saveImageToGallery('data:' + img.mediaType + ';base64,' + img.data, 'claude_image_' + idx)
+            })
+          }
+          .width('100%')
+          .margin({ top: 8 })
+        })
+      }
+
+      // 检测 toolResult 中的文件路径，优先展示文件卡片
+      if (this.shouldShowFileAttachment(message)) {
+        FileAttachmentBubble({
+          filePath: this.getFileAttachmentPath(message),
+          onImageTap: (src: string, alt: string, name: string) => {
+            this.openFilePreview(src, alt, name)
+          }
+        })
+      }
+
       if (message.toolResult) {
-        MarkdownRenderer({ content: message.toolResult })
+        MarkdownRenderer({ content: message.toolResult, onLinkClick: (url: string) => { this.openExternalLink(url) } })
       }
     }
     .width('100%')

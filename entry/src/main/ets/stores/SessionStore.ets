@@ -3,7 +3,7 @@
  * 支持状态持久化和 WebSocket 实时更新
  */
 
-import { Session, Message, SessionStatus, TaskItem, PermissionMode, WSMessage, OutgoingMessage, RecentProject, AttachmentRef, PendingPermission } from '../models/Models'
+import { Session, Message, SessionStatus, TaskItem, PermissionMode, WSMessage, OutgoingMessage, RecentProject, AttachmentRef, PendingPermission, MessageImage } from '../models/Models'
 import { apiService } from '../services/APIService'
 import { wsService } from '../services/WebSocketService'
 import { storageService } from '../services/StorageService'
@@ -55,6 +55,11 @@ export class SessionStore {
   // 本地删除的会话ID集合（不从服务器重新加载）
   private locallyDeletedSessionIds: Set<string> = new Set()
   private isLocalDataLoaded: boolean = false
+  private localDataLoadedResolve: (() => void) | null = null
+  private localDataLoadedPromise: Promise<void>
+
+  // 数据最后拉取时间（用于 onForeground 防重复拉取）
+  lastFetchedAt: number = 0
 
   // 状态变更回调（多监听者列表）
   private sessionsChangedListeners: Array<() => void> = []
@@ -64,6 +69,16 @@ export class SessionStore {
 
   // completed→idle 定时器追踪
   private completedTimers: Map<string, number> = new Map()
+
+  // 消息去重缓存（防止全局 WS + 会话 WS 双通道重复传递）
+  private recentMessageIds: Set<string> = new Set()
+  private static readonly DEDUP_CACHE_TTL_MS = 30000 // 30 秒去重窗口（云中继延迟较高）
+
+  // 定期状态同步定时器（每 15 秒检查一次过期的工作状态）
+  private staleStatusTimer: number = -1
+
+  // 定期重复消息清理定时器（每 60 秒兜底清一次）
+  private dedupCleanupTimer: number = -1
 
   // MARK: - 监听者注册
 
@@ -100,6 +115,11 @@ export class SessionStore {
   }
 
   constructor() {
+    // 初始化本地数据加载 Promise（移除 5s while 循环）
+    this.localDataLoadedPromise = new Promise<void>((resolve) => {
+      this.localDataLoadedResolve = resolve
+    })
+
     // 设置 WebSocket 消息处理器
     wsService.setMessageHandler((sessionId, message) => {
       this.handleWSMessage(sessionId, message)
@@ -112,6 +132,16 @@ export class SessionStore {
 
     // 加载本地缓存的会话数据
     this.loadLocalData()
+
+    // 定期检查过期的工作状态（每 15 秒），防止 WS 断开后状态卡住
+    this.staleStatusTimer = setInterval(() => {
+      this.syncSessionStatuses()
+    }, 15000)
+
+    // 定期清理残留的重复消息（每 60 秒），兜底防线
+    this.dedupCleanupTimer = setInterval(() => {
+      this.cleanupDuplicateMessages()
+    }, 60000)
   }
 
   // MARK: - 本地数据加载
@@ -140,12 +170,18 @@ export class SessionStore {
         // 过滤掉本地已删除的会话（防止本地存储写入失败导致旧数据残留）
         this.sessions = this.sessions.filter(s => !this.locallyDeletedSessionIds.has(s.id))
 
-        // 预加载所有会话的本地消息
-        for (let i = 0; i < localSessions.length; i++) {
-          const session = localSessions[i]
-          const localMessages = await storageService.loadMessages(session.id)
-          if (localMessages.length > 0) {
-            this.messages.set(session.id, localMessages)
+        // 并发加载所有会话的本地消息（每批 5 个，避免一次性过多）
+        const batchSize = 5
+        for (let i = 0; i < localSessions.length; i += batchSize) {
+          const batch = localSessions.slice(i, i + batchSize)
+          const results = await Promise.all(
+            batch.map(session => storageService.loadMessages(session.id))
+          )
+          for (let j = 0; j < batch.length; j++) {
+            const messages = results[j]
+            if (messages && messages.length > 0) {
+              this.messages.set(batch[j].id, messages)
+            }
           }
         }
 
@@ -165,29 +201,33 @@ export class SessionStore {
       }
 
       this.isLocalDataLoaded = true
+      // 通知 fetchSessions 可以继续了（替代 5s while 循环）
+      if (this.localDataLoadedResolve) {
+        this.localDataLoadedResolve()
+        this.localDataLoadedResolve = null
+      }
     } catch (e) {
       console.error(`[SessionStore] Load local data error: ${e}`)
       this.isLocalDataLoaded = true
+      if (this.localDataLoadedResolve) {
+        this.localDataLoadedResolve()
+        this.localDataLoadedResolve = null
+      }
     }
   }
 
   // MARK: - 会话操作
 
   async fetchSessions(): Promise<void> {
-    // 等待本地数据加载完成，最多等待 5 秒
-    let waitCount = 0
-    const maxWait = 100 // 50ms * 100 = 5s
-    while (!this.isLocalDataLoaded && waitCount < maxWait) {
-      await new Promise<void>(resolve => setTimeout(resolve, 50))
-      waitCount++
-    }
+    // 等待本地数据加载（用 Promise 替代 5s while 循环）
+    await this.localDataLoadedPromise
 
     this.isLoading = true
     this.error = null
     this.notifySessionsChanged()
 
     try {
-      const serverSessions = await apiService.getSessions()
+      const serverSessions = await apiService.getSessions(undefined, 50)
 
       // 过滤掉本地已删除的会话
       const filteredServerSessions = serverSessions.filter(s => !this.locallyDeletedSessionIds.has(s.id))
@@ -225,6 +265,7 @@ export class SessionStore {
       await storageService.saveSessions(this.sessions)
 
       this.isLoading = false
+      this.lastFetchedAt = Date.now()
       this.notifySessionsChanged()
 
       // 更新 WebSocket 订阅
@@ -687,7 +728,7 @@ export class SessionStore {
   // 后台同步服务器消息
   private async syncMessagesFromServer(sessionId: string): Promise<void> {
     try {
-      const serverMessages = await apiService.getMessages(sessionId)
+      const serverMessages = await apiService.getMessages(sessionId, 200)
 
       // 重新获取当前本地消息（可能已被 WebSocket 更新），避免覆盖实时消息
       const currentLocal = this.messages.get(sessionId) || []
@@ -697,8 +738,12 @@ export class SessionStore {
       const afterMerge = this.messages.get(sessionId) || []
       if (afterMerge.length > currentLocal.length) {
         for (let i = currentLocal.length; i < afterMerge.length; i++) {
-          if (!merged.some(m => m.id === afterMerge[i].id)) {
-            merged.push(afterMerge[i])
+          const newMsg = afterMerge[i]
+          // ID 去重 + 内容去重，防止 WS 流式消息与服务器消息 ID 不同导致的重复
+          const existsById = merged.some(m => m.id === newMsg.id)
+          const existsByContent = merged.some(m => m.type === newMsg.type && m.content === newMsg.content)
+          if (!existsById && !existsByContent) {
+            merged.push(newMsg)
           }
         }
         merged.sort((a, b) =>
@@ -778,8 +823,8 @@ export class SessionStore {
         for (let j = 0; j < serverMessages.length; j++) {
           const sm = serverMessages[j]
           if (sm.type === msg.type) {
-            const localContent = (msg.content || msg.toolResult || '').substring(0, 200)
-            const serverContent = (sm.content || sm.toolResult || '').substring(0, 200)
+            const localContent = (msg.content || msg.toolResult || '').substring(0, 2000)
+            const serverContent = (sm.content || sm.toolResult || '').substring(0, 2000)
             if (localContent.length > 10 && localContent === serverContent) {
               foundByContent = true
               break
@@ -817,16 +862,17 @@ export class SessionStore {
 
   // 生成消息内容去重键
   private messageContentKey(msg: Message): string {
-    // 优先使用 toolUseId 或 msg.id（排除本地生成的临时 id）
+    // 优先使用 toolUseId 或服务器下发的稳定 id
     if (msg.toolUseId) {
       return 'toolUseId:' + msg.toolUseId
     }
-    if (msg.id && !msg.id.startsWith('user-') && !msg.id.startsWith('err-') && !msg.id.startsWith('sys-')) {
+    if (msg.id && !msg.id.startsWith('user-') && !msg.id.startsWith('err-') && !msg.id.startsWith('sys-')
+        && !msg.id.startsWith('assistant-') && !msg.id.startsWith('stream-')) {
       return 'id:' + msg.id
     }
     // fallback：按类型 + 内容去重（不含时间戳，避免本地和服务器时间戳不一致导致重复）
     const content = (msg.content || '') || (msg.toolResult || '')
-    return msg.type + ':' + content.substring(0, 300)
+    return msg.type + ':' + content.substring(0, 2000)
   }
 
   addMessage(sessionId: string, message: Message): void {
@@ -835,12 +881,23 @@ export class SessionStore {
       sessionMessages = []
     }
 
-    // 去重
+    // 去重：先按 ID，再按内容
     let exists = false
     for (let i = 0; i < sessionMessages.length; i++) {
       if (sessionMessages[i].id === message.id) {
         exists = true
         break
+      }
+    }
+    if (!exists) {
+      // 内容级去重：防止 ID 不同但内容相同的消息重复
+      // （例如 flushStreamingBuffers 和 flushHeadToTail 可能添加同一内容的两个消息）
+      const newKey = this.messageContentKey(message)
+      for (let i = 0; i < sessionMessages.length; i++) {
+        if (this.messageContentKey(sessionMessages[i]) === newKey) {
+          exists = true
+          break
+        }
       }
     }
 
@@ -869,10 +926,15 @@ export class SessionStore {
       // Head 中的消息已不再流式
       headMsg.isStreaming = false
 
-      // 去重检查
+      // 去重检查：先按 ID 匹配，再按 type+内容匹配（防止 WS 流式消息和服务器消息 ID 不同导致的重复）
       let exists = false
-      for (let j = tail.length - 1; j >= 0 && j >= tail.length - 5; j--) {
+      for (let j = tail.length - 1; j >= 0; j--) {
         if (tail[j].id === headMsg.id) {
+          exists = true
+          break
+        }
+        // 同类型 + 同内容也视为重复（WS 流式 ID 和服务器 ID 不同）
+        if (tail[j].type === headMsg.type && tail[j].content === headMsg.content) {
           exists = true
           break
         }
@@ -898,6 +960,52 @@ export class SessionStore {
     const head = this.streamHeads.get(sessionId) || []
     if (head.length === 0) return tail
     return [...tail, ...head]
+  }
+
+  /**
+   * 获取去重后的消息列表（展示层安全网）
+   * 用 messageContentKey 过滤掉 ID 不同但内容完全相同的重复消息。
+   * 不修改原始数组，仅用于 UI 渲染。
+   */
+  getDedupedMessages(sessionId: string): Message[] {
+    const tail = this.messages.get(sessionId) || []
+    const result: Message[] = []
+    const seen = new Set<string>()
+    for (let i = 0; i < tail.length; i++) {
+      const key = this.messageContentKey(tail[i])
+      if (seen.has(key)) continue
+      seen.add(key)
+      result.push(tail[i])
+    }
+    return result
+  }
+
+  /**
+   * 全量扫描并清理所有会话中的残留重复消息
+   * 每 60 秒执行一次，作为最后的兜底防线
+   */
+  private cleanupDuplicateMessages(): void {
+    for (const [sessionId, msgs] of this.messages) {
+      if (!msgs || msgs.length < 2) continue
+      const cleaned: Message[] = []
+      const seen = new Set<string>()
+      let changed = false
+      for (let i = 0; i < msgs.length; i++) {
+        const key = this.messageContentKey(msgs[i])
+        if (seen.has(key)) {
+          changed = true
+          continue
+        }
+        seen.add(key)
+        cleaned.push(msgs[i])
+      }
+      if (changed) {
+        console.info(`[SessionStore] Cleaned ${msgs.length - cleaned.length} duplicate(s) for ${sessionId}`)
+        this.messages.set(sessionId, cleaned)
+        storageService.saveMessages(sessionId, cleaned)
+        this.notifyMessagesChanged(sessionId)
+      }
+    }
   }
 
   // MARK: - WebSocket
@@ -1065,11 +1173,6 @@ export class SessionStore {
   private handleWSMessage(sessionId: string, msg: WSMessage): void {
     console.info(`[SessionStore] WS msg: ${msg.type} for ${sessionId}`)
 
-    // 转发原始消息给 ChatDetailPage（用于流式缓冲等本地处理）
-    for (const listener of this.rawMessageListeners) {
-      listener(sessionId, msg)
-    }
-
     // 忽略 connected 消息
     if (msg.type === 'connected') {
       return
@@ -1082,6 +1185,28 @@ export class SessionStore {
     }
 
     if (!messageType) return
+
+    // ⚠️ 去重检查必须在 rawMessageListener 之前！
+    // 防止 WS 消息经会话 WS + 全局广播双通道到达时，ChatDetailPage 被触发两次，
+    // 导致 streamingText 重复积累（内容翻倍）或 flushStreamingBuffers 二次插入。
+    // 优先用 msg.id（最可靠），没有 ID 时降级到 type+content 摘要
+    const dedupKey = msg.id
+      ? sessionId + ':' + msg.id + ':' + msg.type
+      : sessionId + ':no-id:' + msg.type + ':' + (typeof msg.text === 'string' ? msg.text.substring(0, 100) : '')
+    if (this.recentMessageIds.has(dedupKey)) {
+      console.info(`[SessionStore] Dedup: skipping duplicate msg ${msg.id || '(no-id)'} (${msg.type})`)
+      return
+    }
+    this.recentMessageIds.add(dedupKey)
+    // 延迟清理去重缓存
+    setTimeout(() => {
+      this.recentMessageIds.delete(dedupKey)
+    }, SessionStore.DEDUP_CACHE_TTL_MS)
+
+    // 转发原始消息给 ChatDetailPage（用于流式缓冲等本地处理）
+    for (const listener of this.rawMessageListeners) {
+      listener(sessionId, msg)
+    }
 
     // 独立处理 tasks：无论消息类型是什么，只要带有 tasks 数组就更新任务列表
     // （桌面端可能将 tasks 合并在 status 或其他消息中一起发送）
@@ -1300,21 +1425,36 @@ export class SessionStore {
         }
         // 消息完成时重新提取任务列表，刷新完成进度
         this.refreshTasksFromMessages(sessionId)
-        // 后台通知 - 从最后一条 AI 消息获取内容
+        // 后台通知 - 检测文件/图片生成，从最后一条 AI 消息获取内容
         {
           const messages = this.messages.get(sessionId)
           let lastContent = ''
+          let hasFile = false
+          let hasImage = false
           if (messages && messages.length > 0) {
-            // 从后往前找最后一条 assistant 消息
+            // 从后往前找最后一条 assistant 或 tool_use 消息
             for (let i = messages.length - 1; i >= 0; i--) {
-              if (messages[i].type === 'assistant') {
-                lastContent = messages[i].content || ''
+              const m = messages[i]
+              if (m.type === 'assistant') {
+                lastContent = m.content || ''
                 break
+              }
+              if (m.type === 'tool_use' && m.toolStatus === 'completed') {
+                if (m.images && m.images.length > 0) {
+                  hasImage = true
+                }
+                if (m.toolInput && m.toolInput['file_path']) {
+                  hasFile = true
+                }
               }
             }
           }
-          const notifyContent = lastContent || '已完成回复'
-          this.notifyIfBackground(sessionId, 'AI 回复完成', notifyContent)
+          let notifyTitle = 'AI 回复完成'
+          if (hasImage && hasFile) notifyTitle = 'AI 生成了图片和文件'
+          else if (hasImage) notifyTitle = 'AI 生成了图片'
+          else if (hasFile) notifyTitle = 'AI 生成了文件'
+          const notifyContent = lastContent || notifyTitle
+          this.notifyIfBackground(sessionId, notifyTitle, notifyContent)
         }
         break
 
@@ -1425,18 +1565,22 @@ export class SessionStore {
             }
           }
 
-          // 去重：检查是否已有相同内容的用户消息（sendMessage 已添加本地消息）
+          // 去重：先按 msg.id 匹配，再按内容匹配（不论 msg.id 是否存在）
           const existingMessages = this.messages.get(sessionId)
           let isDuplicate = false
           if (existingMessages) {
             for (let i = existingMessages.length - 1; i >= 0; i--) {
               const m = existingMessages[i]
+              // 按 ID 精确去重（如果 msg.id 存在）
+              if (msg.id && m.id === msg.id) {
+                isDuplicate = true
+                break
+              }
+              // 按内容去重：同类型 + 同内容（不限 msg.id 是否存在）
               if (m.type === 'user' && m.content === contentString) {
                 isDuplicate = true
                 break
               }
-              // 只检查最近的消息，避免全量扫描
-              if (existingMessages.length - i > 10) break
             }
           }
 
@@ -1555,12 +1699,12 @@ export class SessionStore {
 
       case 'session_broadcast':
         if (msg.sessionId && msg.message) {
-          // 已有直连 WS 的会话不重复处理全局广播，避免消息重复
-          if (wsService.isSubscribed(msg.sessionId)) {
-            console.info(`[SessionStore] Skip session_broadcast for ${msg.sessionId}: already subscribed`)
+          // 已有直连 WS 且真正在线时才跳过全局广播，防止 WS 断开后遗漏 message_complete 等关键消息
+          if (wsService.isSubscribed(msg.sessionId) && wsService.isConnected(msg.sessionId)) {
+            console.info(`[SessionStore] Skip session_broadcast for ${msg.sessionId}: already connected`)
             break
           }
-          console.info(`[SessionStore] Session broadcast for ${msg.sessionId}`)
+          console.info(`[SessionStore] Session broadcast for ${msg.sessionId} (direct WS not connected)`)
           this.handleWSMessage(msg.sessionId, msg.message as WSMessage)
         }
         break
@@ -1671,25 +1815,54 @@ export class SessionStore {
       return
     }
 
+    // 解析 content blocks，提取文本和图片
+    let resultText = ''
+    const extractedImages: MessageImage[] = []
+
+    if (typeof content === 'string') {
+      resultText = content
+    } else if (Array.isArray(content)) {
+      const blocks = content as Array<Record<string, Object>>
+      for (let i = 0; i < blocks.length; i++) {
+        const block = blocks[i]
+        if (block['type'] === 'text' && block['text']) {
+          resultText += String(block['text'])
+        } else if (block['type'] === 'image') {
+          const source = block['source'] as Record<string, Object> | undefined
+          if (source && source['data'] && source['media_type']) {
+            const mediaType = String(source['media_type'])
+            const imageData = String(source['data'])
+            const img: MessageImage = { data: imageData, mediaType: mediaType }
+            extractedImages.push(img)
+          }
+        }
+      }
+    } else {
+      // 非数组对象回退到 JSON.stringify
+      resultText = JSON.stringify(content)
+    }
+
     const index = messages.findIndex(m => m.id === toolUseId || m.toolUseId === toolUseId)
     if (index >= 0) {
-      const resultString = typeof content === 'string' ? content : JSON.stringify(content)
-      messages[index].toolResult = resultString
+      messages[index].toolResult = resultText
       messages[index].toolStatus = isError ? 'failed' : 'completed'
+      if (extractedImages.length > 0) {
+        messages[index].images = extractedImages
+      }
       this.notifyMessagesChanged(sessionId)
-      console.info(`[SessionStore] Tool ${toolUseId} updated: ${isError ? 'failed' : 'completed'}`)
+      console.info(`[SessionStore] Tool ${toolUseId} updated: ${isError ? 'failed' : 'completed'}, images: ${extractedImages.length}`)
     } else {
       // 工具消息不存在时（如乱序到达），用 tool_result 创建
       console.warn(`[SessionStore] Tool ${toolUseId} not found, creating from tool_result`)
-      const resultString = typeof content === 'string' ? content : JSON.stringify(content)
       const toolMessage: Message = {
         id: toolUseId,
         type: 'tool_use',
         content: '',
         timestamp: new Date().toISOString(),
         toolUseId: toolUseId,
-        toolResult: resultString,
-        toolStatus: isError ? 'failed' : 'completed'
+        toolResult: resultText,
+        toolStatus: isError ? 'failed' : 'completed',
+        images: extractedImages.length > 0 ? extractedImages : undefined
       }
       this.addMessage(sessionId, toolMessage)
     }
@@ -1774,6 +1947,18 @@ export class SessionStore {
     // 清除所有 completed→idle 定时器
     this.completedTimers.forEach((timer) => clearTimeout(timer))
     this.completedTimers.clear()
+
+    // 清除定期状态同步定时器
+    if (this.staleStatusTimer >= 0) {
+      clearInterval(this.staleStatusTimer)
+      this.staleStatusTimer = -1
+    }
+
+    // 清除重复消息清理定时器
+    if (this.dedupCleanupTimer >= 0) {
+      clearInterval(this.dedupCleanupTimer)
+      this.dedupCleanupTimer = -1
+    }
 
     // 清除本地存储
     await storageService.saveSessions([])
