@@ -408,7 +408,67 @@ export class SessionStore {
     }
   }
 
+  // MARK: - 工具入参提取（兼容多种格式）
+  // tool_use_complete 的 toolInput 可能是：
+  //   a) 工具输入: { taskId: "1", status: "completed" }
+  //   b) 工具输出: { taskId: "1", statusChange: { to: "completed" } }
+  //   c) 带 data 包装: { data: { taskId: "1", statusChange: { to: "completed" } } }
+  //   d) 带 task 嵌套: { task: { id: "1", subject: "..." } }
+  //   e) data + task 嵌套: { data: { task: { id: "1" } } }
+
+  /**
+   * 从 toolInput 中安全提取字符串值，按顺序尝试多个 key 路径
+   */
+  private getStr(input: Record<string, Object> | undefined, ...paths: string[]): string {
+    if (!input) return ''
+    for (const p of paths) {
+      const parts = p.split('.')
+      let cur: Object | undefined = input
+      let found = true
+      for (const k of parts) {
+        if (!cur || typeof cur !== 'object') { found = false; break }
+        const obj = cur as Record<string, Object>
+        const v = obj[k]
+        if (v === undefined || v === null) { found = false; break }
+        cur = v
+      }
+      if (found && cur !== undefined && cur !== null) {
+        return String(cur)
+      }
+    }
+    return ''
+  }
+
+  /**
+   * 从 toolInput 中提取对象（如 statusChange / task）
+   */
+  private getObj(input: Record<string, Object> | undefined, ...paths: string[]): Record<string, Object> | undefined {
+    if (!input) return undefined
+    for (const p of paths) {
+      const parts = p.split('.')
+      let cur: Object | undefined = input
+      let found = true
+      for (const k of parts) {
+        if (!cur || typeof cur !== 'object') { found = false; break }
+        const obj = cur as Record<string, Object>
+        const v = obj[k]
+        if (v === undefined || v === null) { found = false; break }
+        cur = v
+      }
+      if (found && cur !== undefined && cur !== null && typeof cur === 'object') {
+        return cur as Record<string, Object>
+      }
+    }
+    return undefined
+  }
+
   // 从会话消息中提取任务列表（TaskCreate / TaskUpdate 工具调用）
+  // 兼容 tool_use_complete 的两种路径：
+  //   CLI 适配器路径（OpenCode）：input = 工具输出，带 data 包裹
+  //     eg. { data: { task: { id: "1", subject: "..." } } }
+  //     eg. { data: { taskId: "1", statusChange: { from, to } } }
+  //   SDK 流式路径：input = 工具输入，无 data 包裹
+  //     eg. { taskId: "1", status: "completed" }
   refreshTasksFromMessages(sessionId: string): void {
     const messages = this.messages.get(sessionId)
     if (!messages || messages.length === 0) {
@@ -427,72 +487,91 @@ export class SessionStore {
     }
     console.info(`[SessionStore] refreshTasks: ${sessionId} has ${messages.length} msgs, ${toolUseCount} tool_use (${Array.from(toolNames).join(',')})`)
 
-    // 任务 ID 生成器：TaskCreate 用 subject 的前 8 个字符哈希作为 id
-    // 但有些 TaskCreate 不传 id，TaskUpdate 引用的是自增序号
+    // 任务 ID 生成器：TaskCreate 用自增序号作为降级 ID
     const taskMap: Map<string, TaskItem> = new Map()
     let taskCounter = 0
 
+    // 第一遍：解析所有 TaskCreate / TaskUpdate 工具调用
     for (const msg of messages) {
-      if (msg.type === 'tool_use' && msg.toolName === 'TaskCreate' && msg.toolInput) {
+      if (msg.type !== 'tool_use' || !msg.toolInput) continue
+      const input = msg.toolInput as Record<string, Object>
+
+      if (msg.toolName === 'TaskCreate') {
         taskCounter++
-        // 工具输出格式为 { task: { id: "1", subject: "..." } }，也支持直接的 taskId
-        const taskResultObj = msg.toolInput['task'] as Record<string, Object> | undefined
-        const taskIdFromResult = taskResultObj ? String(taskResultObj['id'] || '') : ''
-        const id = String(msg.toolInput['taskId'] || taskIdFromResult || taskCounter)
-        const subject = String(msg.toolInput['subject'] || '')
-        const description = String(msg.toolInput['description'] || '')
-        const activeForm = msg.toolInput['activeForm'] as string || ''
-        taskMap.set(id, {
-          id: id,
-          content: subject || description,
-          status: 'pending',
-          activeForm: activeForm
-        })
-      } else if (msg.type === 'tool_use' && msg.toolName === 'TaskUpdate' && msg.toolInput) {
-        const taskId = String(msg.toolInput['taskId'] || msg.toolInput['id'] || '')
-        // tool_use_complete 的 toolInput 实际是工具输出，status 在 statusChange.to 中
-        const statusFromTop = String(msg.toolInput['status'] || '')
-        const statusChangeVal = msg.toolInput['statusChange'] as Record<string, Object> | undefined
-        const statusFromChange = statusChangeVal ? String(statusChangeVal['to'] || '') : ''
-        const status = statusFromTop || statusFromChange
+        // 尝试所有可能的 ID 路径
+        const id = this.getStr(input,
+          'data.task.id', 'task.id',
+          'data.taskId', 'taskId',
+          'id', 'data.id',
+          String(taskCounter))
+        const subject = this.getStr(input,
+          'data.task.subject', 'task.subject',
+          'subject', 'data.subject',
+          'description', 'data.description')
+        const description = this.getStr(input,
+          'description', 'data.description',
+          'data.task.description', 'task.description')
+        const activeForm = this.getStr(input,
+          'activeForm', 'data.activeForm',
+          'data.task.activeForm', 'task.activeForm')
+        if (id) {
+          taskMap.set(id, {
+            id: id,
+            content: subject || description,
+            status: 'pending',
+            activeForm: activeForm
+          })
+        }
+      } else if (msg.toolName === 'TaskUpdate') {
+        const taskId = this.getStr(input,
+          'data.taskId', 'taskId',
+          'id', 'data.id')
+        const status = this.getStr(input,
+          'status', 'data.status',
+          'statusChange.to', 'data.statusChange.to')
         if (taskId && taskMap.has(taskId)) {
           const existing = taskMap.get(taskId)!
           if (status === 'in_progress') existing.status = 'in_progress'
           else if (status === 'completed') existing.status = 'completed'
           else if (status === 'failed') existing.status = 'failed'
           // 有时 TaskUpdate 也会带 activeForm
-          if (msg.toolInput['activeForm']) {
-            existing.activeForm = msg.toolInput['activeForm'] as string
+          const activeForm = this.getStr(input,
+            'activeForm', 'data.activeForm')
+          if (activeForm) {
+            existing.activeForm = activeForm
           }
         }
       }
     }
 
     // 第二遍：根据 toolStatus 更新任务完成状态
-    // 当 TaskUpdate 工具的 toolStatus 变为 completed，但 toolInput.status 还停留在 'in_progress' 时，
-    // 需要依据 toolStatus 将对应任务标记为已完成
+    // 当工具标记为 completed 但输入中还没有 status 时，将对应任务标记为已完成
     for (const msg of messages) {
-      if (msg.type === 'tool_use' && msg.toolStatus === 'completed') {
-        if (msg.toolName === 'TaskUpdate' && msg.toolInput) {
-          const taskId = String(msg.toolInput['taskId'] || msg.toolInput['id'] || '')
-          if (taskId && taskMap.has(taskId)) {
-            const existing = taskMap.get(taskId)!
-            if (existing.status !== 'completed') {
-              existing.status = 'completed'
-            }
+      if (msg.type !== 'tool_use' || !msg.toolInput || msg.toolStatus !== 'completed') continue
+      const input = msg.toolInput as Record<string, Object>
+
+      if (msg.toolName === 'TaskUpdate') {
+        const taskId = this.getStr(input,
+          'data.taskId', 'taskId',
+          'id', 'data.id')
+        if (taskId && taskMap.has(taskId)) {
+          const existing = taskMap.get(taskId)!
+          if (existing.status !== 'completed') {
+            existing.status = 'completed'
+            console.info(`[SessionStore] TaskUpdate tool completed -> set task ${taskId} to completed`)
           }
         }
-        // 单步 TaskCreate 也标记为 completed（没有后续 TaskUpdate 的场景）
-        if (msg.toolName === 'TaskCreate' && msg.toolInput) {
-          // 结果格式为 { task: { id: "1" } }，也支持直接 taskId
-          const taskResultObj = msg.toolInput['task'] as Record<string, Object> | undefined
-          const taskIdFromResult = taskResultObj ? String(taskResultObj['id'] || '') : ''
-          const taskId = String(msg.toolInput['taskId'] || taskIdFromResult || '')
-          if (taskId && taskMap.has(taskId)) {
-            const existing = taskMap.get(taskId)!
-            if (existing.status === 'pending') {
-              existing.status = 'completed'
-            }
+      } else if (msg.toolName === 'TaskCreate') {
+        // 单步 TaskCreate（没有后续 TaskUpdate）也标记为 completed
+        const taskId = this.getStr(input,
+          'data.task.id', 'task.id',
+          'data.taskId', 'taskId',
+          'id', 'data.id')
+        if (taskId && taskMap.has(taskId)) {
+          const existing = taskMap.get(taskId)!
+          if (existing.status === 'pending') {
+            existing.status = 'completed'
+            console.info(`[SessionStore] TaskCreate tool completed -> set task ${taskId} to completed`)
           }
         }
       }
@@ -504,24 +583,35 @@ export class SessionStore {
       this.taskBarDismissed = false
       this.notifySessionsChanged()
       console.info(`[SessionStore] Extracted ${tasks.length} tasks from messages for ${sessionId}`)
+      // DEBUG: 输出任务状态
+      for (const t of tasks) {
+        console.info(`[SessionStore] Task: id=${t.id} status=${t.status} content=${t.content.substring(0, 30)}`)
+      }
     }
   }
 
-  // 更新单个任务的 WS 实时状态
+  // 更新单个任务的 WS 实时状态（利用已有 sessionTasks 作为基础，避免重建覆盖）
   private updateTaskFromWS(sessionId: string, toolName: string, input: Record<string, Object> | undefined): void {
     if (!input) return
     const currentTasks = this.sessionTasks.get(sessionId) || []
     const taskMap = new Map(currentTasks.map(t => [t.id, t]))
 
     if (toolName === 'TaskCreate') {
-      // tool_use_complete 的 input 实际是工具输出，格式为 { task: { id: "1", subject: "..." } }
-      const inputTask = input['task'] as Record<string, Object> | undefined
-      const taskIdFromResult = inputTask ? String(inputTask['id'] || '') : ''
-      const id = String(input['taskId'] || taskIdFromResult || Date.now())
-      const subject = String(input['subject'] || (inputTask ? String(inputTask['subject'] || '') : ''))
-      const description = String(input['description'] || '')
-      const activeForm = input['activeForm'] as string || (inputTask ? (inputTask['activeForm'] as string || '') : '')
-      if (!taskMap.has(id)) {
+      const id = this.getStr(input,
+        'data.task.id', 'task.id',
+        'data.taskId', 'taskId',
+        'id', 'data.id')
+      // 如果已有相同 ID 的任务，不重复添加（保留已有状态）
+      if (id && !taskMap.has(id)) {
+        const subject = this.getStr(input,
+          'data.task.subject', 'task.subject',
+          'subject', 'data.subject')
+        const description = this.getStr(input,
+          'description', 'data.description',
+          'data.task.description', 'task.description')
+        const activeForm = this.getStr(input,
+          'activeForm', 'data.activeForm',
+          'data.task.activeForm', 'task.activeForm')
         taskMap.set(id, {
           id: id,
           content: subject || description,
@@ -530,19 +620,21 @@ export class SessionStore {
         })
       }
     } else if (toolName === 'TaskUpdate') {
-      // tool_use_complete 的 input 实际是工具输出，格式为 { taskId: "1", statusChange: { from, to } }
-      const taskId = String(input['taskId'] || input['id'] || '')
-      const statusFromTop = String(input['status'] || '')
-      const statusChange = input['statusChange'] as Record<string, Object> | undefined
-      const statusFromChange = statusChange ? String(statusChange['to'] || '') : ''
-      const status = statusFromTop || statusFromChange
+      const taskId = this.getStr(input,
+        'data.taskId', 'taskId',
+        'id', 'data.id')
+      const status = this.getStr(input,
+        'status', 'data.status',
+        'statusChange.to', 'data.statusChange.to')
       if (taskId && taskMap.has(taskId)) {
         const existing = taskMap.get(taskId)!
         if (status === 'in_progress') existing.status = 'in_progress'
         else if (status === 'completed') existing.status = 'completed'
         else if (status === 'failed') existing.status = 'failed'
-        if (input['activeForm']) {
-          existing.activeForm = input['activeForm'] as string
+        const activeForm = this.getStr(input,
+          'activeForm', 'data.activeForm')
+        if (activeForm) {
+          existing.activeForm = activeForm
         }
       }
     }
@@ -1067,6 +1159,19 @@ export class SessionStore {
 
           // 跟踪 TaskCreate / TaskUpdate 工具调用（实时更新任务列表）
           if (msg.toolName === 'TaskCreate' || msg.toolName === 'TaskUpdate') {
+            // DEBUG: 打印 task tool 的 input 格式
+            try {
+              if (msg.toolName === 'TaskUpdate') {
+                const sc = msg.input ? msg.input['statusChange'] : 'no-input'
+                const sTop = msg.input ? msg.input['status'] : 'no-input'
+                console.info(`[SessionStore] TaskUpdate input: status=${sTop}, statusChange=${sc}, raw=${JSON.stringify(msg.input)}`)
+              } else if (msg.toolName === 'TaskCreate') {
+                const t = msg.input ? msg.input['task'] : 'no-input'
+                console.info(`[SessionStore] TaskCreate input: hasTask=${t !== undefined}, raw=${JSON.stringify(msg.input)}`)
+              }
+            } catch (e) {
+              console.info(`[SessionStore] TaskUpdate/TaskCreate debug error: ${e}`)
+            }
             this.updateTaskFromWS(sessionId, msg.toolName, msg.input)
           }
           // 工具标记 completed 后刷新任务列表（捕获 toolStatus 变化）
