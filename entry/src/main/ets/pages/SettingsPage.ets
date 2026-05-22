@@ -1075,6 +1075,11 @@ export struct SettingsPage {
           const result = await openScanner()
           if (result?.bestUrl) {
             this.newProfileUrl = result.bestUrl
+            // 保存 E2EE 公钥（用于云中继端到端加密）
+            if (result.e2eePub) {
+              authStore.setRelayE2EEPubKey(result.e2eePub)
+              console.info('[Settings] 从二维码解析到 E2EE 公钥')
+            }
             // 立即添加其他地址为独立配置
             if (result.lan && result.lan !== result.bestUrl) {
               authStore.addFromLogin(result.lan, 'lan')

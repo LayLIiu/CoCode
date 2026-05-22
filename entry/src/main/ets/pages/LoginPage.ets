@@ -217,6 +217,10 @@ export struct LoginPage {
             const result = await openScanner()
             if (result?.bestUrl) {
               this.serverUrl = result.bestUrl
+              // 保存 E2EE 公钥（云中继端到端加密用）
+              if (result.e2eePub) {
+                authStore.setRelayE2EEPubKey(result.e2eePub)
+              }
               // 推断扫码得到的连接类型
               if (result.tunnel === result.bestUrl) {
                 this.scannedType = 'tunnel'

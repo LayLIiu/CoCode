@@ -157,6 +157,7 @@ export type WSMessageType =
   | 'session_status_changed'
   | 'session_broadcast'
   | 'unknown'
+  | 'pong'
 
 export interface WSMessage {
   type?: WSMessageType

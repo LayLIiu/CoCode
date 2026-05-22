@@ -1,17 +1,40 @@
 /**
  * WebSocket 服务
  * 负责与服务器的实时通信
+ * 集成 Paseo 连接可靠性模式：
+ * - 连接状态机 (disconnected/connecting/connected/reconnecting/offline)
+ * - 真实 Ping/Pong 心跳 + 超时检测
+ * - 离线消息队列
  */
 
 import webSocket from '@ohos.net.webSocket'
 import { UrlUtils } from '../common/UrlUtils'
 import { WSMessage, OutgoingMessage, QuestionItem, TaskStatus, WSMessageType, AttachmentRef } from '../models/Models'
 
+// 连接状态枚举（对应 Paseo HostRuntime 状态机）
+export enum ConnectionState {
+  DISCONNECTED = 'disconnected',
+  CONNECTING = 'connecting',
+  CONNECTED = 'connected',
+  RECONNECTING = 'reconnecting',
+  OFFLINE = 'offline',
+  ERROR = 'error'
+}
+
+// Pong 超时检测常量
+const PING_INTERVAL_MS = 25000    // 每 25s 发一次 ping
+const PONG_TIMEOUT_MS = 15000     // 发 ping 后 15s 无 pong 视为断连
+const MAX_PONG_MISSED = 2         // 连续 2 次超时才触发重连（容忍偶尔丢包）
+
 export class WSSessionConnection {
   ws: webSocket.WebSocket | null = null
   status: string = 'disconnected'
   lastActivity: number = 0
   reconnectAttempts: number = 0
+  // Paseo 集成：消息队列 + 心跳
+  pendingMessages: string[] = []
+  lastPongTime: number = 0
+  missedPongs: number = 0
 }
 
 type WSMessageHandler = (sessionId: string, message: WSMessage) => void
@@ -23,11 +46,14 @@ export class WebSocketService {
   private subscribedSessions: Set<string> = new Set()
   private messageHandler: WSMessageHandler | null = null
   private reconnectTimers: Map<string, number> = new Map()
-  private heartbeatTimer: number = -1
+  private pingTimer: number = -1       // 统一 ping 定时器（替代旧的 heartbeatTimer）
+  private pongCheckTimer: number = -1  // pong 超时检测定时器
   private cleanupTimer: number = -1
   private globalConn: WSSessionConnection | null = null
   private globalMsgHandler: ((msg: WSMessage) => void) | null = null
   private globalReconnectTimer: number = -1
+  // 连接状态变化回调（供 SessionStore/UI 层监听）
+  private connectionStateListeners: Map<string, Array<(state: ConnectionState) => void>> = new Map()
 
   static getInstance(): WebSocketService {
     if (!WebSocketService.instance) {
@@ -51,6 +77,38 @@ export class WebSocketService {
   /** 检查是否已有直接 WebSocket 连接到指定会话（用于避免全局广播重复处理） */
   isSubscribed(sessionId: string): boolean {
     return this.subscribedSessions.has(sessionId)
+  }
+
+  // MARK: - 连接状态监听
+
+  /**
+   * 注册连接状态变化监听（Paseo 模式：UI 层感知连接状态）
+   */
+  addConnectionStateListener(sessionId: string, listener: (state: ConnectionState) => void): void {
+    let listeners = this.connectionStateListeners.get(sessionId)
+    if (!listeners) {
+      listeners = []
+      this.connectionStateListeners.set(sessionId, listeners)
+    }
+    listeners.push(listener)
+  }
+
+  removeConnectionStateListener(sessionId: string, listener: (state: ConnectionState) => void): void {
+    const listeners = this.connectionStateListeners.get(sessionId)
+    if (!listeners) return
+    const idx = listeners.indexOf(listener)
+    if (idx >= 0) listeners.splice(idx, 1)
+  }
+
+  /**
+   * 通知连接状态变化（内部方法）
+   */
+  private notifyConnectionState(sessionId: string, state: ConnectionState): void {
+    const listeners = this.connectionStateListeners.get(sessionId)
+    if (!listeners) return
+    for (const l of listeners) {
+      l(state)
+    }
   }
 
   // MARK: - 连接管理
@@ -85,8 +143,9 @@ export class WebSocketService {
       this.disconnectSession(keysToRemove[i])
     }
 
-    // 启动心跳和清理定时器
-    this.startHeartbeat()
+    // 启动 ping/pong 心跳和清理定时器
+    this.startPingLoop()
+    this.startPongCheck()
     this.startCleanup()
   }
 
@@ -103,50 +162,63 @@ export class WebSocketService {
   connectSession(sessionId: string): void {
     if (!this.serverUrl) {
       console.error('[WS] serverUrl is empty')
-      // removed
+      return
     }
 
     // 检查是否已连接
     const existing = this.connections.get(sessionId)
     if (existing && existing.status === 'connected' && existing.ws) {
       console.info(`[WS] Already connected to ${sessionId}`)
-      // removed
+      return
     }
 
     const wsUrl = this.buildWsUrl('/ws/' + sessionId)
-
     console.info(`[WS] Connecting to ${wsUrl}`)
 
     const ws = webSocket.createWebSocket()
-
     const conn = new WSSessionConnection()
     conn.ws = ws
     conn.status = 'connecting'
     conn.lastActivity = Date.now()
-    // 不在此处重置 reconnectAttempts，保持退避计数连续
-    // 如果是新连接（之前不存在），则从0开始
+    conn.missedPongs = 0
+    conn.lastPongTime = Date.now()
+
+    // 继承旧连接的重试计数
     const oldConn = this.connections.get(sessionId)
     if (!oldConn) {
       conn.reconnectAttempts = 0
+      // 继承离线消息队列（Paseo 模式）
+      conn.pendingMessages = []
     } else {
       conn.reconnectAttempts = oldConn.reconnectAttempts
+      conn.pendingMessages = oldConn.pendingMessages || []
     }
 
     this.connections.set(sessionId, conn)
+    this.notifyConnectionState(sessionId, ConnectionState.CONNECTING)
 
     ws.connect(wsUrl, (err, value) => {
       if (err) {
         console.error(`[WS] Connect failed: ${err.message}`)
+        this.notifyConnectionState(sessionId, ConnectionState.ERROR)
         this.handleDisconnect(sessionId)
-        // removed
+        return
       }
       console.info(`[WS] Connected to ${sessionId}`)
       this.updateConnectionStatus(sessionId, 'connected')
+      conn.lastPongTime = Date.now()
+      conn.missedPongs = 0
+      this.notifyConnectionState(sessionId, ConnectionState.CONNECTED)
+
       // 连接成功后重置重试计数
       const currentConn = this.connections.get(sessionId)
       if (currentConn) {
         currentConn.reconnectAttempts = 0
       }
+
+      // Paseo 模式：连接成功后 flush 离线消息队列
+      this.flushPendingMessages(sessionId)
+
       this.startReceiving(sessionId, ws)
     })
 
@@ -165,9 +237,37 @@ export class WebSocketService {
       const currentConn = this.connections.get(sessionId)
       if (currentConn && currentConn.ws === ws) {
         this.updateConnectionStatus(sessionId, 'error')
+        this.notifyConnectionState(sessionId, ConnectionState.ERROR)
         this.scheduleReconnect(sessionId)
       }
     })
+  }
+
+  /**
+   * 连接成功后 flush 所有 pending 消息（Paseo 模式）
+   */
+  private flushPendingMessages(sessionId: string): void {
+    const conn = this.connections.get(sessionId)
+    if (!conn || !conn.ws || conn.status !== 'connected') return
+
+    while (conn.pendingMessages.length > 0) {
+      const msg = conn.pendingMessages.shift()
+      if (msg) {
+        try {
+          conn.ws.send(msg, (err) => {
+            if (err) {
+              console.error(`[WS] Flush send error: ${err.message}`)
+              // 发送失败重新入队
+              conn.pendingMessages.unshift(msg)
+            }
+          })
+        } catch (e) {
+          console.error(`[WS] Flush send exception: ${e}`)
+          conn.pendingMessages.unshift(msg)
+          break
+        }
+      }
+    }
   }
 
   private buildWsUrl(pathSuffix: string): string {
@@ -188,12 +288,12 @@ export class WebSocketService {
   connectGlobal(): void {
     if (!this.serverUrl) {
       console.error('[WS-Global] serverUrl is empty')
-      // removed
+      return
     }
 
     if (this.globalConn && this.globalConn.status === 'connected' && this.globalConn.ws) {
       console.info('[WS-Global] Already connected')
-      // removed
+      return
     }
 
     const wsUrl = this.buildWsUrl('/ws/global')
@@ -217,12 +317,13 @@ export class WebSocketService {
       if (err) {
         console.error(`[WS-Global] Connect failed: ${err.message}`)
         this.handleGlobalDisconnect()
-        // removed
+        return
       }
       console.info('[WS-Global] Connected')
       if (this.globalConn) {
         this.globalConn.status = 'connected'
         this.globalConn.reconnectAttempts = 0
+        this.globalConn.lastPongTime = Date.now()
       }
       this.startGlobalReceiving(ws)
     })
@@ -282,7 +383,7 @@ export class WebSocketService {
     ws.on('message', (err, value) => {
       if (err) {
         console.error(`[WS-Global] Receive error: ${err.message}`)
-        // removed
+        return
       }
 
       let text = ''
@@ -303,6 +404,15 @@ export class WebSocketService {
 
     try {
       const json = JSON.parse(text) as WSMessage
+
+      // 检测 pong 响应（Paseo 模式）
+      if (json.type === 'pong') {
+        if (this.globalConn) {
+          this.globalConn.lastPongTime = Date.now()
+          this.globalConn.missedPongs = 0
+        }
+        return // pong 不往下分发
+      }
 
       if (this.globalMsgHandler) {
         this.globalMsgHandler(json)
@@ -357,6 +467,7 @@ export class WebSocketService {
     }
     this.connections.delete(sessionId)
     this.subscribedSessions.delete(sessionId)
+    this.notifyConnectionState(sessionId, ConnectionState.DISCONNECTED)
 
     const timer = this.reconnectTimers.get(sessionId)
     if (timer) {
@@ -371,10 +482,8 @@ export class WebSocketService {
     })
     this.disconnectGlobal()
     // 停止定时器
-    if (this.heartbeatTimer >= 0) {
-      clearInterval(this.heartbeatTimer)
-      this.heartbeatTimer = -1
-    }
+    this.stopPingLoop()
+    this.stopPongCheck()
     if (this.cleanupTimer >= 0) {
       clearInterval(this.cleanupTimer)
       this.cleanupTimer = -1
@@ -404,17 +513,28 @@ export class WebSocketService {
     }
 
     const conn = this.connections.get(sessionId)
+    const jsonStr = JSON.stringify(message)
+
     if (!conn || !conn.ws || conn.status !== 'connected') {
-      console.error(`[WS] Cannot send: not connected to ${sessionId}`)
-      return false
+      console.info(`[WS] Cannot send: not connected to ${sessionId}, queuing message`)
+      // Paseo 模式：离线时入队，重连后 flush
+      if (conn) {
+        conn.pendingMessages.push(jsonStr)
+      }
+      // 触发重连（如果正在重连则忽略）
+      if (conn && conn.status !== 'reconnecting') {
+        this.scheduleReconnect(sessionId)
+      }
+      return true // 返回 true 表示已入队
     }
 
-    const jsonStr = JSON.stringify(message)
     console.info(`[WS] Sending to ${sessionId}: ${jsonStr.substring(0, 100)}`)
 
     conn.ws.send(jsonStr, (err) => {
       if (err) {
         console.error(`[WS] Send error: ${err.message}`)
+        // 发送失败入队备重试
+        conn.pendingMessages.push(jsonStr)
       } else {
         console.info(`[WS] Sent successfully to ${sessionId}`)
       }
@@ -476,7 +596,7 @@ export class WebSocketService {
     ws.on('message', (err, value) => {
       if (err) {
         console.error(`[WS] Receive error: ${err.message}`)
-        // removed
+        return
       }
 
       let text = ''
@@ -499,10 +619,25 @@ export class WebSocketService {
       const json = JSON.parse(text) as WSMessage
       json.sessionId = sessionId
 
+      // Paseo 模式：检测 pong 响应，更新心跳状态
+      if (json.type === 'pong') {
+        const conn = this.connections.get(sessionId)
+        if (conn) {
+          conn.lastPongTime = Date.now()
+          conn.missedPongs = 0
+        }
+        return // pong 不往下分发
+      }
+
       if (json.type === 'connected') {
         console.info(`[WS] WebSocket connected for ${sessionId}`)
         this.updateConnectionStatus(sessionId, 'connected')
-        // removed
+        // 连接确认后重置心跳
+        const conn = this.connections.get(sessionId)
+        if (conn) {
+          conn.lastPongTime = Date.now()
+          conn.missedPongs = 0
+        }
       }
 
       if (this.messageHandler) {
@@ -530,9 +665,11 @@ export class WebSocketService {
   }
 
   private handleDisconnect(sessionId: string): void {
+    const oldStatus = this.connections.get(sessionId)?.status
     this.updateConnectionStatus(sessionId, 'disconnected')
+    this.notifyConnectionState(sessionId, oldStatus === 'connecting' ? ConnectionState.OFFLINE : ConnectionState.RECONNECTING)
 
-    // 重置 ws 引用
+    // 重置 ws 引用（保留 pendingMessages）
     const conn = this.connections.get(sessionId)
     if (conn) {
       conn.ws = null
@@ -566,10 +703,11 @@ export class WebSocketService {
     }
 
     conn.reconnectAttempts++
+    this.notifyConnectionState(sessionId, ConnectionState.RECONNECTING)
     // 无限重连，退避上限 30 秒
     const delay = Math.min(1000 * Math.pow(2, conn.reconnectAttempts), 30000)
 
-    console.info(`[WS] Reconnecting to ${sessionId} in ${delay}ms`)
+    console.info(`[WS] Reconnecting to ${sessionId} in ${delay}ms (attempt ${conn.reconnectAttempts})`)
 
     this.reconnectTimers.set(sessionId, setTimeout(() => {
       this.reconnectTimers.delete(sessionId)
@@ -577,36 +715,121 @@ export class WebSocketService {
     }, delay))
   }
 
-  // MARK: - 心跳与清理
+  // MARK: - Ping/Pong 心跳（Paseo 模式）
 
-  private startHeartbeat(): void {
-    if (this.heartbeatTimer >= 0) {
-      clearInterval(this.heartbeatTimer)
-    }
-    this.heartbeatTimer = setInterval(() => {
-      this.checkAndReconnectBrokenConnections()
-    }, 30000) // 每 30 秒检查
+  /**
+   * 对所有已订阅会话发送 ping（替代旧的 timer-based health check）
+   */
+  private startPingLoop(): void {
+    this.stopPingLoop()
+    this.pingTimer = setInterval(() => {
+      this.sendPingToAll()
+    }, PING_INTERVAL_MS)
   }
 
-  private checkAndReconnectBrokenConnections(): void {
-    if (!this.serverUrl) {
-      return
+  private stopPingLoop(): void {
+    if (this.pingTimer >= 0) {
+      clearInterval(this.pingTimer)
+      this.pingTimer = -1
     }
+  }
 
+  /**
+   * 检测 pong 超时：连续 MAX_PONG_MISSED 次未收到 pong 则强制重连
+   */
+  private startPongCheck(): void {
+    this.stopPongCheck()
+    this.pongCheckTimer = setInterval(() => {
+      this.checkPongTimeouts()
+    }, PONG_TIMEOUT_MS)
+  }
+
+  private stopPongCheck(): void {
+    if (this.pongCheckTimer >= 0) {
+      clearInterval(this.pongCheckTimer)
+      this.pongCheckTimer = -1
+    }
+  }
+
+  private sendPingToAll(): void {
+    const now = Date.now()
     this.subscribedSessions.forEach((sessionId) => {
       const conn = this.connections.get(sessionId)
-      if (conn) {
-        if (conn.status === 'disconnected' || conn.status === 'error' || !conn.ws) {
-          // 无限重连，不做次数限制
-          console.info(`[WS] Heartbeat: reconnecting broken connection for ${sessionId}`)
-          this.scheduleReconnect(sessionId)
+      if (!conn || !conn.ws || conn.status !== 'connected') return
+
+      // 检查会话级 pong
+      if (now - conn.lastPongTime > PONG_TIMEOUT_MS) {
+        conn.missedPongs++
+        if (conn.missedPongs >= MAX_PONG_MISSED) {
+          console.warn(`[WS] Session ${sessionId} missed ${conn.missedPongs} pongs, force reconnecting`)
+          this.forceReconnect(sessionId)
+          return
         }
-      } else {
-        console.info(`[WS] Heartbeat: creating missing connection for ${sessionId}`)
-        this.connectSession(sessionId)
+      }
+
+      // 发送 ping 消息
+      try {
+        conn.ws.send(JSON.stringify({ type: 'ping' }), (err) => {
+          if (err) {
+            console.error(`[WS] Ping send error: ${err.message}`)
+          }
+        })
+      } catch (e) {
+        // ignore
+      }
+    })
+
+    // 全局 WS ping
+    if (this.globalConn && this.globalConn.ws && this.globalConn.status === 'connected') {
+      const gNow = Date.now()
+      if (gNow - this.globalConn.lastPongTime > PONG_TIMEOUT_MS) {
+        this.globalConn.missedPongs++
+        if (this.globalConn.missedPongs >= MAX_PONG_MISSED) {
+          console.warn('[WS] Global WS missed pongs, reconnecting')
+          this.reconnectGlobal()
+          return
+        }
+      }
+      try {
+        this.globalConn.ws.send(JSON.stringify({ type: 'ping' }), (err) => {
+          if (err) {
+            console.error(`[WS-Global] Ping send error: ${err.message}`)
+          }
+        })
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+
+  private checkPongTimeouts(): void {
+    const now = Date.now()
+    this.subscribedSessions.forEach((sessionId) => {
+      const conn = this.connections.get(sessionId)
+      if (!conn || conn.status !== 'connected') return
+      if (now - conn.lastPongTime > PONG_TIMEOUT_MS * (MAX_PONG_MISSED + 1)) {
+        console.warn(`[WS] Session ${sessionId} pong timeout, forcing reconnect`)
+        this.forceReconnect(sessionId)
       }
     })
   }
+
+  private forceReconnect(sessionId: string): void {
+    const conn = this.connections.get(sessionId)
+    if (conn && conn.ws) {
+      try {
+        conn.ws.close()
+      } catch (e) {
+        // ignore
+      }
+      conn.ws = null
+      conn.status = 'disconnected'
+    }
+    this.notifyConnectionState(sessionId, ConnectionState.RECONNECTING)
+    this.scheduleReconnect(sessionId)
+  }
+
+  // MARK: - 空闲连接清理
 
   private startCleanup(): void {
     if (this.cleanupTimer >= 0) {
@@ -745,43 +968,56 @@ export class WebSocketService {
   forceReconnectAll(): void {
     if (!this.serverUrl) {
       console.info('[WS] forceReconnectAll: no serverUrl, skipping')
-      // removed
+      return
     }
 
     console.info(`[WS] forceReconnectAll: ${this.subscribedSessions.size} sessions`)
 
     this.subscribedSessions.forEach((sessionId) => {
-      // 先断开旧连接并移除引用，防止旧连接的 close/error 回调影响新连接
-      const oldConn = this.connections.get(sessionId)
-      if (oldConn && oldConn.ws) {
-        // 标记为 disconnecting 防止回调中处理
-        oldConn.status = 'disconnecting'
-        try {
-          oldConn.ws.close()
-        } catch (e) {
-          // ignore close errors
-        }
-        oldConn.ws = null
-      }
-      // 移除旧连接记录
-      this.connections.delete(sessionId)
-      // 清除重连定时器
-      const timer = this.reconnectTimers.get(sessionId)
-      if (timer) {
-        clearTimeout(timer)
-        this.reconnectTimers.delete(sessionId)
-      }
-
-      // 建立新连接
-      this.connectSession(sessionId)
+      this.forceReconnectSession(sessionId)
     })
 
     // 重连全局 WS - 使用原子方法避免竞态
     this.reconnectGlobal()
 
-    // 重启心跳
-    this.startHeartbeat()
+    // 重启 ping/pong
+    this.startPingLoop()
+    this.startPongCheck()
     this.startCleanup()
+  }
+
+  /**
+   * 强制重连单个会话（Paseo 模式：保留 pendingMessages）
+   */
+  private forceReconnectSession(sessionId: string): void {
+    // 先断开旧连接并移除引用，防止旧连接的 close/error 回调影响新连接
+    const oldConn = this.connections.get(sessionId)
+    if (oldConn && oldConn.ws) {
+      oldConn.status = 'disconnecting'
+      try {
+        oldConn.ws.close()
+      } catch (e) {
+        // ignore close errors
+      }
+      oldConn.ws = null
+    }
+    // 保留 pendingMessages 但移除旧连接记录
+    const pendingMsgs = oldConn ? oldConn.pendingMessages : []
+    this.connections.delete(sessionId)
+
+    // 清除重连定时器
+    const timer = this.reconnectTimers.get(sessionId)
+    if (timer) {
+      clearTimeout(timer)
+      this.reconnectTimers.delete(sessionId)
+    }
+
+    // 建立新连接并继承消息队列
+    this.connectSession(sessionId)
+    const newConn = this.connections.get(sessionId)
+    if (newConn && pendingMsgs.length > 0) {
+      newConn.pendingMessages = pendingMsgs
+    }
   }
 
   // MARK: - 状态查询
@@ -794,6 +1030,20 @@ export class WebSocketService {
   getConnectionStatus(sessionId: string): string {
     const conn = this.connections.get(sessionId)
     return conn?.status || 'disconnected'
+  }
+
+  /**
+   * 获取连接状态枚举（Paseo 模式）
+   */
+  getConnectionState(sessionId: string): ConnectionState {
+    const conn = this.connections.get(sessionId)
+    if (!conn) return ConnectionState.DISCONNECTED
+    const s = conn.status
+    if (s === 'connected') return ConnectionState.CONNECTED
+    if (s === 'connecting' || s === 'disconnecting') return ConnectionState.CONNECTING
+    if (s === 'reconnecting') return ConnectionState.RECONNECTING
+    if (s === 'error') return ConnectionState.ERROR
+    return ConnectionState.DISCONNECTED
   }
 }
 

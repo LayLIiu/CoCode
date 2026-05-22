@@ -30,6 +30,9 @@ export class AuthStore {
   serverProfiles: ServerProfile[] = []
   activeProfileId: string = ''
 
+  // E2EE: 桌面端公钥（扫码时从 QR 码获取，云中继端到端加密用）
+  relayE2EEPubKey: string | null = null
+
   private preferences?: preferences.Preferences
 
   static getInstance(): AuthStore {
@@ -71,6 +74,9 @@ export class AuthStore {
         this.user = JSON.parse(userData) as User
         this.isLoggedIn = true
       }
+
+      // 加载 E2EE 桌面端公钥
+      this.relayE2EEPubKey = await this.preferences.get('relayE2EEPubKey', '') as string || null
 
       // 更新 API 服务地址
       this.updateApiServiceUrl()
@@ -276,6 +282,21 @@ export class AuthStore {
     this.biometricEnabled = enabled
     if (this.preferences) {
       await this.preferences.put('biometricEnabled', enabled)
+      await this.preferences.flush()
+    }
+  }
+
+  /**
+   * 设置 E2EE 桌面端公钥（扫码时从云中继 QR 码解析）
+   */
+  async setRelayE2EEPubKey(pubKey: string | null): Promise<void> {
+    this.relayE2EEPubKey = pubKey
+    if (this.preferences) {
+      if (pubKey) {
+        await this.preferences.put('relayE2EEPubKey', pubKey)
+      } else {
+        await this.preferences.delete('relayE2EEPubKey')
+      }
       await this.preferences.flush()
     }
   }
