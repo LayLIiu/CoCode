@@ -54,6 +54,14 @@ export class ModelIdRequest {
   modelId: string = ''
 }
 
+export class DownloadTokenResponse {
+  token: string = ''
+  fileName: string = ''
+  mimeType: string = ''
+  size: number = 0
+  downloadUrl: string = ''
+}
+
 export class TtlRequest {
   ttlHours: number = 1
 }
@@ -303,6 +311,27 @@ export class APIService {
   }
 
   getBaseUrl(): string {
+    return this.baseUrl
+  }
+
+  /**
+   * 请求文件下载令牌（安全下载）
+   * 返回 { token, fileName, mimeType, size, downloadUrl }
+   */
+  async requestDownloadToken(filePath: string): Promise<DownloadTokenResponse> {
+    const res = await this.request<Record<string, Object>>(
+      '/api/filesystem/token?path=' + encodeURIComponent(filePath), 'GET', ''
+    )
+    return {
+      token: res['token'] as string,
+      fileName: res['fileName'] as string,
+      mimeType: res['mimeType'] as string,
+      size: res['size'] as number,
+      downloadUrl: res['downloadUrl'] as string,
+    }
+  }
+
+  /**
     return this.baseUrl
   }
 

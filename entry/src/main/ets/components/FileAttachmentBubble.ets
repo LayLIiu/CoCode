@@ -5,6 +5,7 @@
 
 import { Theme } from '../common/Theme'
 import { fileService } from '../services/FileService'
+import { downloadService } from '../services/DownloadService'
 
 function getFileTypeIconResource(ext: string): Resource {
   const imgExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'heic']
@@ -53,6 +54,8 @@ export struct FileAttachmentBubble {
   @State isLoading: boolean = false
   @State errorMessage: string = ''
   @State contentPreview: string = ''
+  @State isDownloading: boolean = false
+  @State downloadResult: string = ''
 
   private onImageTap?: (src: string, alt: string, name: string) => void
 
@@ -230,18 +233,49 @@ export struct FileAttachmentBubble {
         if (this.fileSizeLabel) {
           Text(this.fileSizeLabel).fontSize(11).fontColor(Theme.TextTertiary)
         }
+        if (this.downloadResult) {
+          Text(this.downloadResult).fontSize(10).fontColor(Theme.TextTertiary)
+        }
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
 
-      Text('↓')
-        .fontSize(16)
-        .fontColor(Theme.AccentBlue)
+      if (this.isDownloading) {
+        LoadingProgress().width(16).height(16)
+      } else {
+        Text('↓')
+          .fontSize(16)
+          .fontColor(Theme.AccentBlue)
+      }
     }
     .width('100%')
     .padding(14)
     .backgroundColor('rgba(255,255,255,0.06)')
     .borderRadius(10)
+    .onClick(() => {
+      this.downloadFile()
+    })
+  }
+
+  private async downloadFile(): Promise<void> {
+    if (this.isDownloading || !this.filePath) return
+    this.isDownloading = true
+    this.downloadResult = ''
+
+    try {
+      const path = await downloadService.downloadToSandbox(
+        this.filePath,
+        this.fileName || 'file'
+      )
+      this.downloadResult = '已保存'
+      setTimeout(() => { this.downloadResult = '' }, 3000)
+    } catch (e) {
+      console.error('[FileAttachment] Download error: ' + e)
+      this.downloadResult = '下载失败'
+      setTimeout(() => { this.downloadResult = '' }, 3000)
+    }
+
+    this.isDownloading = false
   }
 
   private async loadAndPreviewContent(): Promise<void> {

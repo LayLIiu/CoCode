@@ -35,6 +35,47 @@ export class WSSessionConnection {
   pendingMessages: string[] = []
   lastPongTime: number = 0
   missedPongs: number = 0
+  // RTT 追踪
+  pingTimestamp: number = 0
+  rttSamples: number[] = []
+  private static readonly MAX_RTT_SAMPLES = 10
+
+  /** 记录一次 ping 发送时间戳 */
+  markPingSent(): void {
+    this.pingTimestamp = Date.now()
+  }
+
+  /** 记录 pong 并计算 RTT，返回本次 RTT (ms) */
+  recordPong(): number {
+    this.lastPongTime = Date.now()
+    this.missedPongs = 0
+    if (this.pingTimestamp > 0) {
+      const rtt = Date.now() - this.pingTimestamp
+      this.rttSamples.push(rtt)
+      if (this.rttSamples.length > WSSessionConnection.MAX_RTT_SAMPLES) {
+        this.rttSamples.shift()
+      }
+      this.pingTimestamp = 0
+      return rtt
+    }
+    return 0
+  }
+
+  /** 获取平均 RTT (ms)，无样本返回 0 */
+  getAverageRtt(): number {
+    if (this.rttSamples.length === 0) return 0
+    const sum = this.rttSamples.reduce((a, b) => a + b, 0)
+    return sum / this.rttSamples.length
+  }
+
+  /** 获取连接质量等级 */
+  getConnectionQuality(): 'good' | 'fair' | 'poor' | 'unknown' {
+    const avg = this.getAverageRtt()
+    if (avg <= 0) return 'unknown'
+    if (avg < 150) return 'good'
+    if (avg < 500) return 'fair'
+    return 'poor'
+  }
 }
 
 type WSMessageHandler = (sessionId: string, message: WSMessage) => void
@@ -408,8 +449,7 @@ export class WebSocketService {
       // 检测 pong 响应（Paseo 模式）
       if (json.type === 'pong') {
         if (this.globalConn) {
-          this.globalConn.lastPongTime = Date.now()
-          this.globalConn.missedPongs = 0
+          this.globalConn.recordPong()
         }
         return // pong 不往下分发
       }
@@ -623,8 +663,7 @@ export class WebSocketService {
       if (json.type === 'pong') {
         const conn = this.connections.get(sessionId)
         if (conn) {
-          conn.lastPongTime = Date.now()
-          conn.missedPongs = 0
+          conn.recordPong()
         }
         return // pong 不往下分发
       }
@@ -768,6 +807,7 @@ export class WebSocketService {
       }
 
       // 发送 ping 消息
+      conn.markPingSent()
       try {
         conn.ws.send(JSON.stringify({ type: 'ping' }), (err) => {
           if (err) {

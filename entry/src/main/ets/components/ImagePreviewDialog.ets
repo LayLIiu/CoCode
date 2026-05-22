@@ -5,6 +5,7 @@
 
 import { Theme } from '../common/Theme'
 import { fileService } from '../services/FileService'
+import { downloadService } from '../services/DownloadService'
 
 @Component
 export struct ImagePreviewDialog {
@@ -191,7 +192,7 @@ export struct ImagePreviewDialog {
   }
 
   /**
-   * 保存到相册
+   * 保存到相册（下载到应用缓存）
    */
   private async saveToGallery(): Promise<void> {
     if (this.isSaving) return
@@ -199,7 +200,9 @@ export struct ImagePreviewDialog {
     this.saveResult = ''
 
     try {
-      // 将 base64 图片保存到相册（简化处理）
+      const fileName = this.fileName || 'image_' + Date.now() + '.png'
+      const ext = fileName.indexOf('.') >= 0 ? '' : '.png'
+      await downloadService.downloadImage(this.imageSrc, fileName + ext)
       this.saveResult = '已保存到相册'
       setTimeout(() => { this.saveResult = '' }, 2000)
     } catch (e) {
