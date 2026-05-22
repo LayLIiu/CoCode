@@ -18,6 +18,7 @@ import { apiService } from '../services/APIService'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { FileAttachmentBubble } from '../components/FileAttachmentBubble'
 import { ImagePreviewDialog } from '../components/ImagePreviewDialog'
+import { toastManager } from '../services/ToastManager'
 import { fileService, FileInfo } from '../services/FileService'
 import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
 
@@ -104,8 +105,6 @@ struct ChatDetailPage {
   @State expandedThinkingIds: Set<string> = new Set()
   @State expandedToolIds: Set<string> = new Set()
   @State currentPermissionMode: PermissionMode = PermissionMode.DEFAULT
-  @State showCopyToast: boolean = false
-  @State copyToastText: string = ''
   @State showCustomInput: boolean = false
   @State customInputText: string = ''
   @State activeQuestionMessageId: string = ''
@@ -201,8 +200,6 @@ struct ChatDetailPage {
   @State isVoiceMode: boolean = false
   @State isRecording: boolean = false
   @State voiceText: string = ''
-  @State showVoiceToast: boolean = false
-  @State voiceToastText: string = ''
   private audioCapturer: audio.AudioCapturer | null = null
   private audioFeedTimer: number = -1
 
@@ -435,9 +432,7 @@ struct ChatDetailPage {
     // 2. 确保引擎已初始化（createEngine 是异步回调，备份检查）
     if (!this.asrEngine) {
       this.initSpeechEngine()
-      this.voiceToastText = '语音引擎初始化中，请稍后重试'
-      this.showVoiceToast = true
-      setTimeout(() => { this.showVoiceToast = false }, 2000)
+      toastManager.info('语音引擎初始化中，请稍后重试')
       console.warn('[Voice] 语音引擎尚未就绪，请稍后再试')
       return
     }
@@ -488,16 +483,12 @@ struct ChatDetailPage {
       }).catch((err: BusinessError) => {
         console.error('[Voice] 麦克风采集启动失败: ' + JSON.stringify(err))
         this.isRecording = false
-        this.voiceToastText = '麦克风启动失败: ' + err.message
-        this.showVoiceToast = true
-        setTimeout(() => { this.showVoiceToast = false }, 2500)
+        toastManager.error('麦克风启动失败: ' + err.message)
       })
     } catch (error) {
       console.error('[Voice] 启动语音识别失败: ' + JSON.stringify(error))
       this.isRecording = false
-      this.voiceToastText = '语音识别启动失败: ' + (error as BusinessError).message
-      this.showVoiceToast = true
-      setTimeout(() => { this.showVoiceToast = false }, 2500)
+      toastManager.error('语音识别启动失败: ' + (error as BusinessError).message)
     }
   }
 
@@ -726,11 +717,7 @@ struct ChatDetailPage {
   // MARK: - 剪贴板
 
   private copyToClipboard(text: string): void {
-    this.copyToastText = '已复制'
-    this.showCopyToast = true
-    setTimeout(() => {
-      this.showCopyToast = false
-    }, 1500)
+    toastManager.copied()
 
     try {
       const systemPasteboard = pasteboard.getSystemPasteboard()
@@ -1815,23 +1802,7 @@ struct ChatDetailPage {
         })
       }
 
-      // 语音提示 Toast
-      if (this.showVoiceToast) {
-        Column() {
-          Text(this.voiceToastText)
-            .fontSize(13)
-            .fontColor(Color.White)
-            .textAlign(TextAlign.Center)
-        }
-        .width('100%')
-        .padding({ left: 24, right: 24, top: 12, bottom: 12 })
-        .backgroundColor(Color.Black)
-        .borderRadius(20)
-        .position({ x: 0, y: 100 })
-        .zIndex(100)
       }
-
-    }
     .width('100%')
     .height('100%')
     .backgroundColor('#121214')

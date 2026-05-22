@@ -7,6 +7,7 @@ import { LoginPage } from './LoginPage'
 import { authStore } from '../stores/AuthStore'
 import { appState } from '../stores/AppState'
 import { sessionStore } from '../stores/SessionStore'
+import { GlobalToast } from '../components/GlobalToast'
 
 @Entry
 @Component
@@ -87,16 +88,23 @@ struct Index {
   }
 
   build() {
-    Column() {
-      if (!this.isInitialized) {
-        this.SplashScreen()
-      } else if (this.isLocked) {
-        this.LockScreen()
-      } else if (this.isLoggedIn) {
-        MainPage()
-      } else {
-        LoginPage()
+    Stack() {
+      Column() {
+        if (!this.isInitialized) {
+          this.SplashScreen()
+        } else if (this.isLocked) {
+          this.LockScreen()
+        } else if (this.isLoggedIn) {
+          MainPage()
+        } else {
+          LoginPage()
+        }
       }
+      .width('100%')
+      .height('100%')
+
+      // 全局 Toast 覆盖层
+      GlobalToast()
     }
     .width('100%')
     .height('100%')
