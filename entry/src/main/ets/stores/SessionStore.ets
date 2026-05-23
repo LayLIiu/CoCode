@@ -876,8 +876,8 @@ export class SessionStore {
             }
             // toolUseId 不同但 toolName 相同 → 检查 toolInput 是否相同：
             // 不同 toolInput 说明是不同调用（如 Read 不同文件），不应合并
-            const localInput = msg.toolInput ? JSON.stringify(msg.toolInput) : ''
-            const serverInput = sm.toolInput ? JSON.stringify(sm.toolInput) : ''
+            const localInput = msg.toolInput ? this.stableStringify(msg.toolInput) : ''
+            const serverInput = sm.toolInput ? this.stableStringify(sm.toolInput) : ''
             if (localInput && serverInput && localInput !== serverInput) {
               continue
             }
@@ -945,6 +945,18 @@ export class SessionStore {
     }
 
     return finalResult
+  }
+
+
+  // 稳定化 JSON.stringify：对 key 排序，消除属性顺序不确定性
+  private stableStringify(obj: Record<string, Object> | undefined | null): string {
+    if (!obj) return ''
+    const keys = Object.keys(obj).sort()
+    const pairs: string[] = []
+    for (const key of keys) {
+      pairs.push(JSON.stringify(key) + ':' + JSON.stringify(obj[key]))
+    }
+    return '{' + pairs.join(',') + '}'
   }
 
   // 生成消息内容去重键
@@ -1077,8 +1089,9 @@ export class SessionStore {
       const normalizedSeen = new Set<string>()
       const normResult: Message[] = []
       for (let i = 0; i < result.length; i++) {
-        const content = (result[i].content || '').trim().replace(/\s+/g, ' ')
-        const normKey = result[i].type + ':' + content.substring(0, 2000)
+        // 规整化内容 key：优先 content，回退到 toolResult（tool_result 的消息内容在 toolResult 字段）
+        const normContent = ((result[i].content || '') || (result[i].toolResult || '')).trim().replace(/\s+/g, ' ')
+        const normKey = result[i].type + ':' + normContent.substring(0, 2000)
         if (result[i].toolUseId) {
           // 有 toolUseId 的 tool_use 消息：按 type + toolName 去重（忽略 toolUseId 差异）
           // tool_result 有 toolResult 内容，不会走此路径
@@ -1087,7 +1100,7 @@ export class SessionStore {
             // 允许同名但不同参数的工具调用（如多次 Read 不同文件）共存，
             // 同时去重 WS 瞬时 toolUseId 与服务端 toolUseId 不同导致的重复。
             // 注意：tool_use 的 content 字段始终为空，参数存在 toolInput 中。
-            const inputStr = result[i].toolInput ? JSON.stringify(result[i].toolInput) : ''
+            const inputStr = result[i].toolInput ? this.stableStringify(result[i].toolInput) : ''
             const toolKey = result[i].type + ':tool:' + result[i].toolName + ':' + inputStr.substring(0, 500)
             if (normalizedSeen.has(toolKey)) {
               dupCount++
@@ -1190,8 +1203,8 @@ export class SessionStore {
     wsService.disconnectAll()
   }
 
-  sendMessage(content: string, attachments?: AttachmentRef[]): void {
-    if (!this.currentSessionId) return
+  sendMessage(content: string, attachments?: AttachmentRef[]): boolean {
+    if (!this.currentSessionId) return false
 
     const sessionId = this.currentSessionId
 
@@ -1209,6 +1222,7 @@ export class SessionStore {
 
     // 更新状态
     this.updateSessionStatus(sessionId, 'thinking')
+    return true
   }
 
   sendPermissionResponse(requestId: string, allowed: boolean, always: boolean = false): void {

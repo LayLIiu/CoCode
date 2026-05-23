@@ -151,6 +151,9 @@ struct ChatDetailPage {
   // 任务列表本地 @State 副本（@Builder 读取全局 Store 不被 ArkTS 追踪）
   @State taskItems: TaskItem[] = []
 
+  // 最新消息 ID（用于条件过渡动画，只有最新消息才用弹簧效果）
+  @State latestMessageId: string = ''
+
   // "最新消息"浮动按钮
   @State showNewMessageButton: boolean = false
 
@@ -561,10 +564,13 @@ struct ChatDetailPage {
       const msgs = sessionStore.messages.get(this.sessionId)
       if (msgs) {
         // 展开为新数组，确保 ArkTS @State 能检测到引用变化并触发重绘
-        // （store 中可能使用 push 就地修改同一数组引用，直接赋值 = 引用不变 → 不重绘）
         this.messages = [...msgs]
         // 自动更新分页数，确保新消息不被分页截断
         this.displayedMessageCount = Math.max(this.displayedMessageCount, msgs.length)
+        // 更新最新消息 ID（用于条件过渡动画）
+        if (msgs.length > 0) {
+          this.latestMessageId = msgs[msgs.length - 1].id
+        }
       }
       // 消息变化时同步任务列表状态（最新任务状态在 sessionStore 里更新）
       this.taskItems = sessionStore.getCurrentTasks()
@@ -581,7 +587,10 @@ struct ChatDetailPage {
       // 同步当前会话的权限模式
       this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
       // 状态变为 completed 或 idle 时停止计时器
-      if (status === 'completed' || status === 'idle') {
+      if (status === 'completed') {
+        this.stopWorkTimer()
+        this.vibrateReplyCompleted()
+      } else if (status === 'idle') {
         this.stopWorkTimer()
       }
       // 状态变为 working 时启动计时器
@@ -968,6 +977,19 @@ struct ChatDetailPage {
     } catch (e) {}
   }
 
+  // AI 回复完成时短振动提示（轻柔脉冲）
+  private vibrateReplyCompleted(): void {
+    try {
+      vibrator.startVibration({
+        type: 'time',
+        duration: 50
+      }, {
+        id: 0,
+        usage: 'notification'
+      })
+    } catch (e) {}
+  }
+
   private getTaskProgress(tasks: TaskItem[]): number {
     if (!tasks || tasks.length === 0) return 0
     const done = tasks.filter(t => t.status === 'completed' ).length
@@ -994,18 +1016,14 @@ struct ChatDetailPage {
 
   private getBottomSpacerHeight(): number {
     const inputAreaHeight = 120
-    // 吉祥物指示器（条件显示）高度约 45px（27px 吉祥物 + 上下 padding 12px + 间距）
-    const mascotHeight = (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
-      this.chatStatus === 'tool_executing' || this.chatStatus === 'permission_pending' ||
-      this.chatStatus === 'question_pending') ? 45 : 0
     const tasks = this.taskItems
     if (tasks.length === 0 || sessionStore.taskBarDismissed) {
-      return inputAreaHeight + mascotHeight
+      return inputAreaHeight
     }
     // 折叠状态：分隔线 + 标题行(~44) + 间距 + 输入框
     const collapsedHeight = 57
     if (!sessionStore.taskBarExpanded) {
-      return inputAreaHeight + collapsedHeight + mascotHeight
+      return inputAreaHeight + collapsedHeight
     }
     // 展开状态：折叠高度 + 任务列表行数
     const expandedHeight = Math.min(tasks.length * 50, 200)
@@ -1486,12 +1504,7 @@ struct ChatDetailPage {
               }
             }
             .rotate({ angle: 180 })
-            .transition(TransitionEffect.asymmetric(
-              TransitionEffect.OPACITY
-                .combine(TransitionEffect.translate({ y: -40 }))
-                .animation({ duration: 300, curve: Curve.FastOutSlowIn }),
-              TransitionEffect.OPACITY.animation({ duration: 150 })
-            ))
+            .transition(this.getMessageTransition(message))
           }, (message: Message) => {
             if (message.type === 'tool_use') {
               let extra = ''
@@ -1499,7 +1512,7 @@ struct ChatDetailPage {
                 const childCount = this.getChildToolCalls(message.toolUseId || '').length
                 extra = '_' + (message.agentTaskStatus || '') + '_c' + childCount
               }
-              return message.id + '_' + (message.toolStatus || '') + extra
+              return message.id + extra
             }
             if (message.type === 'permission_request') {
               return message.id + '_' + (message.isPermissionHandled ? 'done' : 'pending')
@@ -1836,6 +1849,23 @@ struct ChatDetailPage {
       newSet.add('streaming-thinking')
       this.expandedThinkingIds = newSet
     }
+  }
+
+  // 消息进入动画：只有最新的一条用弹簧效果，其余直接淡入
+  private getMessageTransition(message: Message): TransitionEffect {
+    if (this.isNewestMessage(message)) {
+      return TransitionEffect.asymmetric(
+        TransitionEffect.OPACITY
+          .combine(TransitionEffect.translate({ y: -50 }))
+          .animation({ duration: 600, curve: curves.springCurve(0.3, 1, 200, 14) }),
+        TransitionEffect.OPACITY.animation({ duration: 150 })
+      )
+    }
+    return TransitionEffect.OPACITY.animation({ duration: 100 })
+  }
+
+  private isNewestMessage(message: Message): boolean {
+    return message.id === this.latestMessageId
   }
 
   // 映射 chatStatus 到 MascotStatus
@@ -4291,9 +4321,11 @@ struct ChatDetailPage {
   private sendMessage(): void {
     const text = this.inputText.trim()
     if (!text && this.pendingAttachments.length === 0) return
-    sessionStore.sendMessage(text, this.pendingAttachments)
-    this.inputText = ''
-    this.pendingAttachments = []
+    const sent = sessionStore.sendMessage(text, this.pendingAttachments)
+    if (sent) {
+      this.inputText = ''
+      this.pendingAttachments = []
+    }
   }
 
   private async pickImage(): Promise<void> {
