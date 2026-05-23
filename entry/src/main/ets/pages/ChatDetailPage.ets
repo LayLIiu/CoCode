@@ -10,7 +10,6 @@ import { hdsMaterial, HdsTabs, hdsEffect } from '@kit.UIDesignKit'
 import { curves, RectShape } from '@kit.ArkUI'
 import { speechRecognizer } from '@kit.CoreSpeechKit'
 import { audio } from '@kit.AudioKit'
-import { media } from '@kit.MediaKit'
 import { abilityAccessCtrl, common } from '@kit.AbilityKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { sessionStore } from '../stores/SessionStore'
@@ -187,8 +186,9 @@ struct ChatDetailPage {
   @State mascotScale: number = 1.0
   private workTimer: number = -1
 
-  // 音效：标记本轮 AI 回复是否已播放"已连接"音效，发送新消息时重置
+  // 音效：标记本轮 AI 回复是否已播放"已连接"和"已完成"音效，发送新消息时重置
   private hasPlayedConnectSound: boolean = false
+  private hasPlayedCompleteSound: boolean = false
 
   // 分页加载
   @State displayedMessageCount: number = 50
@@ -616,18 +616,23 @@ struct ChatDetailPage {
       if (status === 'completed') {
         this.stopWorkTimer()
         this.vibrateReplyCompleted()
-        this.playSound('staplebops-02.m4a')
-        console.info('[ChatDetailPage] status=completed, played end sound')
+        if (!this.hasPlayedCompleteSound) {
+          this.hasPlayedCompleteSound = true
+          this.playSound('staplebops-02.wav')
+          console.info('[ChatDetailPage] status=completed, played end sound')
+        }
       } else if (status === 'idle') {
         this.stopWorkTimer()
       }
       // 状态变为 working 时启动计时器
       if (status === 'thinking' || status === 'streaming' || status === 'tool_executing') {
         this.startWorkTimer()
-        // AI 首次响应时播放"已连接"音效（每轮只播放一次）
-        if (status === 'streaming' && !this.hasPlayedConnectSound) {
+        // 进入工作状态时重置音效标志（为下一轮做准备）
+        if (!this.hasPlayedConnectSound) {
           this.hasPlayedConnectSound = true
-          this.playSound('staplebops-01.m4a')
+          this.hasPlayedCompleteSound = false
+          this.playSound('staplebops-01.wav')
+          console.info('[ChatDetailPage] status=' + status + ', played start sound')
         }
       }
     }
@@ -1023,47 +1028,62 @@ struct ChatDetailPage {
     } catch (e) {}
   }
 
-  // 播放 rawfile 音效（使用 AVPlayer 播放 M4A）
+  // 播放 rawfile 音效（使用 AudioRenderer 播放 WAV PCM）
   private async playSound(fileName: string): Promise<void> {
     try {
       console.info(`[ChatDetailPage] playSound: ${fileName}`)
       const ctx: common.Context = getContext(this) as common.Context
-      const rawFd = await ctx.resourceManager.getRawFd(fileName)
+      const fileData: Uint8Array = await ctx.resourceManager.getRawFileContent(fileName)
+      if (!fileData || fileData.length <= 44) {
+        console.error(`[ChatDetailPage] playSound: invalid file data for ${fileName}`)
+        return
+      }
 
-      const avPlayer: media.AVPlayer = await media.createAVPlayer()
-
-      // 等待 prepared 状态
-      await new Promise<void>((resolve, reject) => {
-        const onStateChange = (state: media.AVPlayerState): void => {
-          if (state === 'prepared') {
-            avPlayer.off('stateChange', onStateChange)
-            resolve()
-          } else if (state === 'error') {
-            avPlayer.off('stateChange', onStateChange)
-            reject(new Error('AVPlayer prepare error'))
-          }
+      // 动态扫描 WAV 头，找到 data chunk 偏移和大小
+      let dataOffset = 12
+      let dataSize = 0
+      let foundData = false
+      while (dataOffset + 8 <= fileData.length) {
+        const chunkId = String.fromCharCode(fileData[dataOffset], fileData[dataOffset + 1],
+          fileData[dataOffset + 2], fileData[dataOffset + 3])
+        const chunkSize = fileData[dataOffset + 4] | (fileData[dataOffset + 5] << 8) |
+          (fileData[dataOffset + 6] << 16) | (fileData[dataOffset + 7] << 24)
+        if (chunkId === 'data') {
+          dataOffset += 8
+          dataSize = chunkSize
+          foundData = true
+          break
         }
-        avPlayer.on('stateChange', onStateChange)
-        avPlayer.fdSrc = { fd: rawFd.fd, offset: rawFd.offset, length: rawFd.length }
-        avPlayer.prepare()
-      })
+        dataOffset += 8 + chunkSize
+      }
+      if (!foundData || dataSize <= 0) {
+        console.error(`[ChatDetailPage] playSound: no data chunk found`)
+        return
+      }
 
-      // 播放并等待完成
-      await new Promise<void>((resolve, reject) => {
-        const onStateChange = (state: media.AVPlayerState): void => {
-          if (state === 'completed') {
-            avPlayer.off('stateChange', onStateChange)
-            resolve()
-          } else if (state === 'error') {
-            avPlayer.off('stateChange', onStateChange)
-            reject(new Error('AVPlayer play error'))
-          }
+      // 提取 PCM 数据
+      const pcmData = fileData.subarray(dataOffset, dataOffset + dataSize)
+      const pcmBuffer: ArrayBuffer = new ArrayBuffer(pcmData.length)
+      new Uint8Array(pcmBuffer).set(pcmData)
+
+      // 固定参数：已知 WAV 为 44100Hz / 单声道 / 16bit
+      const audioRendererOptions: audio.AudioRendererOptions = {
+        streamInfo: {
+          samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_44100,
+          channels: audio.AudioChannel.CHANNEL_1,
+          sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
+          encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW
+        },
+        rendererInfo: {
+          usage: audio.StreamUsage.STREAM_USAGE_MUSIC,
+          rendererFlags: 0
         }
-        avPlayer.on('stateChange', onStateChange)
-        avPlayer.play()
-      })
-
-      await avPlayer.release()
+      }
+      const audioRenderer: audio.AudioRenderer = await audio.createAudioRenderer(audioRendererOptions)
+      await audioRenderer.start()
+      await audioRenderer.write(pcmBuffer)
+      await audioRenderer.stop()
+      await audioRenderer.release()
       console.info(`[ChatDetailPage] playSound: ${fileName} played successfully`)
     } catch (e) {
       console.error(`[ChatDetailPage] playSound exception: ${e}`)
@@ -4403,8 +4423,9 @@ struct ChatDetailPage {
     if (sent) {
       this.inputText = ''
       this.pendingAttachments = []
-      // 重置"已连接"音效标志，下一轮 AI 回复时重新播放
+      // 重置音效标志，下一轮 AI 回复时重新播放开始/结束音效
       this.hasPlayedConnectSound = false
+      this.hasPlayedCompleteSound = false
     }
   }
 
