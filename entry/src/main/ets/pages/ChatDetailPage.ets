@@ -1857,7 +1857,7 @@ struct ChatDetailPage {
       return TransitionEffect.asymmetric(
         TransitionEffect.OPACITY
           .combine(TransitionEffect.translate({ y: -50 }))
-          .animation({ duration: 600, curve: curves.springCurve(0.3, 1, 200, 14) }),
+          .animation({ duration: 600, curve: curves.springCurve(0.3, 1, 200, 25) }),
         TransitionEffect.OPACITY.animation({ duration: 150 })
       )
     }
