@@ -80,6 +80,12 @@ export class SessionStore {
   // 定期重复消息清理定时器（每 60 秒兜底清一次）
   private dedupCleanupTimer: number = -1
 
+  // 串行化保存队列（防止并发写入竞态导致数据丢失）
+  private saveQueues: Map<string, Promise<void>> = new Map()
+
+  // syncMessagesFromServer 并发保护 Set（防止重复调用导致竞态）
+  private syncingSessions: Set<string> = new Set()
+
   // MARK: - 监听者注册
 
   addSessionsChangedListener(listener: () => void): void {
@@ -690,6 +696,16 @@ export class SessionStore {
     }
   }
 
+  // 串行化保存队列：确保同一会话的保存操作按顺序执行，防止并发竞态
+  private enqueueSave(sessionId: string, saveFn: () => Promise<void>): Promise<void> {
+    const prev = this.saveQueues.get(sessionId) || Promise.resolve()
+    const next = prev.then(() => saveFn()).catch((e: Error) => {
+      console.error(`[SessionStore] Save queue error for ${sessionId}: ${e.message}`)
+    })
+    this.saveQueues.set(sessionId, next)
+    return next
+  }
+
   // 保存会话到本地存储
   async saveSessionsToStorage(): Promise<void> {
     await storageService.saveSessions(this.sessions)
@@ -699,6 +715,10 @@ export class SessionStore {
   // MARK: - 消息操作
 
   async loadMessages(sessionId: string): Promise<void> {
+    // 重新加载时清理流式缓冲，防止残留 Head 数据被误刷入 Tail
+    // （页面重新进入时 streamHeads 可能包含上次未刷完的流式内容）
+    this.streamHeads.delete(sessionId)
+
     try {
       // 检查内存中是否已有消息，避免重复加载覆盖内存数据
       const existing = this.messages.get(sessionId)
@@ -727,22 +747,29 @@ export class SessionStore {
 
   // 后台同步服务器消息
   private async syncMessagesFromServer(sessionId: string): Promise<void> {
+    // 并发保护：已有同步进行中则跳过（防止重复调用导致竞态）
+    if (this.syncingSessions.has(sessionId)) {
+      console.info(`[SessionStore] syncMessagesFromServer: already syncing ${sessionId}, skip`)
+      return
+    }
+    this.syncingSessions.add(sessionId)
     try {
       const serverMessages = await apiService.getMessages(sessionId, 200)
 
       // 重新获取当前本地消息（可能已被 WebSocket 更新），避免覆盖实时消息
       const currentLocal = this.messages.get(sessionId) || []
-      const merged = this.mergeMessages(currentLocal, serverMessages)
+      let merged = this.mergeMessages(currentLocal, serverMessages)
 
       // 检查 merge 计算期间是否有新的 WS 消息到达（避免覆盖丢失）
       const afterMerge = this.messages.get(sessionId) || []
       if (afterMerge.length > currentLocal.length) {
         for (let i = currentLocal.length; i < afterMerge.length; i++) {
           const newMsg = afterMerge[i]
-          // ID 去重 + 内容去重，防止 WS 流式消息与服务器消息 ID 不同导致的重复
+          // 改用 messageContentKey 比较，避免 type+content 误判（tool_use content 全为空）
+          const newKey = this.messageContentKey(newMsg)
           const existsById = merged.some(m => m.id === newMsg.id)
-          const existsByContent = merged.some(m => m.type === newMsg.type && m.content === newMsg.content)
-          if (!existsById && !existsByContent) {
+          const existsByKey = merged.some(m => this.messageContentKey(m) === newKey)
+          if (!existsById && !existsByKey) {
             merged.push(newMsg)
           }
         }
@@ -757,6 +784,27 @@ export class SessionStore {
       // 打印所有 tool_use 消息的工具名
       const toolNamesInMerge = merged.filter(m => m.type === 'tool_use' && m.toolName).map(m => m.toolName)
       console.info(`[SessionStore] syncMessagesFromServer merged ${merged.length} msgs, tool_use names: [${toolNamesInMerge.join(', ')}]`)
+
+      // 去重检测并清理：用 messageContentKey 去重（type:content），防止内容微差导致重复
+      {
+        const deduped: Message[] = []
+        const seenKeys: Map<string, boolean> = new Map()
+        let removedDupCount = 0
+        for (let i = 0; i < merged.length; i++) {
+          const key = this.messageContentKey(merged[i])
+          if (seenKeys.has(key)) {
+            removedDupCount++
+            console.warn(`[SessionStore] Removing dup after sync: #${removedDupCount} key=${key.substring(0, 100)} type=${merged[i].type} id=${merged[i].id}`)
+            continue
+          }
+          seenKeys.set(key, true)
+          deduped.push(merged[i])
+        }
+        if (removedDupCount > 0) {
+          console.warn(`[SessionStore] Removed ${removedDupCount} dups from merged result, deduped=${deduped.length}`)
+          merged = deduped
+        }
+      }
 
       // 同步后重新提取任务列表
       this.refreshTasksFromMessages(sessionId)
@@ -774,10 +822,12 @@ export class SessionStore {
         console.info(`[SessionStore] Tasks API error (non-fatal): ${e}`)
       }
 
-      // 保存到本地
-      await storageService.saveMessages(sessionId, merged)
+      // 串行化保存到本地（通过队列确保顺序）
+      this.enqueueSave(sessionId, () => storageService.saveMessages(sessionId, merged))
     } catch (e) {
       console.error(`[SessionStore] Sync messages error: ${e}`)
+    } finally {
+      this.syncingSessions.delete(sessionId)
     }
   }
 
@@ -786,17 +836,13 @@ export class SessionStore {
   private mergeMessages(localMessages: Message[], serverMessages: Message[]): Message[] {
     // 为服务器消息构建多维去重组
     const serverKeys: Map<string, boolean> = new Map()
-    const serverToolUseIds: Set<string> = new Set()
     const serverIds: Set<string> = new Set()
 
     for (let i = 0; i < serverMessages.length; i++) {
       const msg = serverMessages[i]
-      // 主键: type + content 摘要
+      // 主键: type + toolUseId / type + id / type + content
       const primaryKey = this.messageContentKey(msg)
       serverKeys.set(primaryKey, true)
-      if (msg.toolUseId) {
-        serverToolUseIds.add(msg.toolUseId)
-      }
       if (msg.id) {
         serverIds.add(msg.id)
       }
@@ -810,22 +856,56 @@ export class SessionStore {
       const msg = localMessages[i]
       const primaryKey = this.messageContentKey(msg)
 
-      // 跳过: 主键匹配
+      // 跳过: 主键匹配（含 type + toolUseId / type + id / type + content）
       if (serverKeys.has(primaryKey)) continue
-      // 跳过: toolUseId 匹配
-      if (msg.toolUseId && serverToolUseIds.has(msg.toolUseId)) continue
       // 跳过: id 匹配
       if (msg.id && serverIds.has(msg.id)) continue
 
-      // 额外检查: 对没有 toolUseId 的本地消息，检查服务器是否有同 type 同内容的
+      // 额外检查: 对 tool_use 消息，检查服务器是否有同 type + 同 toolName 的消息
+      // （WS 流式 toolUseId 与服务端 toolUseId 不同时，主键匹配会失败）
       let foundByContent = false
-      if (!msg.toolUseId && msg.type !== 'user') {
+      if (msg.type === 'tool_use' && msg.toolName) {
+        for (let j = 0; j < serverMessages.length; j++) {
+          const sm = serverMessages[j]
+          if (sm.type === 'tool_use' && sm.toolName === msg.toolName) {
+            // tool_use 的 content 通常为空，靠 toolName + 时间排序去重
+            // 进一步校验：如果两者 toolUseId 相同说明是同一工具调用
+            if (sm.toolUseId && sm.toolUseId === msg.toolUseId) {
+              foundByContent = true
+              break
+            }
+            // toolUseId 不同但 toolName 相同 → 按时间附近判定是否同一调用
+            const msgTime = new Date(msg.timestamp).getTime()
+            const smTime = new Date(sm.timestamp).getTime()
+            if (Math.abs(msgTime - smTime) < 5000) {
+              foundByContent = true
+              break
+            }
+          }
+        }
+      }
+
+      // 对没有 toolUseId 的本地消息，检查服务器是否有同 type 同内容的
+      if (!msg.toolUseId) {
         for (let j = 0; j < serverMessages.length; j++) {
           const sm = serverMessages[j]
           if (sm.type === msg.type) {
             const localContent = (msg.content || msg.toolResult || '').substring(0, 2000)
             const serverContent = (sm.content || sm.toolResult || '').substring(0, 2000)
             if (localContent.length > 10 && localContent === serverContent) {
+              foundByContent = true
+              break
+            }
+            // 本地被切分的段落可能是服务端合并消息的子串（流式输出被 tool 事件打断后）
+            if (localContent.length > 10 && localContent.length < serverContent.length &&
+                serverContent.includes(localContent)) {
+              foundByContent = true
+              break
+            }
+            // 规整化对比：trim + 合并空白，捕获流式 vs 服务端格式差异（尾部换行、前后空格等）
+            const normLocal = localContent.trim().replace(/\s+/g, ' ')
+            const normServer = serverContent.trim().replace(/\s+/g, ' ')
+            if (normLocal.length > 10 && normLocal === normServer) {
               foundByContent = true
               break
             }
@@ -862,15 +942,11 @@ export class SessionStore {
 
   // 生成消息内容去重键
   private messageContentKey(msg: Message): string {
-    // 优先使用 toolUseId 或服务器下发的稳定 id
+    // 优先使用 toolUseId + type 作为去重键（避免 tool_use 和 tool_result 共享 toolUseId 互相去重）
     if (msg.toolUseId) {
-      return 'toolUseId:' + msg.toolUseId
+      return msg.type + ':toolUseId:' + msg.toolUseId
     }
-    if (msg.id && !msg.id.startsWith('user-') && !msg.id.startsWith('err-') && !msg.id.startsWith('sys-')
-        && !msg.id.startsWith('assistant-') && !msg.id.startsWith('stream-')) {
-      return 'id:' + msg.id
-    }
-    // fallback：按类型 + 内容去重（不含时间戳，避免本地和服务器时间戳不一致导致重复）
+    // 统一使用内容键，确保服务端 ID 消息和本地流式 ID 消息同内容可去重
     const content = (msg.content || '') || (msg.toolResult || '')
     return msg.type + ':' + content.substring(0, 2000)
   }
@@ -891,7 +967,7 @@ export class SessionStore {
     }
     if (!exists) {
       // 内容级去重：防止 ID 不同但内容相同的消息重复
-      // （例如 flushStreamingBuffers 和 flushHeadToTail 可能添加同一内容的两个消息）
+      // （Head/Tail 双路径或 WS 重放可能导致同一内容抵达两次）
       const newKey = this.messageContentKey(message)
       for (let i = 0; i < sessionMessages.length; i++) {
         if (this.messageContentKey(sessionMessages[i]) === newKey) {
@@ -906,8 +982,8 @@ export class SessionStore {
       this.messages.set(sessionId, sessionMessages)
       this.notifyMessagesChanged(sessionId)
 
-      // 异步保存到本地
-      storageService.saveMessages(sessionId, sessionMessages)
+      // 串行化保存到本地（通过队列确保顺序，防止并发竞态）
+      this.enqueueSave(sessionId, () => storageService.saveMessages(sessionId, this.messages.get(sessionId) || []))
     }
   }
 
@@ -947,8 +1023,8 @@ export class SessionStore {
 
     if (changed) {
       this.messages.set(sessionId, tail)
-      // 将合并后的消息持久化到本地存储（移除 isStreaming 标记后）
-      storageService.saveMessages(sessionId, tail)
+      // 串行化保存到本地（通过队列确保顺序）
+      this.enqueueSave(sessionId, () => storageService.saveMessages(sessionId, tail))
       this.notifyMessagesChanged(sessionId)
     }
     this.streamHeads.set(sessionId, [])
@@ -965,17 +1041,72 @@ export class SessionStore {
   /**
    * 获取去重后的消息列表（展示层安全网）
    * 用 messageContentKey 过滤掉 ID 不同但内容完全相同的重复消息。
+   * 额外按 type+content 去重，覆盖服务端 ID 与本地流式 ID 不一致的情况。
+   * 对 tool_use 特殊处理：忽略 toolUseId 差异，按 type + toolName 去重，
+   * 解决 WS 瞬时 toolUseId 与服务端 toolUseId 不同导致的重复。
    * 不修改原始数组，仅用于 UI 渲染。
    */
   getDedupedMessages(sessionId: string): Message[] {
     const tail = this.messages.get(sessionId) || []
     const result: Message[] = []
     const seen = new Set<string>()
+    let dupCount = 0
     for (let i = 0; i < tail.length; i++) {
       const key = this.messageContentKey(tail[i])
-      if (seen.has(key)) continue
+      if (seen.has(key)) {
+        dupCount++
+        const logContent = (tail[i].content || '').substring(0, 60)
+        console.info(`[SessionStore] getDedupedMessages #${dupCount}: skip type=${tail[i].type} id=${tail[i].id} key=${key.substring(0, 80)} content="${logContent}"`)
+        continue
+      }
       seen.add(key)
       result.push(tail[i])
+    }
+    // 用规整化内容再做一道去重（trim + 合并空白），捕获流式 vs 服务端格式差异
+    if (dupCount === 0 && result.length >= 2) {
+      const normalizedSeen = new Set<string>()
+      const normResult: Message[] = []
+      for (let i = 0; i < result.length; i++) {
+        const content = (result[i].content || '').trim().replace(/\s+/g, ' ')
+        const normKey = result[i].type + ':' + content.substring(0, 2000)
+        if (result[i].toolUseId) {
+          // 有 toolUseId 的 tool_use 消息：按 type + toolName 去重（忽略 toolUseId 差异）
+          // tool_result 有 toolResult 内容，不会走此路径
+          if (result[i].type === 'tool_use' && result[i].toolName) {
+            const toolKey = result[i].type + ':tool:' + result[i].toolName
+            if (normalizedSeen.has(toolKey)) {
+              dupCount++
+              console.info(`[SessionStore] getDedupedMessages toolDup #${dupCount}: skip type=${result[i].type} toolName=${result[i].toolName} toolUseId=${result[i].toolUseId}`)
+              continue
+            }
+            normalizedSeen.add(toolKey)
+          } else {
+            // 非 tool 消息但有 toolUseId，用原始 key（同第一道去重）
+            if (normalizedSeen.has(normKey)) {
+              dupCount++
+              console.info(`[SessionStore] getDedupedMessages normDup #${dupCount}: skip type=${result[i].type} id=${result[i].id}`)
+              continue
+            }
+            normalizedSeen.add(normKey)
+          }
+          normResult.push(result[i])
+          continue
+        }
+        if (normalizedSeen.has(normKey)) {
+          dupCount++
+          console.info(`[SessionStore] getDedupedMessages normDup #${dupCount}: skip type=${result[i].type} id=${result[i].id} normKey=${normKey.substring(0, 80)}`)
+          continue
+        }
+        normalizedSeen.add(normKey)
+        normResult.push(result[i])
+      }
+      if (dupCount > 0) {
+        console.info(`[SessionStore] getDedupedMessages: removed ${dupCount} dups (incl normalized) from ${tail.length} msgs for ${sessionId}`)
+        return normResult
+      }
+    }
+    if (dupCount > 0) {
+      console.info(`[SessionStore] getDedupedMessages: removed ${dupCount} dups from ${tail.length} msgs for ${sessionId}`)
     }
     return result
   }
@@ -985,7 +1116,14 @@ export class SessionStore {
    * 每 60 秒执行一次，作为最后的兜底防线
    */
   private cleanupDuplicateMessages(): void {
-    for (const [sessionId, msgs] of this.messages) {
+    // ArkTS 不支持 for...of 解构，改用 Map.forEach
+    const sessionIds: string[] = []
+    this.messages.forEach((_msgs: Message[], sid: string) => {
+      sessionIds.push(sid)
+    })
+    for (let si = 0; si < sessionIds.length; si++) {
+      const sessionId = sessionIds[si]
+      const msgs = this.messages.get(sessionId)
       if (!msgs || msgs.length < 2) continue
       const cleaned: Message[] = []
       const seen = new Set<string>()
@@ -1002,7 +1140,7 @@ export class SessionStore {
       if (changed) {
         console.info(`[SessionStore] Cleaned ${msgs.length - cleaned.length} duplicate(s) for ${sessionId}`)
         this.messages.set(sessionId, cleaned)
-        storageService.saveMessages(sessionId, cleaned)
+        this.enqueueSave(sessionId, () => storageService.saveMessages(sessionId, cleaned))
         this.notifyMessagesChanged(sessionId)
       }
     }
@@ -1188,11 +1326,21 @@ export class SessionStore {
 
     // ⚠️ 去重检查必须在 rawMessageListener 之前！
     // 防止 WS 消息经会话 WS + 全局广播双通道到达时，ChatDetailPage 被触发两次，
-    // 导致 streamingText 重复积累（内容翻倍）或 flushStreamingBuffers 二次插入。
-    // 优先用 msg.id（最可靠），没有 ID 时降级到 type+content 摘要
-    const dedupKey = msg.id
-      ? sessionId + ':' + msg.id + ':' + msg.type
-      : sessionId + ':no-id:' + msg.type + ':' + (typeof msg.text === 'string' ? msg.text.substring(0, 100) : '')
+    // 导致 streamingText 重复积累（内容翻倍）或消息重复插入。
+    // 优先用 msg.id（最可靠），没有 ID 时降级到 toolUseId/type+content 多维摘要
+    let dedupKey: string
+    if (msg.id && !msg.id.startsWith('tool-')) {
+      dedupKey = sessionId + ':id:' + msg.id + ':' + msg.type
+    } else if (msg.toolUseId) {
+      // 必须包含 msg.type，防止 tool_use_complete 和 tool_result 共享 toolUseId 互相去重
+      dedupKey = sessionId + ':type:' + msg.type + ':toolUseId:' + msg.toolUseId
+    } else {
+      // 降级：type + text/toolName/content 构建摘要，避免只取前100字符导致的误去重
+      const textPart = typeof msg.text === 'string' ? msg.text.substring(0, 200) : ''
+      const contentPart = typeof msg.content === 'string' ? (msg.content as string).substring(0, 200) : ''
+      const toolPart = msg.toolName || ''
+      dedupKey = sessionId + ':no-id:' + msg.type + ':' + toolPart + ':' + textPart + ':' + contentPart
+    }
     if (this.recentMessageIds.has(dedupKey)) {
       console.info(`[SessionStore] Dedup: skipping duplicate msg ${msg.id || '(no-id)'} (${msg.type})`)
       return

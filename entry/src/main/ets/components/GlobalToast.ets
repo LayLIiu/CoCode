@@ -1,16 +1,19 @@
 /**
  * 全局 Toast 组件 — 在 Index 根节点渲染，覆盖所有页面
  *
- * 通过 ToastManager 监听器模式触发
+ * 玻璃半透明风格 + 顶部滑入动画
  */
 
+import { curves } from '@kit.ArkUI'
 import { toastManager, type ToastType, type ToastOptions } from '../services/ToastManager'
+import { Theme } from '../common/Theme'
 
 @Component
 export struct GlobalToast {
   @State toastMessage: string = ''
   @State toastType: ToastType = 'info'
   @State toastVisible: boolean = false
+  @State toastOffsetY: number = -80
   private dismissTimer: number = -1
   private unsubscribe: (() => void) | null = null
 
@@ -32,7 +35,6 @@ export struct GlobalToast {
   }
 
   private showToast(options: ToastOptions): void {
-    // 清除之前的定时器
     if (this.dismissTimer >= 0) {
       clearTimeout(this.dismissTimer)
       this.dismissTimer = -1
@@ -40,26 +42,35 @@ export struct GlobalToast {
 
     this.toastMessage = options.message
     this.toastType = options.type
-    this.toastVisible = true
 
-    // 自动消失
+    // 滑入
+    animateTo({ curve: curves.responsiveSpringMotion(0.5, 0.6) }, () => {
+      this.toastOffsetY = 0
+    })
+
+    // 定时滑出
     this.dismissTimer = setTimeout(() => {
-      this.toastVisible = false
-      this.dismissTimer = -1
+      animateTo({ duration: 250, curve: Curve.EaseIn }, () => {
+        this.toastOffsetY = -80
+      })
+      this.dismissTimer = setTimeout(() => {
+        this.toastVisible = false
+        this.dismissTimer = -1
+      }, 280)
     }, options.duration)
   }
 
-  private getToastColor(): ResourceColor {
+  private getAccentColor(): ResourceColor {
     switch (this.toastType) {
       case 'success':
-        return '#34C759'
+        return Theme.AccentGreen
       case 'error':
-        return '#FF3B30'
+        return Theme.ErrorColor
       case 'warning':
-        return '#FF9F0A'
+        return Theme.AccentOrange
       case 'info':
       default:
-        return '#0A84FF'
+        return Theme.AccentBlue
     }
   }
 
@@ -79,13 +90,22 @@ export struct GlobalToast {
 
   build() {
     Stack() {
-      if (this.toastVisible) {
+      if (this.toastVisible || this.toastOffsetY > -80) {
         Row({ space: 8 }) {
+          // 左侧色条
+          Column()
+            .width(3)
+            .height(20)
+            .backgroundColor(this.getAccentColor())
+            .borderRadius(1.5)
+
+          // 图标
           Text(this.getIconUnicode())
             .fontSize(14)
-            .fontColor(Color.White)
+            .fontColor(this.getAccentColor())
             .fontWeight(FontWeight.Bold)
 
+          // 消息
           Text(this.toastMessage)
             .fontSize(14)
             .fontColor(Color.White)
@@ -93,18 +113,22 @@ export struct GlobalToast {
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
         }
-        .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-        .backgroundColor(Color.Black)
-        .borderRadius(20)
+        .padding({ left: 14, right: 16, top: 10, bottom: 10 })
+        .backgroundColor('rgba(30, 30, 30, 0.85)')
+        .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
+        .borderRadius(14)
+        .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.1)' })
         .alignItems(VerticalAlign.Center)
-        .shadow({ radius: 8, color: '#33000000', offsetY: 4 })
-        .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+        .translate({ y: this.toastOffsetY })
+        .shadow({ radius: 16, color: '#33000000', offsetY: 6 })
+        .transition(TransitionEffect.OPACITY.animation({ duration: 150 }))
       }
     }
     .width('100%')
     .height('100%')
     .alignContent(Alignment.Top)
-    .padding({ top: 60 })
+    .padding({ top: 56, left: 20, right: 20 })
     .hitTestBehavior(HitTestMode.None)
+    .clip(true)
   }
 }

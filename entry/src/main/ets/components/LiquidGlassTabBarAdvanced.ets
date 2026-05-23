@@ -1,3 +1,4 @@
+import { curves } from '@kit.ArkUI'
 import { Theme } from '../common/Theme'
 import { Constants, TabIndex } from '../common/Constants'
 
@@ -120,10 +121,9 @@ export struct LiquidGlassTabBarAdvanced {
    */
   private updateUnderlinePosition(index: number, animate: boolean) {
     if (animate) {
-      // 液态弹跳效果
+      // 液态弹性效果 — 用弹簧曲线代替三段 setTimeout
       animateTo({
-        duration: 400,
-        curve: Curve.FastOutSlowIn
+        curve: curves.responsiveSpringMotion(0.5, 0.55)
       }, () => {
         this.underlineTranslateX = index * (this.tabWidth + this.tabSpacing);
         this.underlineScale = 1.0;
@@ -144,7 +144,7 @@ export struct LiquidGlassTabBarAdvanced {
         .height(24)
         .fillColor(this.currentIndex === index ? Theme.AccentBlue : Theme.TextSecondary)
         .animation({ duration: 200, curve: Curve.EaseInOut });
-      
+
       Text(item.label)
         .fontSize(Theme.FontTiny)
         .fontColor(this.currentIndex === index ? Theme.AccentBlue : Theme.TextSecondary)
@@ -158,23 +158,17 @@ export struct LiquidGlassTabBarAdvanced {
     .alignItems(HorizontalAlign.Center)
     .onClick(() => {
       if (this.currentIndex !== index) {
-        // 液态弹跳动画：先缩放 -> 再回弹 -> 恢复
-        animateTo({ duration: 100 }, () => {
+        // 液态弹跳效果 — 弹簧曲线自动处理回弹，无需 setTimeout 链
+        animateTo({ curve: curves.responsiveSpringMotion(0.4, 0.3) }, () => {
           this.underlineScale = 0.85;
         });
-        
+        // 弹簧自动回弹到 1.0
         setTimeout(() => {
-          animateTo({ duration: 150 }, () => {
-            this.underlineScale = 1.15;
+          animateTo({ curve: curves.responsiveSpringMotion(0.3, 0.6) }, () => {
+            this.underlineScale = 1.0;
           });
-          
-          setTimeout(() => {
-            animateTo({ duration: 100 }, () => {
-              this.underlineScale = 1.0;
-            });
-          }, 150);
-        }, 100);
-        
+        }, 60);
+
         // 更新当前Tab
         this.currentIndex = index;
         this.updateUnderlinePosition(index, true);

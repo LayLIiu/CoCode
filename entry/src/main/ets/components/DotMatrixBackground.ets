@@ -19,7 +19,8 @@ const SPACING = 16
 const DISPLACEMENT = 4
 const TIME_SPEED = 0.018
 const ROTATION_SPEED = 0.3
-const FPS_INTERVAL = 16
+const FPS_INTERVAL = 16          // ~60fps 全速
+const ECO_FPS_INTERVAL = 50      // ~20fps 节能模式
 
 @Component
 export struct DotMatrixBackground {
@@ -31,6 +32,11 @@ export struct DotMatrixBackground {
   private w: number = 0
   private h: number = 0
   private hasDrawnOnce: boolean = false
+  private frameCount: number = 0
+  // 节能模式：每 3 帧才重新绘制
+  private skipFrameMod: number = 3
+  // 可见性状态
+  private isVisible: boolean = false
 
   build() {
     Canvas(this.ctx)
@@ -39,10 +45,12 @@ export struct DotMatrixBackground {
       .hitTestBehavior(HitTestMode.None)
       .onReady(() => {
         if (this.active) {
+          this.isVisible = true
           this.startAnimation()
         }
       })
       .onVisibleAreaChange([0.0, 1.0], (isVisible: boolean, currentRatio: number) => {
+        this.isVisible = isVisible
         if (isVisible && this.active) {
           this.resumeAnimation()
         } else {
@@ -59,6 +67,7 @@ export struct DotMatrixBackground {
     if (this.isAnimating) return
     this.isAnimating = true
     this.time = 0
+    this.frameCount = 0
     this.animId = setTimeout(() => { this.animate() }, FPS_INTERVAL)
   }
 
@@ -73,17 +82,28 @@ export struct DotMatrixBackground {
   private resumeAnimation(): void {
     if (this.isAnimating) return
     if (this.hasDrawnOnce) {
-      // 恢复后重新开始动画循环
       this.isAnimating = true
+      this.frameCount = 0
       this.animId = setTimeout(() => { this.animate() }, FPS_INTERVAL)
     }
   }
 
   private animate(): void {
     if (!this.isAnimating) return
-    this.drawFrame()
+
+    // 节能策略：非可见区域或内容被覆盖时降帧
+    const interval = (!this.isVisible || !this.active)
+      ? ECO_FPS_INTERVAL
+      : FPS_INTERVAL
+
+    // 降帧绘制：只在关键帧重绘，减少 GPU 负载
+    this.frameCount++
+    if (this.frameCount % this.skipFrameMod === 0 || this.frameCount < 3) {
+      this.drawFrame()
+    }
     this.hasDrawnOnce = true
-    this.animId = setTimeout(() => { this.animate() }, FPS_INTERVAL)
+
+    this.animId = setTimeout(() => { this.animate() }, interval)
   }
 
   private drawFrame(): void {

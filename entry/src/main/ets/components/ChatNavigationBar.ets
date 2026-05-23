@@ -15,20 +15,25 @@ export struct ChatNavigationBar {
     Column() {
       // 顶部导航
       Row() {
-        // 返回按钮 - 液态玻璃效果
-        Column() {
+        // 返回按钮 - 左箭头形状的玻璃胶囊，视觉重心靠左
+        Row({ space: 2 }) {
           Image($r('app.media.ic_back'))
-            .width(20)
-            .height(20)
+            .width(18)
+            .height(18)
             .fillColor(Theme.TextPrimary)
+          Text('返回')
+            .fontSize(13)
+            .fontColor(Theme.TextSecondary)
+            .maxLines(1)
         }
-        .width(36)
-        .height(36)
+        .height(32)
+        .padding({ left: 10, right: 12 })
         .backgroundColor(Theme.GlassBackground)
         .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-        .borderRadius(18)
+        .borderRadius(16)
         .border({ width: 0.5, color: Theme.GlassBorder })
         .justifyContent(FlexAlign.Center)
+        .alignItems(VerticalAlign.Center)
         .onClick(() => {
           this.onBackClick()
         })
@@ -44,20 +49,21 @@ export struct ChatNavigationBar {
           .textAlign(TextAlign.Center)
           .margin({ left: Theme.SpacingLG, right: Theme.SpacingLG })
         
-        // 功能按钮 - 液态玻璃效果
+        // 功能按钮 - 更小的圆形玻璃胶囊，视觉上不喧宾夺主
         Column() {
           Image($r('app.media.ic_menu'))
-            .width(20)
-            .height(20)
-            .fillColor(Theme.TextPrimary)
+            .width(16)
+            .height(16)
+            .fillColor(Theme.TextSecondary)
         }
-        .width(36)
-        .height(36)
+        .width(28)
+        .height(28)
         .backgroundColor(Theme.GlassBackground)
         .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-        .borderRadius(18)
+        .borderRadius(14)
         .border({ width: 0.5, color: Theme.GlassBorder })
         .justifyContent(FlexAlign.Center)
+        .opacity(0.7)
         .onClick(() => {
           this.onMenuClick()
         })
