@@ -725,6 +725,13 @@ export class SessionStore {
       if (existing && existing.length > 0) {
         // 内存中已有消息，跳过本地存储加载（防止覆盖 WebSocket 实时消息）
         console.info(`[SessionStore] loadMessages: ${sessionId} already has ${existing.length} messages in memory, skip local load`)
+        // 即使跳过加载，也触发一次去重清理（防止之前的状态污染）
+        const deduped = this.getDedupedMessages(sessionId)
+        if (deduped.length < existing.length) {
+          console.warn(`[SessionStore] loadMessages: cleaned ${existing.length - deduped.length} duplicates from memory for ${sessionId}`)
+          this.messages.set(sessionId, deduped)
+          this.notifyMessagesChanged(sessionId)
+        }
       } else {
         // 先加载本地缓存（快速展示）
         const localMessages = await storageService.loadMessages(sessionId)
@@ -789,16 +796,28 @@ export class SessionStore {
       {
         const deduped: Message[] = []
         const seenKeys: Map<string, boolean> = new Map()
+        const seenIds: Set<string> = new Set()
         let removedDupCount = 0
         for (let i = 0; i < merged.length; i++) {
-          const key = this.messageContentKey(merged[i])
+          const m = merged[i]
+          // 优先按 ID 去重
+          if (m.id && !m.id.startsWith('stream-') && !m.id.startsWith('thinking-')) {
+            if (seenIds.has(m.id)) {
+              removedDupCount++
+              console.warn(`[SessionStore] Removing dup after sync (by ID): #${removedDupCount} id=${m.id} type=${m.type}`)
+              continue
+            }
+            seenIds.add(m.id)
+          }
+          // 再按内容去重
+          const key = this.messageContentKey(m)
           if (seenKeys.has(key)) {
             removedDupCount++
-            console.warn(`[SessionStore] Removing dup after sync: #${removedDupCount} key=${key.substring(0, 100)} type=${merged[i].type} id=${merged[i].id}`)
+            console.warn(`[SessionStore] Removing dup after sync (by content): #${removedDupCount} key=${key.substring(0, 100)} type=${m.type} id=${m.id}`)
             continue
           }
           seenKeys.set(key, true)
-          deduped.push(merged[i])
+          deduped.push(m)
         }
         if (removedDupCount > 0) {
           console.warn(`[SessionStore] Removed ${removedDupCount} dups from merged result, deduped=${deduped.length}`)
@@ -899,12 +918,13 @@ export class SessionStore {
           if (sm.type === msg.type) {
             const localContent = (msg.content || msg.toolResult || '').substring(0, 2000)
             const serverContent = (sm.content || sm.toolResult || '').substring(0, 2000)
-            if (localContent.length > 10 && localContent === serverContent) {
+            // 内容完全匹配（降低长度阈值，确保短消息也能去重）
+            if (localContent.length > 0 && localContent === serverContent) {
               foundByContent = true
               break
             }
             // 本地被切分的段落可能是服务端合并消息的子串（流式输出被 tool 事件打断后）
-            if (localContent.length > 10 && localContent.length < serverContent.length &&
+            if (localContent.length > 0 && localContent.length < serverContent.length &&
                 serverContent.includes(localContent)) {
               foundByContent = true
               break
@@ -912,7 +932,7 @@ export class SessionStore {
             // 规整化对比：trim + 合并空白，捕获流式 vs 服务端格式差异（尾部换行、前后空格等）
             const normLocal = localContent.trim().replace(/\s+/g, ' ')
             const normServer = serverContent.trim().replace(/\s+/g, ' ')
-            if (normLocal.length > 10 && normLocal === normServer) {
+            if (normLocal.length > 0 && normLocal === normServer) {
               foundByContent = true
               break
             }
@@ -932,12 +952,23 @@ export class SessionStore {
 
     // 最终去重：同类型同内容只保留一条（不含时间戳比对，避免本地/服务器时间戳差异导致重复）
     // 使用完整内容去重，避免超长消息的截断误判
+    // 增加 ID 维度：优先用 ID 去重，无 ID 时用内容去重，防止不同消息内容相同被误合并
     const finalResult: Message[] = []
     const seenFinal: Map<string, boolean> = new Map()
+    const seenFinalIds: Set<string> = new Set()
     for (let i = 0; i < result.length; i++) {
       const m = result[i]
+      // 优先按 ID 去重（如果有有效 ID）
+      if (m.id && !m.id.startsWith('stream-') && !m.id.startsWith('thinking-')) {
+        if (seenFinalIds.has(m.id)) {
+          continue
+        }
+        seenFinalIds.add(m.id)
+      }
+      // 使用规整化内容去重，捕获流式 vs 服务端格式差异（尾部换行、前后空格等）
       const contentFull = m.content || m.toolResult || ''
-      const finalKey = m.type + '|' + (m.toolUseId || '') + '|' + contentFull
+      const normalizedContent = contentFull.trim().replace(/\s+/g, ' ')
+      const finalKey = m.type + '|' + (m.toolUseId || '') + '|' + normalizedContent
       const existing = seenFinal.get(finalKey)
       if (existing) continue
       seenFinal.set(finalKey, true)
@@ -966,8 +997,10 @@ export class SessionStore {
       return msg.type + ':toolUseId:' + msg.toolUseId
     }
     // 统一使用内容键，确保服务端 ID 消息和本地流式 ID 消息同内容可去重
+    // 使用规整化内容（trim + 合并空白），捕获流式 vs 服务端格式差异
     const content = (msg.content || '') || (msg.toolResult || '')
-    return msg.type + ':' + content.substring(0, 2000)
+    const normalized = content.trim().replace(/\s+/g, ' ')
+    return msg.type + ':' + normalized.substring(0, 2000)
   }
 
   addMessage(sessionId: string, message: Message): void {
@@ -1021,17 +1054,21 @@ export class SessionStore {
       // Head 中的消息已不再流式
       headMsg.isStreaming = false
 
-      // 去重检查：先按 ID 匹配，再按 type+内容匹配（防止 WS 流式消息和服务器消息 ID 不同导致的重复）
+      // 去重检查：先按 ID 匹配，再按 type+规整化内容匹配（防止 WS 流式消息和服务器消息 ID 不同导致的重复）
       let exists = false
+      const headContentNorm = (headMsg.content || '').trim().replace(/\s+/g, ' ')
       for (let j = tail.length - 1; j >= 0; j--) {
         if (tail[j].id === headMsg.id) {
           exists = true
           break
         }
-        // 同类型 + 同内容也视为重复（WS 流式 ID 和服务器 ID 不同）
-        if (tail[j].type === headMsg.type && tail[j].content === headMsg.content) {
-          exists = true
-          break
+        // 同类型 + 同内容（规整化后）也视为重复（WS 流式 ID 和服务器 ID 不同）
+        if (tail[j].type === headMsg.type) {
+          const tailContentNorm = (tail[j].content || '').trim().replace(/\s+/g, ' ')
+          if (tailContentNorm === headContentNorm && tailContentNorm.length > 0) {
+            exists = true
+            break
+          }
         }
       }
       if (!exists) {
@@ -1128,10 +1165,11 @@ export class SessionStore {
         normalizedSeen.add(normKey)
         normResult.push(result[i])
       }
+      // 始终返回 normResult（即使 dupCount === 0，normResult 也是正确的过滤结果）
       if (dupCount > 0) {
         console.info(`[SessionStore] getDedupedMessages: removed ${dupCount} dups (incl normalized) from ${tail.length} msgs for ${sessionId}`)
-        return normResult
       }
+      return normResult
     }
     if (dupCount > 0) {
       console.info(`[SessionStore] getDedupedMessages: removed ${dupCount} dups from ${tail.length} msgs for ${sessionId}`)

@@ -4,7 +4,7 @@
  */
 
 import { notificationManager } from '@kit.NotificationKit'
-import { wantAgent, WantAgent } from '@kit.AbilityKit'
+import { wantAgent, WantAgent, common } from '@kit.AbilityKit'
 import { appState } from '../stores/AppState'
 
 class NotificationParams {
@@ -41,7 +41,7 @@ export class NotificationHelper {
       if (enabled) {
         this.isNotificationEnabled = true
       } else {
-        await notificationManager.requestEnableNotification()
+        await notificationManager.requestEnableNotification(this.context as common.UIAbilityContext)
         this.isNotificationEnabled = true
       }
       await this.ensureSlotCreated()

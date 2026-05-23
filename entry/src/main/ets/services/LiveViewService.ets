@@ -94,15 +94,18 @@ export class LiveViewService {
 
   async showComplete(sessionId: string): Promise<void> {
     if (this.activeLiveViewId < 0) return
+    const capturedId: number = this.activeLiveViewId
     const liveView = this.buildTextLiveView(sessionId, '回复完成 ✓', this.activeAiName + ' 回复完成')
-    liveView.id = this.activeLiveViewId
+    liveView.id = capturedId
     try {
       await liveViewManager.updateLiveView(liveView)
     } catch (e) {
       hilog.error(DOMAIN, 'testTag', 'LiveView complete update error: %{public}s', JSON.stringify(e))
     }
     setTimeout(() => {
-      this.stopLiveView()
+      if (this.activeLiveViewId === capturedId) {
+        this.stopLiveView()
+      }
     }, 5000)
   }
 

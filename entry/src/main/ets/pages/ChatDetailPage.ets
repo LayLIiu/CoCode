@@ -19,6 +19,7 @@ import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { FileAttachmentBubble } from '../components/FileAttachmentBubble'
 import { ImagePreviewDialog } from '../components/ImagePreviewDialog'
 import { toastManager } from '../services/ToastManager'
+import { notificationHelper } from '../services/NotificationHelper'
 import { fileService, FileInfo } from '../services/FileService'
 import { downloadService } from '../services/DownloadService'
 import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
@@ -185,6 +186,9 @@ struct ChatDetailPage {
   @State mascotScale: number = 1.0
   private workTimer: number = -1
 
+  // 音效：标记本轮 AI 回复是否已播放"已连接"音效，发送新消息时重置
+  private hasPlayedConnectSound: boolean = false
+
   // 分页加载
   @State displayedMessageCount: number = 50
   @State isLoadingMore: boolean = false
@@ -308,6 +312,14 @@ struct ChatDetailPage {
     if (this.sessionId) {
       this.chatStatus = sessionStore.getSessionStatus(this.sessionId)
       this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
+      // 取消该会话的旧通知
+      notificationHelper.cancelNotification(this.sessionId)
+      // 重新同步消息：从对话列表返回时，内存中的消息可能已被后台同步更新
+      const msgs = sessionStore.getDedupedMessages(this.sessionId)
+      if (msgs && msgs.length > 0) {
+        this.messages = msgs
+        this.displayedMessageCount = Math.min(100, this.messages.length)
+      }
     }
   }
 
@@ -547,8 +559,9 @@ struct ChatDetailPage {
 
   private async loadMessages(): Promise<void> {
     await sessionStore.loadMessages(this.sessionId)
-    const msgs = sessionStore.messages.get(this.sessionId)
-    if (msgs) {
+    // 使用 getDedupedMessages 确保加载时就是去重的（防御性）
+    const msgs = sessionStore.getDedupedMessages(this.sessionId)
+    if (msgs && msgs.length > 0) {
       this.messages = msgs
       // 初始显示最后100条
       this.displayedMessageCount = Math.min(100, this.messages.length)
@@ -561,8 +574,9 @@ struct ChatDetailPage {
   private messagesChangedListener = (sid: string) => {
     if (sid === this.sessionId) {
       const oldCount = this.messages.length
-      const msgs = sessionStore.messages.get(this.sessionId)
-      if (msgs) {
+      // 使用 getDedupedMessages 获取去重后的消息，防止 Store 中的重复消息传递到 UI
+      const msgs = sessionStore.getDedupedMessages(this.sessionId)
+      if (msgs && msgs.length > 0) {
         // 展开为新数组，确保 ArkTS @State 能检测到引用变化并触发重绘
         this.messages = [...msgs]
         // 自动更新分页数，确保新消息不被分页截断
@@ -570,6 +584,17 @@ struct ChatDetailPage {
         // 更新最新消息 ID（用于条件过渡动画）
         if (msgs.length > 0) {
           this.latestMessageId = msgs[msgs.length - 1].id
+        }
+        // 兜底检测：消息已包含 assistant 回复但状态仍卡在工作状态
+        if (msgs.length > 0) {
+          const lastMsg = msgs[msgs.length - 1]
+          if (lastMsg.type === 'assistant' && lastMsg.content && lastMsg.content.length > 0) {
+            if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
+                this.chatStatus === 'tool_executing') {
+              console.info(`[ChatDetailPage] Fallback: detected assistant message but status=${this.chatStatus}, forcing completed`)
+              sessionStore.updateSessionStatus(this.sessionId, 'completed')
+            }
+          }
         }
       }
       // 消息变化时同步任务列表状态（最新任务状态在 sessionStore 里更新）
@@ -590,12 +615,19 @@ struct ChatDetailPage {
       if (status === 'completed') {
         this.stopWorkTimer()
         this.vibrateReplyCompleted()
+        this.playSound('staplebops-02.wav')
+        console.info('[ChatDetailPage] status=completed, played end sound')
       } else if (status === 'idle') {
         this.stopWorkTimer()
       }
       // 状态变为 working 时启动计时器
       if (status === 'thinking' || status === 'streaming' || status === 'tool_executing') {
         this.startWorkTimer()
+        // AI 首次响应时播放"已连接"音效（每轮只播放一次）
+        if (status === 'streaming' && !this.hasPlayedConnectSound) {
+          this.hasPlayedConnectSound = true
+          this.playSound('staplebops-01.wav')
+        }
       }
     }
   }
@@ -988,6 +1020,44 @@ struct ChatDetailPage {
         usage: 'notification'
       })
     } catch (e) {}
+  }
+
+  // 播放 rawfile 音效（使用 AudioRenderer 播放 WAV PCM）
+  private async playSound(fileName: string): Promise<void> {
+    try {
+      console.info(`[ChatDetailPage] playSound: ${fileName}`)
+      const ctx: common.Context = getContext(this) as common.Context
+      const fileData: Uint8Array = await ctx.resourceManager.getRawFileContent(fileName)
+      if (!fileData || fileData.length <= 44) {
+        console.error(`[ChatDetailPage] playSound: invalid file data for ${fileName}`)
+        return
+      }
+      // WAV 头 44 字节，跳过得到 PCM 数据
+      const pcmData = fileData.subarray(44)
+      const pcmBuffer: ArrayBuffer = new ArrayBuffer(pcmData.length)
+      new Uint8Array(pcmBuffer).set(pcmData)
+
+      const audioRendererOptions: audio.AudioRendererOptions = {
+        streamInfo: {
+          samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_44100,
+          channels: audio.AudioChannel.CHANNEL_1,
+          sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
+          encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW
+        },
+        rendererInfo: {
+          usage: audio.StreamUsage.STREAM_USAGE_MUSIC,
+          rendererFlags: 0
+        }
+      }
+      const audioRenderer: audio.AudioRenderer = await audio.createAudioRenderer(audioRendererOptions)
+      await audioRenderer.start()
+      await audioRenderer.write(pcmBuffer)
+      await audioRenderer.stop()
+      await audioRenderer.release()
+      console.info(`[ChatDetailPage] playSound: ${fileName} played successfully`)
+    } catch (e) {
+      console.error(`[ChatDetailPage] playSound exception: ${e}`)
+    }
   }
 
   private getTaskProgress(tasks: TaskItem[]): number {
@@ -1507,12 +1577,7 @@ struct ChatDetailPage {
             .transition(this.getMessageTransition(message))
           }, (message: Message) => {
             if (message.type === 'tool_use') {
-              let extra = ''
-              if (message.toolName === 'Agent') {
-                const childCount = this.getChildToolCalls(message.toolUseId || '').length
-                extra = '_' + (message.agentTaskStatus || '') + '_c' + childCount
-              }
-              return message.id + extra
+              return message.id
             }
             if (message.type === 'permission_request') {
               return message.id + '_' + (message.isPermissionHandled ? 'done' : 'pending')
@@ -1647,8 +1712,10 @@ struct ChatDetailPage {
           if (this.elapsedSeconds > 0) {
             Text(this.formatElapsed(this.elapsedSeconds)).fontSize(10).fontColor(Theme.TextTertiary)
           }
-        } else if (this.chatStatus === 'idle' || this.chatStatus === 'completed') {
+        } else if (this.chatStatus === 'idle') {
           Text('休闲中').fontSize(11).fontColor(Theme.TextSecondary)
+        } else if (this.chatStatus === 'completed') {
+          Text('已完成').fontSize(11).fontColor(Theme.SuccessColor)
         } else {
           StatusIcon({ status: this.mapToWorkStatus(this.chatStatus) })
           Text(this.getStatusText()).fontSize(11).fontColor(this.getStatusColor())
@@ -1688,7 +1755,8 @@ struct ChatDetailPage {
       Column({ space: 0 }) {
         // 吉祥物 + 用时（固定左下角，不随消息列表滚动）
         if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
-          this.chatStatus === 'tool_executing' || this.chatStatus === 'permission_pending' ||
+          this.chatStatus === 'tool_executing' || this.chatStatus === 'completed' ||
+          this.chatStatus === 'permission_pending' ||
           this.chatStatus === 'question_pending') {
           Row() {
             this.StreamingIndicator()
@@ -4325,6 +4393,8 @@ struct ChatDetailPage {
     if (sent) {
       this.inputText = ''
       this.pendingAttachments = []
+      // 重置"已连接"音效标志，下一轮 AI 回复时重新播放
+      this.hasPlayedConnectSound = false
     }
   }
 
