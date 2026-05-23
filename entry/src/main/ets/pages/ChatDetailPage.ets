@@ -631,7 +631,7 @@ struct ChatDetailPage {
         if (!this.hasPlayedConnectSound) {
           this.hasPlayedConnectSound = true
           this.hasPlayedCompleteSound = false
-          this.playSound('staplebops-01.wav')
+          this.playSound('staplebops-02.wav')
           console.info('[ChatDetailPage] status=' + status + ', played start sound')
         }
       }
