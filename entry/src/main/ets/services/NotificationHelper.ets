@@ -117,21 +117,16 @@ export class NotificationHelper {
 
   private async publishNotification(params: NotificationParams): Promise<void> {
     if (!this.context) return
-    // 权限未确认时检查并兜底请求
+    // 权限未确认时检查（不请求——requestEnableNotification 必须在前台调用）
+    // 权限请求已在 EntryAbility.onForeground 中处理
     if (!this.isNotificationEnabled) {
       try {
         const enabled = await notificationManager.isNotificationEnabled()
         if (enabled) {
           this.isNotificationEnabled = true
         } else {
-          // 权限未授予，尝试弹出授权对话框（此时 UI 已就绪）
-          try {
-            await notificationManager.requestEnableNotification(this.context as common.UIAbilityContext)
-            this.isNotificationEnabled = true
-          } catch (reqErr) {
-            console.warn('[NotificationHelper] publish: permission request rejected: ' + JSON.stringify(reqErr))
-            return
-          }
+          // 权限未授予，跳过（前台时 requestNotificationPermission 已尝试过）
+          return
         }
       } catch (e) {
         console.warn('[NotificationHelper] publish: permission check failed: ' + JSON.stringify(e))

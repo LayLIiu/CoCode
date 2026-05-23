@@ -173,6 +173,14 @@ export default class EntryAbility extends UIAbility {
     // 取消所有通知（用户已回到应用）
     await notificationHelper.cancelAll()
 
+    // 请求通知授权（onForeground 时 UI 已就绪，确保权限弹窗能正常显示）
+    // 如果已授权则为空操作，不会重复弹窗
+    try {
+      await notificationHelper.requestNotificationPermission()
+    } catch (e) {
+      hilog.error(DOMAIN, 'testTag', 'Notification permission request on foreground error: %{public}s', JSON.stringify(e))
+    }
+
     // 停止后台任务
     try {
       await backgroundTaskManager.stopBackgroundRunning(this.context)
