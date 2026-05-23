@@ -8,6 +8,8 @@ import { authStore } from '../stores/AuthStore'
 import { appState } from '../stores/AppState'
 import { sessionStore } from '../stores/SessionStore'
 import { GlobalToast } from '../components/GlobalToast'
+import { connectionManager } from '../services/ConnectionManager'
+import type { Context } from '@kit.AbilityKit'
 
 @Entry
 @Component
@@ -53,6 +55,11 @@ struct Index {
   }
 
   private initData(): void {
+    // 快速启动连接：立即使用已配置的 URL，不等待网络检测
+    if (authStore.serverUrl) {
+      connectionManager.quickStart()
+    }
+
     // 并发执行所有初始化任务，无需延迟等待
     sessionStore.fetchSessions().then(() => {
       console.info('[Index] Sessions loaded')

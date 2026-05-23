@@ -282,6 +282,198 @@ export class TaskRunsResponse {
   runs: TaskRunItem[] = []
 }
 
+// MARK: - Git API 响应类型
+
+export class GitStatusFile {
+  path: string = ''
+  status: string = ''  // 'modified', 'added', 'deleted', 'renamed', 'untracked'
+  oldPath?: string = ''  // 用于 renamed 类型
+}
+
+export class GitStatusResponse {
+  branch: string = ''
+  ahead: number = 0
+  behind: number = 0
+  staged: GitStatusFile[] = []
+  unstaged: GitStatusFile[] = []
+  untracked: GitStatusFile[] = []
+  hasChanges: boolean = false
+}
+
+export class GitDiffResponse {
+  files: GitDiffFile[] = []
+}
+
+export class GitDiffFile {
+  path: string = ''
+  oldPath?: string = ''
+  hunks: GitDiffHunk[] = []
+}
+
+export class GitDiffHunk {
+  oldStart: number = 0
+  oldLines: number = 0
+  newStart: number = 0
+  newLines: number = 0
+  lines: string[] = []
+}
+
+export class GitCommitRequest {
+  message: string = ''
+  files?: string[]  // 要提交的文件列表，不指定则提交所有
+}
+
+export class GitCommitResponse {
+  sha: string = ''
+  message: string = ''
+  files: string[] = []
+}
+
+export class GitPushResponse {
+  success: boolean = false
+  message: string = ''
+  remote: string = ''
+  branch: string = ''
+}
+
+export class GitPullResponse {
+  success: boolean = false
+  message: string = ''
+  files: string[] = []
+  ahead: number = 0
+  behind: number = 0
+}
+
+export class GitBranchResponse {
+  current: string = ''
+  branches: GitBranchItem[] = []
+}
+
+export class GitBranchItem {
+  name: string = ''
+  isRemote: boolean = false
+  isCurrent: boolean = false
+  upstream?: string = ''
+  ahead: number = 0
+  behind: number = 0
+}
+
+export class GitLogResponse {
+  commits: GitCommitItem[] = []
+}
+
+export class GitCommitItem {
+  sha: string = ''
+  shortSha: string = ''
+  message: string = ''
+  author: string = ''
+  email: string = ''
+  date: string = ''
+  parents: string[] = []
+}
+
+export class GitRemoteResponse {
+  remotes: GitRemoteItem[] = []
+}
+
+export class GitRemoteItem {
+  name: string = ''
+  fetchUrl: string = ''
+  pushUrl: string = ''
+}
+
+export class GitCreatePRRequest {
+  title: string = ''
+  body?: string = ''
+  head: string = ''  // 源分支
+  base: string = ''  // 目标分支
+  draft?: boolean = false
+}
+
+export class GitCreatePRResponse {
+  success: boolean = false
+  url: string = ''
+  number: number = 0
+  message: string = ''
+}
+
+export class GitStashResponse {
+  success: boolean = false
+  message: string = ''
+  stashName?: string = ''
+}
+
+// MARK: - Web Preview API 响应类型
+
+export class WebPreviewResponse {
+  url: string = ''
+  port: number = 0
+  status: string = ''
+}
+
+export class WebPreviewStartRequest {
+  port?: number = 0
+  path?: string = ''
+}
+
+// MARK: - SSH API 响应类型
+
+export class SSHConnectionRequest {
+  host: string = ''
+  port: number = 22
+  user: string = ''
+  password?: string = ''
+  privateKey?: string = ''
+}
+
+export class SSHConnectionResponse {
+  success: boolean = false
+  sessionId: string = ''
+  message: string = ''
+}
+
+export class SSHCommandRequest {
+  sessionId: string = ''
+  command: string = ''
+}
+
+export class SSHCommandResponse {
+  success: boolean = false
+  output: string = ''
+  exitCode: number = 0
+}
+
+// MARK: - Markdown API 响应类型
+
+export class MarkdownRenderResponse {
+  html: string = ''
+  toc: MarkdownTocItem[] = []
+}
+
+export class MarkdownTocItem {
+  level: number = 0
+  text: string = ''
+  anchor: string = ''
+}
+
+// MARK: - 其他请求类型
+
+export class GitAddRequest {
+  files: string[] = []
+}
+
+export class EffortRequest {
+  level: string = ''
+}
+
+export class TunnelRequest {
+  enabled: boolean = false
+}
+
+export class PushTokenRequest {
+  token: string = ''
+}
+
 export class OkResponse {
   ok: boolean = false
 }
@@ -461,7 +653,9 @@ export class APIService {
   }
 
   async setEffort(level: string): Promise<void> {
-    await this.request<Object>('/api/effort', 'PUT', JSON.stringify({ level: level }))
+    const req = new EffortRequest()
+    req.level = level
+    await this.request<Object>('/api/effort', 'PUT', JSON.stringify(req))
   }
 
   // MARK: - 隧道 API
@@ -471,7 +665,9 @@ export class APIService {
     let lastError: Error | null = null
     for (let i = 0; i < paths.length; i++) {
       try {
-        return await this.request<TunnelResponse>(paths[i], 'POST', JSON.stringify({ enabled: enabled }))
+        const req = new TunnelRequest()
+        req.enabled = enabled
+        return await this.request<TunnelResponse>(paths[i], 'POST', JSON.stringify(req))
       } catch (e) {
         lastError = e as Error
         continue
@@ -746,6 +942,301 @@ export class APIService {
     await this.request<Record<string, Object>>('/api/settings/user', 'PUT', JSON.stringify(settings))
   }
 
+  // MARK: - Git API
+
+  async getGitStatus(workDir: string): Promise<GitStatusResponse> {
+    const res = await this.request<Record<string, Object>>(
+      '/api/git/status?path=' + encodeURIComponent(workDir), 'GET', ''
+    )
+    const response = new GitStatusResponse()
+    response.branch = (res['branch'] as string) || ''
+    response.ahead = (res['ahead'] as number) || 0
+    response.behind = (res['behind'] as number) || 0
+    response.hasChanges = (res['hasChanges'] as boolean) || false
+
+    const parseFiles = (arr: Object[] | undefined): GitStatusFile[] => {
+      if (!arr) return []
+      return arr.map((item: Object) => {
+        const f = item as Record<string, Object>
+        const file = new GitStatusFile()
+        file.path = (f['path'] as string) || ''
+        file.status = (f['status'] as string) || ''
+        file.oldPath = (f['oldPath'] as string) || ''
+        return file
+      })
+    }
+
+    response.staged = parseFiles(res['staged'] as Object[])
+    response.unstaged = parseFiles(res['unstaged'] as Object[])
+    response.untracked = parseFiles(res['untracked'] as Object[])
+    return response
+  }
+
+  async getGitDiff(workDir: string, staged: boolean = false): Promise<GitDiffResponse> {
+    const path = '/api/git/diff?path=' + encodeURIComponent(workDir) + '&staged=' + staged
+    const res = await this.request<Record<string, Object>>(path, 'GET', '')
+    const response = new GitDiffResponse()
+    if (res['files'] && Array.isArray(res['files'])) {
+      response.files = (res['files'] as Object[]).map((f: Object) => {
+        const file = f as Record<string, Object>
+        const df = new GitDiffFile()
+        df.path = (file['path'] as string) || ''
+        df.oldPath = (file['oldPath'] as string) || ''
+        if (file['hunks'] && Array.isArray(file['hunks'])) {
+          df.hunks = (file['hunks'] as Object[]).map((h: Object) => {
+            const hunk = h as Record<string, Object>
+            const dh = new GitDiffHunk()
+            dh.oldStart = (hunk['oldStart'] as number) || 0
+            dh.oldLines = (hunk['oldLines'] as number) || 0
+            dh.newStart = (hunk['newStart'] as number) || 0
+            dh.newLines = (hunk['newLines'] as number) || 0
+            dh.lines = (hunk['lines'] as string[]) || []
+            return dh
+          })
+        }
+        return df
+      })
+    }
+    return response
+  }
+
+  async gitCommit(workDir: string, message: string, files?: string[]): Promise<GitCommitResponse> {
+    const req = new GitCommitRequest()
+    req.message = message
+    if (files && files.length > 0) {
+      req.files = files
+    }
+    const res = await this.request<Record<string, Object>>(
+      '/api/git/commit?path=' + encodeURIComponent(workDir), 'POST', JSON.stringify(req)
+    )
+    const response = new GitCommitResponse()
+    response.sha = (res['sha'] as string) || ''
+    response.message = (res['message'] as string) || ''
+    response.files = (res['files'] as string[]) || []
+    return response
+  }
+
+  async gitPush(workDir: string, remote?: string, branch?: string): Promise<GitPushResponse> {
+    let path = '/api/git/push?path=' + encodeURIComponent(workDir)
+    if (remote) path += '&remote=' + encodeURIComponent(remote)
+    if (branch) path += '&branch=' + encodeURIComponent(branch)
+
+    const res = await this.request<Record<string, Object>>(path, 'POST', '')
+    const response = new GitPushResponse()
+    response.success = (res['success'] as boolean) || false
+    response.message = (res['message'] as string) || ''
+    response.remote = (res['remote'] as string) || ''
+    response.branch = (res['branch'] as string) || ''
+    return response
+  }
+
+  async gitPull(workDir: string, remote?: string, branch?: string): Promise<GitPullResponse> {
+    let path = '/api/git/pull?path=' + encodeURIComponent(workDir)
+    if (remote) path += '&remote=' + encodeURIComponent(remote)
+    if (branch) path += '&branch=' + encodeURIComponent(branch)
+
+    const res = await this.request<Record<string, Object>>(path, 'POST', '')
+    const response = new GitPullResponse()
+    response.success = (res['success'] as boolean) || false
+    response.message = (res['message'] as string) || ''
+    response.files = (res['files'] as string[]) || []
+    response.ahead = (res['ahead'] as number) || 0
+    response.behind = (res['behind'] as number) || 0
+    return response
+  }
+
+  async gitAdd(workDir: string, files: string[]): Promise<OkResponse> {
+    const req = new GitAddRequest()
+    req.files = files
+    const res = await this.request<Record<string, Object>>(
+      '/api/git/add?path=' + encodeURIComponent(workDir), 'POST', JSON.stringify(req)
+    )
+    return { ok: (res['ok'] as boolean) || false }
+  }
+
+  async gitCheckout(workDir: string, branch: string, createNew: boolean = false): Promise<OkResponse> {
+    let path = '/api/git/checkout?path=' + encodeURIComponent(workDir) + '&branch=' + encodeURIComponent(branch)
+    if (createNew) path += '&createNew=true'
+
+    const res = await this.request<Record<string, Object>>(path, 'POST', '')
+    return { ok: (res['ok'] as boolean) || false }
+  }
+
+  async gitBranch(workDir: string): Promise<GitBranchResponse> {
+    const res = await this.request<Record<string, Object>>(
+      '/api/git/branch?path=' + encodeURIComponent(workDir), 'GET', ''
+    )
+    const response = new GitBranchResponse()
+    response.current = (res['current'] as string) || ''
+    if (res['branches'] && Array.isArray(res['branches'])) {
+      response.branches = (res['branches'] as Object[]).map((b: Object) => {
+        const branch = b as Record<string, Object>
+        const item = new GitBranchItem()
+        item.name = (branch['name'] as string) || ''
+        item.isRemote = (branch['isRemote'] as boolean) || false
+        item.isCurrent = (branch['isCurrent'] as boolean) || false
+        item.upstream = (branch['upstream'] as string) || ''
+        item.ahead = (branch['ahead'] as number) || 0
+        item.behind = (branch['behind'] as number) || 0
+        return item
+      })
+    }
+    return response
+  }
+
+  async gitLog(workDir: string, limit: number = 20): Promise<GitLogResponse> {
+    const res = await this.request<Record<string, Object>>(
+      '/api/git/log?path=' + encodeURIComponent(workDir) + '&limit=' + limit, 'GET', ''
+    )
+    const response = new GitLogResponse()
+    if (res['commits'] && Array.isArray(res['commits'])) {
+      response.commits = (res['commits'] as Object[]).map((c: Object) => {
+        const commit = c as Record<string, Object>
+        const item = new GitCommitItem()
+        item.sha = (commit['sha'] as string) || ''
+        item.shortSha = (commit['shortSha'] as string) || ''
+        item.message = (commit['message'] as string) || ''
+        item.author = (commit['author'] as string) || ''
+        item.email = (commit['email'] as string) || ''
+        item.date = (commit['date'] as string) || ''
+        item.parents = (commit['parents'] as string[]) || []
+        return item
+      })
+    }
+    return response
+  }
+
+  async gitRemotes(workDir: string): Promise<GitRemoteResponse> {
+    const res = await this.request<Record<string, Object>>(
+      '/api/git/remotes?path=' + encodeURIComponent(workDir), 'GET', ''
+    )
+    const response = new GitRemoteResponse()
+    if (res['remotes'] && Array.isArray(res['remotes'])) {
+      response.remotes = (res['remotes'] as Object[]).map((r: Object) => {
+        const remote = r as Record<string, Object>
+        const item = new GitRemoteItem()
+        item.name = (remote['name'] as string) || ''
+        item.fetchUrl = (remote['fetchUrl'] as string) || ''
+        item.pushUrl = (remote['pushUrl'] as string) || ''
+        return item
+      })
+    }
+    return response
+  }
+
+  async gitStash(workDir: string, message?: string): Promise<GitStashResponse> {
+    let path = '/api/git/stash?path=' + encodeURIComponent(workDir)
+    if (message) path += '&message=' + encodeURIComponent(message)
+
+    const res = await this.request<Record<string, Object>>(path, 'POST', '')
+    const response = new GitStashResponse()
+    response.success = (res['success'] as boolean) || false
+    response.message = (res['message'] as string) || ''
+    response.stashName = (res['stashName'] as string) || ''
+    return response
+  }
+
+  async gitStashPop(workDir: string): Promise<GitStashResponse> {
+    const res = await this.request<Record<string, Object>>(
+      '/api/git/stash/pop?path=' + encodeURIComponent(workDir), 'POST', ''
+    )
+    const response = new GitStashResponse()
+    response.success = (res['success'] as boolean) || false
+    response.message = (res['message'] as string) || ''
+    return response
+  }
+
+  async createPullRequest(workDir: string, request: GitCreatePRRequest): Promise<GitCreatePRResponse> {
+    const res = await this.request<Record<string, Object>>(
+      '/api/git/pr?path=' + encodeURIComponent(workDir), 'POST', JSON.stringify(request)
+    )
+    const response = new GitCreatePRResponse()
+    response.success = (res['success'] as boolean) || false
+    response.url = (res['url'] as string) || ''
+    response.number = (res['number'] as number) || 0
+    response.message = (res['message'] as string) || ''
+    return response
+  }
+
+  // MARK: - Markdown API
+
+  async renderMarkdown(filePath: string): Promise<MarkdownRenderResponse> {
+    const res = await this.request<Record<string, Object>>(
+      '/api/filesystem/markdown?path=' + encodeURIComponent(filePath), 'GET', ''
+    )
+    const response = new MarkdownRenderResponse()
+    response.html = (res['html'] as string) || ''
+    if (res['toc'] && Array.isArray(res['toc'])) {
+      response.toc = (res['toc'] as Object[]).map((t: Object) => {
+        const item = t as Record<string, Object>
+        const tocItem = new MarkdownTocItem()
+        tocItem.level = (item['level'] as number) || 0
+        tocItem.text = (item['text'] as string) || ''
+        tocItem.anchor = (item['anchor'] as string) || ''
+        return tocItem
+      })
+    }
+    return response
+  }
+
+  // MARK: - Web Preview API
+
+  async startWebPreview(workDir: string, port?: number, path?: string): Promise<WebPreviewResponse> {
+    const body: Record<string, Object> = {}
+    if (port) body['port'] = port
+    if (path) body['path'] = path
+
+    const res = await this.request<Record<string, Object>>(
+      '/api/preview/start?workDir=' + encodeURIComponent(workDir), 'POST', JSON.stringify(body)
+    )
+    const response = new WebPreviewResponse()
+    response.url = (res['url'] as string) || ''
+    response.port = (res['port'] as number) || 0
+    response.status = (res['status'] as string) || ''
+    return response
+  }
+
+  async stopWebPreview(workDir: string, port: number): Promise<OkResponse> {
+    const res = await this.request<Record<string, Object>>(
+      '/api/preview/stop?workDir=' + encodeURIComponent(workDir) + '&port=' + port, 'POST', ''
+    )
+    return { ok: (res['ok'] as boolean) || false }
+  }
+
+  // MARK: - SSH API
+
+  async sshConnect(request: SSHConnectionRequest): Promise<SSHConnectionResponse> {
+    const res = await this.request<Record<string, Object>>(
+      '/api/ssh/connect', 'POST', JSON.stringify(request)
+    )
+    const response = new SSHConnectionResponse()
+    response.success = (res['success'] as boolean) || false
+    response.sessionId = (res['sessionId'] as string) || ''
+    response.message = (res['message'] as string) || ''
+    return response
+  }
+
+  async sshDisconnect(sessionId: string): Promise<OkResponse> {
+    const res = await this.request<Record<string, Object>>(
+      '/api/ssh/disconnect?sessionId=' + encodeURIComponent(sessionId), 'POST', ''
+    )
+    return { ok: (res['ok'] as boolean) || false }
+  }
+
+  async sshExecute(sessionId: string, command: string): Promise<SSHCommandResponse> {
+    const req = new SSHCommandRequest()
+    req.sessionId = sessionId
+    req.command = command
+    const res = await this.request<Record<string, Object>>(
+      '/api/ssh/execute', 'POST', JSON.stringify(req)
+    )
+    const response = new SSHCommandResponse()
+    response.success = (res['success'] as boolean) || false
+    response.output = (res['output'] as string) || ''
+    response.exitCode = (res['exitCode'] as number) || 0
+    return response
+  }
+
   // MARK: - 私有方法
 
   private async request<T>(path: string, method: string, body: string): Promise<T> {
@@ -828,7 +1319,9 @@ export class APIService {
   // MARK: - Push Token 上报
 
   async uploadPushToken(token: string): Promise<void> {
-    await this.request<Object>('/api/push/token', 'POST', JSON.stringify({ token: token }))
+    const req = new PushTokenRequest()
+    req.token = token
+    await this.request<Object>('/api/push/token', 'POST', JSON.stringify(req))
   }
 
   // MARK: - 消息转换

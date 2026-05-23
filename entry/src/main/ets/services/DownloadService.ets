@@ -132,9 +132,15 @@ export class DownloadService {
 
   /**
    * 过滤文件名中的非法字符
+   * 如果文件名为空或只包含非法字符，返回默认文件名
    */
   private sanitizeFileName(name: string): string {
-    return name.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_')
+    const sanitized = name.replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_')
+    // 处理空文件名或只包含非法字符的情况
+    if (!sanitized || sanitized.trim() === '' || sanitized === '_') {
+      return 'download_' + Date.now()
+    }
+    return sanitized
   }
 }
 

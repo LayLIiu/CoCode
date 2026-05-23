@@ -25,6 +25,8 @@ export enum ConnectionState {
 const PING_INTERVAL_MS = 25000    // 每 25s 发一次 ping
 const PONG_TIMEOUT_MS = 15000     // 发 ping 后 15s 无 pong 视为断连
 const MAX_PONG_MISSED = 4         // 连续 4 次超时才触发重连（云中继容忍丢包 + 抖动）
+const MAX_PENDING_MESSAGES = 100  // 离线消息队列最大长度
+const MAX_SEND_RETRIES = 3        // 单条消息最大重试次数
 
 export class WSSessionConnection {
   ws: webSocket.WebSocket | null = null
@@ -33,6 +35,7 @@ export class WSSessionConnection {
   reconnectAttempts: number = 0
   // Paseo 集成：消息队列 + 心跳
   pendingMessages: string[] = []
+  messageRetryCount: Map<string, number> = new Map()  // 消息重试次数追踪
   lastPongTime: number = 0
   missedPongs: number = 0
   // RTT 追踪
@@ -308,17 +311,36 @@ export class WebSocketService {
     while (conn.pendingMessages.length > 0) {
       const msg = conn.pendingMessages.shift()
       if (msg) {
+        const msgHash = this.hashMessage(msg)
+        const retries = conn.messageRetryCount.get(msgHash) || 0
+
+        if (retries >= MAX_SEND_RETRIES) {
+          console.warn(`[WS] Flush: skipping message exceeded max retries: ${msg.substring(0, 50)}`)
+          conn.messageRetryCount.delete(msgHash)
+          continue
+        }
+
         try {
+          conn.messageRetryCount.set(msgHash, retries + 1)
           conn.ws.send(msg, (err) => {
             if (err) {
               console.error(`[WS] Flush send error: ${err.message}`)
-              // 发送失败重新入队
-              conn.pendingMessages.unshift(msg)
+              // 发送失败重新入队（如果未超过重试上限）
+              const currentRetries = conn.messageRetryCount.get(msgHash) || 0
+              if (currentRetries < MAX_SEND_RETRIES) {
+                conn.pendingMessages.unshift(msg)
+              } else {
+                console.error(`[WS] Flush: message exceeded max retries, dropping: ${msg.substring(0, 50)}`)
+                conn.messageRetryCount.delete(msgHash)
+              }
+            } else {
+              conn.messageRetryCount.delete(msgHash)
             }
           })
         } catch (e) {
           console.error(`[WS] Flush send exception: ${e}`)
-          conn.pendingMessages.unshift(msg)
+          // 异常时不重新入队，避免无限循环
+          conn.messageRetryCount.delete(msgHash)
           break
         }
       }
@@ -536,7 +558,7 @@ export class WebSocketService {
     this.notifyConnectionState(sessionId, ConnectionState.DISCONNECTED)
 
     const timer = this.reconnectTimers.get(sessionId)
-    if (timer) {
+    if (timer !== undefined) {
       clearTimeout(timer)
       this.reconnectTimers.delete(sessionId)
     }
@@ -580,11 +602,17 @@ export class WebSocketService {
 
     const conn = this.connections.get(sessionId)
     const jsonStr = JSON.stringify(message)
+    const msgHash = this.hashMessage(jsonStr)
 
     if (!conn || !conn.ws || conn.status !== 'connected') {
       console.info(`[WS] Cannot send: not connected to ${sessionId}, queuing message`)
       // Paseo 模式：离线时入队，重连后 flush
       if (conn) {
+        // 限制队列大小，超过上限时丢弃最旧的消息
+        if (conn.pendingMessages.length >= MAX_PENDING_MESSAGES) {
+          const dropped = conn.pendingMessages.shift()
+          console.warn(`[WS] Pending queue full, dropped oldest message: ${dropped?.substring(0, 50)}`)
+        }
         conn.pendingMessages.push(jsonStr)
       }
       // 触发重连（如果正在重连则忽略）
@@ -599,14 +627,29 @@ export class WebSocketService {
     conn.ws.send(jsonStr, (err) => {
       if (err) {
         console.error(`[WS] Send error: ${err.message}`)
-        // 发送失败入队备重试
-        conn.pendingMessages.push(jsonStr)
+        // 发送失败入队备重试，但限制重试次数
+        const retries = conn.messageRetryCount.get(msgHash) || 0
+        if (retries < MAX_SEND_RETRIES) {
+          conn.messageRetryCount.set(msgHash, retries + 1)
+          conn.pendingMessages.push(jsonStr)
+          console.warn(`[WS] Message queued for retry (${retries + 1}/${MAX_SEND_RETRIES})`)
+        } else {
+          console.error(`[WS] Message exceeded max retries, dropping: ${jsonStr.substring(0, 50)}`)
+          conn.messageRetryCount.delete(msgHash)
+        }
       } else {
         console.info(`[WS] Sent successfully to ${sessionId}`)
+        conn.messageRetryCount.delete(msgHash)  // 成功后清理重试计数
       }
     })
 
     return true
+  }
+
+  /** 生成消息哈希用于重试计数 */
+  private hashMessage(msg: string): string {
+    // 简单哈希：取前100字符 + 长度
+    return msg.substring(0, 100) + ':' + msg.length
   }
 
   sendUserMessage(sessionId: string, content: string, attachments?: AttachmentRef[]): boolean {
@@ -1075,7 +1118,7 @@ export class WebSocketService {
 
     // 清除重连定时器
     const timer = this.reconnectTimers.get(sessionId)
-    if (timer) {
+    if (timer !== undefined) {
       clearTimeout(timer)
       this.reconnectTimers.delete(sessionId)
     }

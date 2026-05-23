@@ -313,14 +313,9 @@ struct ChatDetailPage {
     if (this.sessionId) {
       this.chatStatus = sessionStore.getSessionStatus(this.sessionId)
       this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
-      // 取消该会话的旧通知
+      // 取消该会话的旧通知（后台时可能收到了通知）
       notificationHelper.cancelNotification(this.sessionId)
-      // 重新同步消息：从对话列表返回时，内存中的消息可能已被后台同步更新
-      const msgs = sessionStore.getDedupedMessages(this.sessionId)
-      if (msgs && msgs.length > 0) {
-        this.messages = msgs
-        this.displayedMessageCount = Math.min(100, this.messages.length)
-      }
+      // 消息同步由 onForeground → messagesChangedListener 处理，此处不做避免重复
     }
   }
 
@@ -371,9 +366,17 @@ struct ChatDetailPage {
 
   // MARK: - 语音输入
   private asrEngine: speechRecognizer.SpeechRecognitionEngine | null = null
+  private asrEngineInitializing: boolean = false  // 防止重复初始化
   private voiceSessionId: string = ''
 
   private initSpeechEngine(): void {
+    // 防止重复初始化
+    if (this.asrEngineInitializing || this.asrEngine) {
+      console.info('[Voice] 引擎已存在或正在初始化，跳过')
+      return
+    }
+    this.asrEngineInitializing = true
+
     let extraParam: Record<string, Object> = { "locate": "CN", "recognizerMode": "short" }
     let initParamsInfo: speechRecognizer.CreateEngineParams = {
       language: 'zh-CN',
@@ -382,6 +385,7 @@ struct ChatDetailPage {
     }
     try {
       speechRecognizer.createEngine(initParamsInfo, (err: BusinessError, engine: speechRecognizer.SpeechRecognitionEngine) => {
+        this.asrEngineInitializing = false  // 初始化完成
         if (!err && engine) {
           this.asrEngine = engine
           // 设置识别结果监听器
@@ -419,6 +423,7 @@ struct ChatDetailPage {
         }
       })
     } catch (error) {
+      this.asrEngineInitializing = false
       console.error('[Voice] 创建引擎异常: ' + JSON.stringify(error))
     }
   }
@@ -443,8 +448,16 @@ struct ChatDetailPage {
     // 1. 请求麦克风权限（异步弹窗，不阻塞）
     this.requestMicrophonePermission()
 
-    // 2. 确保引擎已初始化（createEngine 是异步回调，备份检查）
+    // 2. 检查引擎状态
+    if (this.asrEngineInitializing) {
+      // 正在初始化，提示用户稍等
+      toastManager.info('语音引擎初始化中，请稍后重试')
+      console.warn('[Voice] 引擎正在初始化，请稍等')
+      return
+    }
+
     if (!this.asrEngine) {
+      // 引擎未初始化，触发初始化并提示
       this.initSpeechEngine()
       toastManager.info('语音引擎初始化中，请稍后重试')
       console.warn('[Voice] 语音引擎尚未就绪，请稍后再试')
@@ -578,6 +591,16 @@ struct ChatDetailPage {
       // 使用 getDedupedMessages 获取去重后的消息，防止 Store 中的重复消息传递到 UI
       const msgs = sessionStore.getDedupedMessages(this.sessionId)
       if (msgs && msgs.length > 0) {
+        // 检查消息是否真的变化了（避免重复触发导致 UI 闪烁）
+        if (msgs.length === oldCount && this.messages.length > 0) {
+          // 数量相同，检查最后一条消息是否相同
+          const lastOld = this.messages[this.messages.length - 1]
+          const lastNew = msgs[msgs.length - 1]
+          if (lastOld.id === lastNew.id && lastOld.content === lastNew.content) {
+            // 消息没有实质变化，跳过更新
+            return
+          }
+        }
         // 展开为新数组，确保 ArkTS @State 能检测到引用变化并触发重绘
         this.messages = [...msgs]
         // 自动更新分页数，确保新消息不被分页截断
@@ -931,14 +954,14 @@ struct ChatDetailPage {
     }
   }
 
-  // HdsNavigation 右侧按钮
+  // HdsNavigation 右侧按钮 - 打开 Preview 页面
   private menus: Array<HdsNavigationBadgeIconOptions> = [
     {
       content: {
         icon: $r('sys.symbol.folder'),
         action: () => {
           router.pushUrl({
-            url: 'pages/WorkspacePage',
+            url: 'pages/PreviewPage',
             params: { sessionId: this.sessionId }
           })
         }
@@ -1606,8 +1629,12 @@ struct ChatDetailPage {
             .rotate({ angle: 180 })
             .transition(this.getMessageTransition(message))
           }, (message: Message) => {
-            if (message.type === 'tool_use') {
-              return message.id
+            // 生成稳定且唯一的 key，防止重复渲染
+            if (message.toolUseId && message.type === 'tool_use') {
+              return 'tool_' + message.toolUseId
+            }
+            if (message.toolUseId && message.type === 'tool_result') {
+              return 'result_' + message.toolUseId
             }
             if (message.type === 'permission_request') {
               return message.id + '_' + (message.isPermissionHandled ? 'done' : 'pending')
@@ -1615,7 +1642,10 @@ struct ChatDetailPage {
             if (message.type === 'question') {
               return message.id + '_' + (message.isQuestionAnswered ? 'done' : 'pending')
             }
-            return message.id
+            if (message.id && !message.id.startsWith('stream-') && !message.id.startsWith('thinking-')) {
+              return message.id
+            }
+            return message.type + '_' + (message.content || message.toolResult || '').substring(0, 30)
           })
 
           // 加载更多历史提示（翻转后视觉在顶部）

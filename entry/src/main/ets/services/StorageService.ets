@@ -37,16 +37,18 @@ export class StorageService {
 
   // MARK: - 会话存储
 
-  async saveSessions(sessions: Session[]): Promise<void> {
-    if (!this.sessionStore) return
+  async saveSessions(sessions: Session[]): Promise<boolean> {
+    if (!this.sessionStore) return false
 
     try {
       const jsonString = JSON.stringify(sessions)
       await this.sessionStore.put('sessions', jsonString)
       await this.sessionStore.flush()
       console.info(`[StorageService] Saved ${sessions.length} sessions`)
+      return true
     } catch (e) {
       console.error(`[StorageService] Save sessions error: ${e}`)
+      return false
     }
   }
 
@@ -66,16 +68,18 @@ export class StorageService {
 
   // MARK: - 消息存储
 
-  async saveMessages(sessionId: string, messages: Message[]): Promise<void> {
-    if (!this.messagesStore) return
+  async saveMessages(sessionId: string, messages: Message[]): Promise<boolean> {
+    if (!this.messagesStore) return false
 
     try {
       const jsonString = JSON.stringify(messages)
       await this.messagesStore.put(`messages_${sessionId}`, jsonString)
       await this.messagesStore.flush()
       console.info(`[StorageService] Saved ${messages.length} messages for session ${sessionId}`)
+      return true
     } catch (e) {
       console.error(`[StorageService] Save messages error: ${e}`)
+      return false
     }
   }
 
@@ -93,28 +97,32 @@ export class StorageService {
     }
   }
 
-  async deleteMessages(sessionId: string): Promise<void> {
-    if (!this.messagesStore) return
+  async deleteMessages(sessionId: string): Promise<boolean> {
+    if (!this.messagesStore) return false
 
     try {
       await this.messagesStore.delete(`messages_${sessionId}`)
       await this.messagesStore.flush()
       console.info(`[StorageService] Deleted messages for session ${sessionId}`)
+      return true
     } catch (e) {
       console.error(`[StorageService] Delete messages error: ${e}`)
+      return false
     }
   }
 
   // MARK: - 通用数据存储
 
-  async saveString(key: string, value: string): Promise<void> {
-    if (!this.sessionStore) return
+  async saveString(key: string, value: string): Promise<boolean> {
+    if (!this.sessionStore) return false
 
     try {
       await this.sessionStore.put(key, value)
       await this.sessionStore.flush()
+      return true
     } catch (e) {
       console.error(`[StorageService] Save string error: ${e}`)
+      return false
     }
   }
 
@@ -129,14 +137,16 @@ export class StorageService {
     }
   }
 
-  async saveNumber(key: string, value: number): Promise<void> {
-    if (!this.sessionStore) return
+  async saveNumber(key: string, value: number): Promise<boolean> {
+    if (!this.sessionStore) return false
 
     try {
       await this.sessionStore.put(key, value)
       await this.sessionStore.flush()
+      return true
     } catch (e) {
       console.error(`[StorageService] Save number error: ${e}`)
+      return false
     }
   }
 
@@ -151,14 +161,16 @@ export class StorageService {
     }
   }
 
-  async saveBoolean(key: string, value: boolean): Promise<void> {
-    if (!this.sessionStore) return
+  async saveBoolean(key: string, value: boolean): Promise<boolean> {
+    if (!this.sessionStore) return false
 
     try {
       await this.sessionStore.put(key, value)
       await this.sessionStore.flush()
+      return true
     } catch (e) {
       console.error(`[StorageService] Save boolean error: ${e}`)
+      return false
     }
   }
 
@@ -175,8 +187,8 @@ export class StorageService {
 
   // MARK: - 会话状态存储
 
-  async saveSessionStatuses(statuses: Map<string, string>): Promise<void> {
-    if (!this.sessionStore) return
+  async saveSessionStatuses(statuses: Map<string, string>): Promise<boolean> {
+    if (!this.sessionStore) return false
 
     try {
       const statusObj: Record<string, string> = {}
@@ -187,8 +199,10 @@ export class StorageService {
       await this.sessionStore.put('session_statuses', jsonString)
       await this.sessionStore.flush()
       console.info(`[StorageService] Saved ${statuses.size} session statuses`)
+      return true
     } catch (e) {
       console.error(`[StorageService] Save session statuses error: ${e}`)
+      return false
     }
   }
 
@@ -213,16 +227,18 @@ export class StorageService {
 
   // MARK: - 最近使用的工作目录
 
-  async saveRecentWorkDirs(dirs: string[]): Promise<void> {
-    if (!this.sessionStore) return
+  async saveRecentWorkDirs(dirs: string[]): Promise<boolean> {
+    if (!this.sessionStore) return false
 
     try {
       const jsonString = JSON.stringify(dirs)
       await this.sessionStore.put('recent_work_dirs', jsonString)
       await this.sessionStore.flush()
       console.info(`[StorageService] Saved ${dirs.length} recent work dirs`)
+      return true
     } catch (e) {
       console.error(`[StorageService] Save recent work dirs error: ${e}`)
+      return false
     }
   }
 

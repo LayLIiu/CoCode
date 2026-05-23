@@ -37,11 +37,13 @@ export class ConnectionManager {
   private checkTimer: number = -1
   private listeners: ConnectionChangeListener[] = []
   private lastNetworkInfo: NetworkInfo | null = null
+  private isInitialized: boolean = false  // 是否已完成首次连接
 
   // 配置参数
   private readonly CHECK_INTERVAL = 60000  // 60秒检查一次
-  private readonly CHECK_TIMEOUT = 5000    // 5秒超时
-  private readonly FAST_CHECK_TIMEOUT = 2000  // 快速检查 2秒超时
+  private readonly CHECK_TIMEOUT = 10000   // 10秒超时（兼容云中继）
+  private readonly FAST_CHECK_TIMEOUT = 3000  // 快速检查 3秒超时
+  private readonly CLOUD_RELAY_TIMEOUT = 15000  // 云中继专用超时 15秒
   private readonly GOOD_LATENCY_THRESHOLD = 100  // 100ms 以下为良好
   private readonly POOR_LATENCY_THRESHOLD = 500  // 500ms 以上为差
 
@@ -75,6 +77,53 @@ export class ConnectionManager {
         this.listeners[i](this.currentStatus)
       }
     }
+  }
+
+  /**
+   * 快速启动：立即使用已配置的 URL，不等待网络检测
+   * 后台执行完整的连接优化
+   */
+  quickStart(): void {
+    const serverUrl = authStore.serverUrl
+    if (!serverUrl) {
+      console.warn('[ConnectionManager] No server URL configured')
+      return
+    }
+
+    // 立即设置 API 和 WebSocket 地址
+    apiService.setBaseUrl(serverUrl)
+    wsService.setServerUrl(serverUrl)
+
+    // 根据 URL 类型设置初始状态
+    const profile = authStore.activeProfile
+    const connType: ConnectionType = (profile?.type as ConnectionType) || 'unknown'
+
+    this.currentStatus = {
+      type: connType,
+      quality: 'good',  // 先假设良好，后台检测后再更新
+      latency: 0,
+      lastChecked: Date.now(),
+      lanUrl: connType === 'lan' ? serverUrl : '',
+      tunnelUrl: connType === 'tunnel' ? serverUrl : '',
+      cloudRelayUrl: connType === 'cloud_relay' ? serverUrl : ''
+    }
+    this.notifyListeners()
+
+    console.info(`[ConnectionManager] Quick start: using ${connType} ${serverUrl}`)
+
+    // 后台执行完整连接检查（不阻塞启动）
+    setTimeout(() => {
+      this.smartConnect().catch((e: Error) => {
+        console.error(`[ConnectionManager] Background smart connect error: ${e.message}`)
+      })
+    }, 100)
+  }
+
+  /**
+   * 检查是否已初始化
+   */
+  isReady(): boolean {
+    return this.isInitialized
   }
 
   /**
@@ -163,28 +212,57 @@ export class ConnectionManager {
 
   /**
    * 并行测试多个 URL，返回最快的可用连接
+   * 优化：使用"第一个成功即返回"策略，不等待所有测试完成
    */
   async findBestConnection(urls: string[], urlTypeMap?: Record<string, ConnectionType>): Promise<ConnectionCheckResult | null> {
     if (urls.length === 0) return null
 
-    // 并行测试所有 URL
-    const promises: Promise<ConnectionCheckResult>[] = []
+    // 使用 Promise.race 策略：一旦有可用的连接就立即返回
+    // 同时记录所有结果用于后续排序选择最优
+    const results: ConnectionCheckResult[] = []
+    let bestResult: ConnectionCheckResult | null = null
+
+    // 创建所有测试 Promise
+    const promises: Promise<void>[] = []
     for (let i = 0; i < urls.length; i++) {
-      const hintType = urlTypeMap ? urlTypeMap[urls[i]] : undefined
-      promises.push(this.testConnection(urls[i], this.CHECK_TIMEOUT, hintType))
+      const url = urls[i]
+      const hintType = urlTypeMap ? urlTypeMap[url] : undefined
+      // 云中继/隧道使用更长超时
+      const timeout = (hintType === 'cloud_relay' || hintType === 'tunnel')
+        ? this.CLOUD_RELAY_TIMEOUT
+        : this.CHECK_TIMEOUT
+
+      const promise = this.testConnection(url, timeout, hintType).then((result) => {
+        results.push(result)
+        // 如果是第一个可用的结果，记录为候选
+        if (result.available && !bestResult) {
+          bestResult = result
+          console.info(`[ConnectionManager] First available connection: ${result.type} ${result.url} (${result.latency}ms)`)
+        }
+      })
+      promises.push(promise)
     }
 
-    const results = await Promise.all(promises)
+    // 使用 Promise.all 等待，但设置总超时
+    const overallTimeout = new Promise<void>((resolve) => {
+      setTimeout(() => resolve(), this.CLOUD_RELAY_TIMEOUT + 1000)
+    })
 
-    // 找出所有可用连接
+    // 等待所有测试完成或超时
+    await Promise.race([
+      Promise.all(promises),
+      overallTimeout
+    ])
+
+    // 如果有可用的结果，选择最优的
     const available = results.filter(r => r.available)
 
     if (available.length === 0) {
+      console.warn(`[ConnectionManager] No available connections after testing ${urls.length} URLs`)
       return null
     }
 
-    // 按权重排序，优先选择权重高的连接类型
-    // 权重: LAN/Pgy > cloud_relay > tunnel
+    // 按权重排序，选择最优连接
     available.sort((a, b) => {
       const weight = (type: ConnectionType): number => {
         switch (type) {
@@ -225,13 +303,6 @@ export class ConnectionManager {
   async smartConnect(): Promise<ConnectionStatus> {
     console.info('[ConnectionManager] Starting smart connect...')
 
-    // 1. 从服务器获取网络信息
-    try {
-      this.lastNetworkInfo = await apiService.getNetworkInfo()
-    } catch (e) {
-      console.warn('[ConnectionManager] Failed to get network info from server')
-    }
-
     // 2. 收集可用的 URL 列表
     const urls: string[] = []
     const urlMap: Record<string, ConnectionType> = {}
@@ -244,6 +315,56 @@ export class ConnectionManager {
         urls.push(profile.url)
         urlMap[profile.url] = profile.type as ConnectionType
       }
+    }
+
+    // 优化：如果只有一个 URL，直接使用它，跳过测试
+    if (urls.length === 1) {
+      const singleUrl = urls[0]
+      const singleType = urlMap[singleUrl] || 'unknown'
+      console.info(`[ConnectionManager] Single URL configured: ${singleType} ${singleUrl}, using directly`)
+
+      // 直接设置并测试连接
+      const result = await this.testConnection(singleUrl, this.CLOUD_RELAY_TIMEOUT, singleType)
+
+      if (result.available) {
+        await this.switchToUrl(singleUrl, singleType)
+        const status: ConnectionStatus = {
+          type: singleType,
+          quality: result.latency < this.POOR_LATENCY_THRESHOLD ? 'good' : 'poor',
+          latency: result.latency,
+          lastChecked: Date.now(),
+          lanUrl: '',
+          tunnelUrl: '',
+          cloudRelayUrl: singleType === 'cloud_relay' ? singleUrl : ''
+        }
+        this.currentStatus = status
+        this.isInitialized = true
+        this.notifyListeners()
+        return status
+      }
+
+      // 单 URL 不可用时返回错误状态
+      console.warn(`[ConnectionManager] Single URL ${singleUrl} is not available`)
+      const failStatus: ConnectionStatus = {
+        type: singleType,
+        quality: 'unavailable',
+        latency: -1,
+        lastChecked: Date.now(),
+        lanUrl: '',
+        tunnelUrl: '',
+        cloudRelayUrl: singleType === 'cloud_relay' ? singleUrl : ''
+      }
+      this.currentStatus = failStatus
+      this.isInitialized = true
+      this.notifyListeners()
+      return failStatus
+    }
+
+    // 1. 从服务器获取网络信息（多 URL 时才需要）
+    try {
+      this.lastNetworkInfo = await apiService.getNetworkInfo()
+    } catch (e) {
+      console.warn('[ConnectionManager] Failed to get network info from server')
     }
 
     // 从网络信息补充
@@ -275,6 +396,7 @@ export class ConnectionManager {
         cloudRelayUrl: ''
       }
       this.currentStatus = status
+      this.isInitialized = true
       this.notifyListeners()
       return status
     }
@@ -296,6 +418,7 @@ export class ConnectionManager {
         cloudRelayUrl: this.lastNetworkInfo?.cloudRelayUrl || ''
       }
       this.currentStatus = status
+      this.isInitialized = true
       this.notifyListeners()
       return status
     }
@@ -326,6 +449,7 @@ export class ConnectionManager {
     }
 
     this.currentStatus = status
+    this.isInitialized = true
     this.notifyListeners()
 
     console.info(`[ConnectionManager] Connected via ${best.type}, latency: ${best.latency}ms, quality: ${quality}`)
@@ -390,12 +514,19 @@ export class ConnectionManager {
 
   /**
    * 快速检查当前连接是否仍然可用
+   * 对于云中继使用更长超时
    */
   async quickCheck(): Promise<boolean> {
     const currentUrl = apiService.getBaseUrl()
     if (!currentUrl) return false
 
-    const result = await this.testConnection(currentUrl, this.FAST_CHECK_TIMEOUT)
+    // 根据连接类型选择超时时间
+    const currentType = this.currentStatus?.type || 'unknown'
+    const timeout = (currentType === 'cloud_relay' || currentType === 'tunnel')
+      ? this.CLOUD_RELAY_TIMEOUT
+      : this.FAST_CHECK_TIMEOUT
+
+    const result = await this.testConnection(currentUrl, timeout)
     return result.available
   }
 
