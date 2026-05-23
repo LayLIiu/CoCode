@@ -1461,6 +1461,25 @@ export class SessionStore {
     return this.sessionStatuses.get(sessionId) || 'idle'
   }
 
+  // 获取所有活跃会话（状态为 thinking/streaming/tool_executing）
+  getActiveSessions(): Session[] {
+    const activeStatuses: SessionStatus[] = ['thinking', 'streaming', 'tool_executing']
+    const result: Session[] = []
+    for (let i = 0; i < this.sessions.length; i++) {
+      const session = this.sessions[i]
+      const status = this.sessionStatuses.get(session.id) || 'idle'
+      if (activeStatuses.includes(status)) {
+        result.push(session)
+      }
+    }
+    return result
+  }
+
+  // 获取活跃会话数量
+  getActiveSessionCount(): number {
+    return this.getActiveSessions().length
+  }
+
   // MARK: - WebSocket 消息处理
 
   private handleWSMessage(sessionId: string, msg: WSMessage): void {

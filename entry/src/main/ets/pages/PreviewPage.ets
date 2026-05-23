@@ -460,45 +460,41 @@ struct PreviewPage {
   }
 
   build() {
-    Stack() {
+    Column() {
+      // 标题栏
+      this.HeaderBar()
+
+      // 标签页栏
+      this.TabStrip()
+
+      // 内容区域
       Column() {
-        // 标题栏
-        this.HeaderBar()
-
-        // 标签页栏
-        this.TabStrip()
-
-        // 内容区域
-        Column() {
-          if (this.activeTab === 'git') {
-            this.GitTabContent()
-          } else if (this.activeTab === 'files') {
-            this.FilesTabContent()
-          } else if (this.activeTab === 'markdown') {
-            this.MarkdownTabContent()
-          } else if (this.activeTab === 'web') {
-            this.WebTabContent()
-          } else if (this.activeTab === 'ssh') {
-            this.SshTabContent()
-          }
+        if (this.activeTab === 'git') {
+          this.GitTabContent()
+        } else if (this.activeTab === 'files') {
+          this.FilesTabContent()
+        } else if (this.activeTab === 'markdown') {
+          this.MarkdownTabContent()
+        } else if (this.activeTab === 'web') {
+          this.WebTabContent()
+        } else if (this.activeTab === 'ssh') {
+          this.SshTabContent()
         }
-        .layoutWeight(1)
-        .width('100%')
       }
+      .layoutWeight(1)
       .width('100%')
-      .height('100%')
-      .linearGradient({
-        angle: 180,
-        colors: [
-          [Theme.BackgroundGradientStart, 0.0],
-          [Theme.BackgroundGradientMiddle, 0.5],
-          [Theme.BackgroundGradientEnd, 1.0]
-        ]
-      })
-      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
     .width('100%')
     .height('100%')
+    .linearGradient({
+      angle: 180,
+      colors: [
+        [Theme.BackgroundGradientStart, 0.0],
+        [Theme.BackgroundGradientMiddle, 0.5],
+        [Theme.BackgroundGradientEnd, 1.0]
+      ]
+    })
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     .bindSheet($$this.showCommitSheet, this.CommitSheet(), {
       height: 320,
       backgroundColor: Theme.BackgroundPrimary,
