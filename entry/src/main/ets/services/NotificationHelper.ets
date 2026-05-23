@@ -40,13 +40,22 @@ export class NotificationHelper {
       const enabled = await notificationManager.isNotificationEnabled()
       if (enabled) {
         this.isNotificationEnabled = true
+        await this.ensureSlotCreated()
       } else {
-        await notificationManager.requestEnableNotification(this.context as common.UIAbilityContext)
-        this.isNotificationEnabled = true
+        // 尝试请求权限，UI 未就绪时可能失败——不设 false，保持默认 false
+        // publishNotification 中会兜底重试
+        try {
+          await notificationManager.requestEnableNotification(this.context as common.UIAbilityContext)
+          this.isNotificationEnabled = true
+          await this.ensureSlotCreated()
+        } catch (innerErr) {
+          console.warn('[NotificationHelper] requestEnableNotification failed (UI not ready?), will retry later')
+          // 保持 this.isNotificationEnabled 为 false，publish 时会再试
+        }
       }
-      await this.ensureSlotCreated()
     } catch (e) {
-      this.isNotificationEnabled = false
+      console.warn('[NotificationHelper] isNotificationEnabled check failed: ' + JSON.stringify(e))
+      // 保持 this.isNotificationEnabled 为 false
     }
   }
 
@@ -56,7 +65,8 @@ export class NotificationHelper {
       await notificationManager.addSlot(notificationManager.SlotType.SOCIAL_COMMUNICATION)
       this.isSlotCreated = true
     } catch (e) {
-      // ignore slot creation error
+      // addSlot 在槽位已存在时也会报错，标记已创建避免重复尝试
+      this.isSlotCreated = true
     }
   }
 
@@ -107,12 +117,24 @@ export class NotificationHelper {
 
   private async publishNotification(params: NotificationParams): Promise<void> {
     if (!this.context) return
+    // 权限未确认时检查并兜底请求
     if (!this.isNotificationEnabled) {
       try {
         const enabled = await notificationManager.isNotificationEnabled()
-        if (!enabled) return
-        this.isNotificationEnabled = true
+        if (enabled) {
+          this.isNotificationEnabled = true
+        } else {
+          // 权限未授予，尝试弹出授权对话框（此时 UI 已就绪）
+          try {
+            await notificationManager.requestEnableNotification(this.context as common.UIAbilityContext)
+            this.isNotificationEnabled = true
+          } catch (reqErr) {
+            console.warn('[NotificationHelper] publish: permission request rejected: ' + JSON.stringify(reqErr))
+            return
+          }
+        }
       } catch (e) {
+        console.warn('[NotificationHelper] publish: permission check failed: ' + JSON.stringify(e))
         return
       }
     }
@@ -144,8 +166,9 @@ export class NotificationHelper {
       }
 
       await notificationManager.publish(request)
+      console.info('[NotificationHelper] notification published: id=' + idNum + ' title=' + titleStr)
     } catch (e) {
-      // ignore
+      console.warn('[NotificationHelper] publish error: ' + JSON.stringify(e))
     }
   }
 
