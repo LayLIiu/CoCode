@@ -20,6 +20,7 @@
         "startWindowBackground": "$color:start_window_background",
         "startWindowIcon": "$media:layered_image",
         "exported": true,
+        "backgroundModes": ["dataTransfer"],
         "skills": [
           {
             "entities": [

@@ -40,6 +40,9 @@ export class AppState {
   // 通知点击待跳转的会话 ID
   pendingSessionId: string | null = null
 
+  // 上次进入后台的时间戳（用于前台回来检测后台期间的新消息）
+  lastBackgroundTimestamp: number = 0
+
   // 状态变更监听者列表
   private themeChangedListeners: Array<() => void> = []
   private modelsChangedListeners: Array<() => void> = []

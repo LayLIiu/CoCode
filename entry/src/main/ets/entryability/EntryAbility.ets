@@ -222,6 +222,15 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground')
     appState.isInForeground = false
 
+    // 进入后台前刷新 WebSocket 连接，确保以最新状态进入后台
+    if (authStore.serverUrl) {
+      wsService.forceReconnectAll()
+      hilog.info(DOMAIN, 'testTag', 'WebSocket reconnected before background')
+    }
+
+    // 记录进入后台的时间戳，前台回来时检测后台期间的新消息
+    appState.lastBackgroundTimestamp = Date.now()
+
     // 申请后台长时任务，保持 WebSocket 连接
     if (this.isBackgroundTaskRunning) {
       return  // 已有后台任务在运行，不重复申请
