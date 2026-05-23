@@ -874,7 +874,14 @@ export class SessionStore {
               foundByContent = true
               break
             }
-            // toolUseId 不同但 toolName 相同 → 按时间附近判定是否同一调用
+            // toolUseId 不同但 toolName 相同 → 检查 toolInput 是否相同：
+            // 不同 toolInput 说明是不同调用（如 Read 不同文件），不应合并
+            const localInput = msg.toolInput ? JSON.stringify(msg.toolInput) : ''
+            const serverInput = sm.toolInput ? JSON.stringify(sm.toolInput) : ''
+            if (localInput && serverInput && localInput !== serverInput) {
+              continue
+            }
+            // toolInput 相同时，按时间附近判定是否同一调用
             const msgTime = new Date(msg.timestamp).getTime()
             const smTime = new Date(sm.timestamp).getTime()
             if (Math.abs(msgTime - smTime) < 5000) {
@@ -1063,7 +1070,10 @@ export class SessionStore {
       result.push(tail[i])
     }
     // 用规整化内容再做一道去重（trim + 合并空白），捕获流式 vs 服务端格式差异
-    if (dupCount === 0 && result.length >= 2) {
+    // 注意：必须始终执行（不依赖 dupCount），因为 tool_use 的第一道去重 key 含 toolUseId
+    // 导致 tool_use 消息永远不会被第一道去重命中，dupCount 始终为 0，但可能有其他消息重复
+    // 导致 dupCount > 0 跳过此逻辑。始终执行可保证 tool_use 的规整化去重不会漏过。
+    if (result.length >= 2) {
       const normalizedSeen = new Set<string>()
       const normResult: Message[] = []
       for (let i = 0; i < result.length; i++) {
@@ -1073,7 +1083,12 @@ export class SessionStore {
           // 有 toolUseId 的 tool_use 消息：按 type + toolName 去重（忽略 toolUseId 差异）
           // tool_result 有 toolResult 内容，不会走此路径
           if (result[i].type === 'tool_use' && result[i].toolName) {
-            const toolKey = result[i].type + ':tool:' + result[i].toolName
+            // 用 type + toolName + toolInput 去重（而非仅 toolName），
+            // 允许同名但不同参数的工具调用（如多次 Read 不同文件）共存，
+            // 同时去重 WS 瞬时 toolUseId 与服务端 toolUseId 不同导致的重复。
+            // 注意：tool_use 的 content 字段始终为空，参数存在 toolInput 中。
+            const inputStr = result[i].toolInput ? JSON.stringify(result[i].toolInput) : ''
+            const toolKey = result[i].type + ':tool:' + result[i].toolName + ':' + inputStr.substring(0, 500)
             if (normalizedSeen.has(toolKey)) {
               dupCount++
               console.info(`[SessionStore] getDedupedMessages toolDup #${dupCount}: skip type=${result[i].type} toolName=${result[i].toolName} toolUseId=${result[i].toolUseId}`)
