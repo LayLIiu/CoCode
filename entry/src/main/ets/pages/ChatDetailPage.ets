@@ -10,6 +10,7 @@ import { hdsMaterial, HdsTabs, hdsEffect } from '@kit.UIDesignKit'
 import { curves, RectShape } from '@kit.ArkUI'
 import { speechRecognizer } from '@kit.CoreSpeechKit'
 import { audio } from '@kit.AudioKit'
+import { media } from '@kit.MediaKit'
 import { abilityAccessCtrl, common } from '@kit.AbilityKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { sessionStore } from '../stores/SessionStore'
@@ -615,7 +616,7 @@ struct ChatDetailPage {
       if (status === 'completed') {
         this.stopWorkTimer()
         this.vibrateReplyCompleted()
-        this.playSound('staplebops-02.wav')
+        this.playSound('staplebops-02.m4a')
         console.info('[ChatDetailPage] status=completed, played end sound')
       } else if (status === 'idle') {
         this.stopWorkTimer()
@@ -626,7 +627,7 @@ struct ChatDetailPage {
         // AI 首次响应时播放"已连接"音效（每轮只播放一次）
         if (status === 'streaming' && !this.hasPlayedConnectSound) {
           this.hasPlayedConnectSound = true
-          this.playSound('staplebops-01.wav')
+          this.playSound('staplebops-01.m4a')
         }
       }
     }
@@ -1022,38 +1023,47 @@ struct ChatDetailPage {
     } catch (e) {}
   }
 
-  // 播放 rawfile 音效（使用 AudioRenderer 播放 WAV PCM）
+  // 播放 rawfile 音效（使用 AVPlayer 播放 M4A）
   private async playSound(fileName: string): Promise<void> {
     try {
       console.info(`[ChatDetailPage] playSound: ${fileName}`)
       const ctx: common.Context = getContext(this) as common.Context
-      const fileData: Uint8Array = await ctx.resourceManager.getRawFileContent(fileName)
-      if (!fileData || fileData.length <= 44) {
-        console.error(`[ChatDetailPage] playSound: invalid file data for ${fileName}`)
-        return
-      }
-      // WAV 头 44 字节，跳过得到 PCM 数据
-      const pcmData = fileData.subarray(44)
-      const pcmBuffer: ArrayBuffer = new ArrayBuffer(pcmData.length)
-      new Uint8Array(pcmBuffer).set(pcmData)
+      const rawFd = await ctx.resourceManager.getRawFd(fileName)
 
-      const audioRendererOptions: audio.AudioRendererOptions = {
-        streamInfo: {
-          samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_44100,
-          channels: audio.AudioChannel.CHANNEL_1,
-          sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
-          encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW
-        },
-        rendererInfo: {
-          usage: audio.StreamUsage.STREAM_USAGE_MUSIC,
-          rendererFlags: 0
+      const avPlayer: media.AVPlayer = await media.createAVPlayer()
+
+      // 等待 prepared 状态
+      await new Promise<void>((resolve, reject) => {
+        const onStateChange = (state: media.AVPlayerState): void => {
+          if (state === 'prepared') {
+            avPlayer.off('stateChange', onStateChange)
+            resolve()
+          } else if (state === 'error') {
+            avPlayer.off('stateChange', onStateChange)
+            reject(new Error('AVPlayer prepare error'))
+          }
         }
-      }
-      const audioRenderer: audio.AudioRenderer = await audio.createAudioRenderer(audioRendererOptions)
-      await audioRenderer.start()
-      await audioRenderer.write(pcmBuffer)
-      await audioRenderer.stop()
-      await audioRenderer.release()
+        avPlayer.on('stateChange', onStateChange)
+        avPlayer.fdSrc = { fd: rawFd.fd, offset: rawFd.offset, length: rawFd.length }
+        avPlayer.prepare()
+      })
+
+      // 播放并等待完成
+      await new Promise<void>((resolve, reject) => {
+        const onStateChange = (state: media.AVPlayerState): void => {
+          if (state === 'completed') {
+            avPlayer.off('stateChange', onStateChange)
+            resolve()
+          } else if (state === 'error') {
+            avPlayer.off('stateChange', onStateChange)
+            reject(new Error('AVPlayer play error'))
+          }
+        }
+        avPlayer.on('stateChange', onStateChange)
+        avPlayer.play()
+      })
+
+      await avPlayer.release()
       console.info(`[ChatDetailPage] playSound: ${fileName} played successfully`)
     } catch (e) {
       console.error(`[ChatDetailPage] playSound exception: ${e}`)
