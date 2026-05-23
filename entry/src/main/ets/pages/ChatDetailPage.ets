@@ -994,14 +994,18 @@ struct ChatDetailPage {
 
   private getBottomSpacerHeight(): number {
     const inputAreaHeight = 120
+    // 吉祥物指示器（条件显示）高度约 45px（27px 吉祥物 + 上下 padding 12px + 间距）
+    const mascotHeight = (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
+      this.chatStatus === 'tool_executing' || this.chatStatus === 'permission_pending' ||
+      this.chatStatus === 'question_pending') ? 45 : 0
     const tasks = this.taskItems
     if (tasks.length === 0 || sessionStore.taskBarDismissed) {
-      return inputAreaHeight
+      return inputAreaHeight + mascotHeight
     }
     // 折叠状态：分隔线 + 标题行(~44) + 间距 + 输入框
     const collapsedHeight = 57
     if (!sessionStore.taskBarExpanded) {
-      return inputAreaHeight + collapsedHeight
+      return inputAreaHeight + collapsedHeight + mascotHeight
     }
     // 展开状态：折叠高度 + 任务列表行数
     const expandedHeight = Math.min(tasks.length * 50, 200)
@@ -1466,16 +1470,6 @@ struct ChatDetailPage {
             .rotate({ angle: 180 })
           }
 
-          // AI 工作状态指示器（吉祥物动画）
-          if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
-            this.chatStatus === 'tool_executing' || this.chatStatus === 'permission_pending' ||
-            this.chatStatus === 'question_pending') {
-            ListItem() {
-              this.StreamingIndicator()
-            }
-            .rotate({ angle: 180 })
-          }
-
           // 消息倒序排列（最新在前=视觉底部），工具消息合组
           ForEach([...this.getVisibleMessages()].reverse(), (message: Message) => {
             ListItem() {
@@ -1494,7 +1488,7 @@ struct ChatDetailPage {
             .rotate({ angle: 180 })
             .transition(TransitionEffect.asymmetric(
               TransitionEffect.OPACITY
-                .combine(TransitionEffect.translate({ y: 40 }))
+                .combine(TransitionEffect.translate({ y: -40 }))
                 .animation({ duration: 300, curve: Curve.FastOutSlowIn }),
               TransitionEffect.OPACITY.animation({ duration: 150 })
             ))
@@ -1502,9 +1496,8 @@ struct ChatDetailPage {
             if (message.type === 'tool_use') {
               let extra = ''
               if (message.toolName === 'Agent') {
-                // Agent 状态变化：agentTaskStatus 更新 + 子工具数量 + 重绘计数器
                 const childCount = this.getChildToolCalls(message.toolUseId || '').length
-                extra = '_' + (message.agentTaskStatus || '') + '_c' + childCount + '_u' + this.messageUpdateCounter
+                extra = '_' + (message.agentTaskStatus || '') + '_c' + childCount
               }
               return message.id + '_' + (message.toolStatus || '') + extra
             }
@@ -1680,6 +1673,17 @@ struct ChatDetailPage {
 
       // 底部悬浮区域：任务面板 + 最新消息按钮 + 输入框
       Column({ space: 0 }) {
+        // 吉祥物 + 用时（固定左下角，不随消息列表滚动）
+        if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
+          this.chatStatus === 'tool_executing' || this.chatStatus === 'permission_pending' ||
+          this.chatStatus === 'question_pending') {
+          Row() {
+            this.StreamingIndicator()
+          }
+          .width('100%')
+          .padding({ left: 0 })
+        }
+
         // 任务面板
         this.TaskBarView()
 
@@ -1814,6 +1818,24 @@ struct ChatDetailPage {
     }
     .width('100%')
     .margin({ bottom: Theme.SpacingXS })
+  }
+
+  // 流式思考气泡是否展开
+  private isStreamingThinkingExpanded(): boolean {
+    return this.expandedThinkingIds.has('streaming-thinking')
+  }
+
+  // 切换流式思考气泡展开/折叠
+  private toggleStreamingThinking(): void {
+    if (this.isStreamingThinkingExpanded()) {
+      const newSet = new Set(this.expandedThinkingIds)
+      newSet.delete('streaming-thinking')
+      this.expandedThinkingIds = newSet
+    } else {
+      const newSet = new Set(this.expandedThinkingIds)
+      newSet.add('streaming-thinking')
+      this.expandedThinkingIds = newSet
+    }
   }
 
   // 映射 chatStatus 到 MascotStatus
@@ -2154,6 +2176,7 @@ struct ChatDetailPage {
   StreamingThinkingBubble() {
     Row() {
       Column({ space: 0 }) {
+        // 可点击头部
         Row({ space: 8 }) {
           SymbolGlyph($r('sys.symbol.lightbulb'))
             .fontSize(12)
@@ -2165,20 +2188,37 @@ struct ChatDetailPage {
             .fontColor(Theme.TextSecondary)
 
           Blank()
+
+          // 箭头指示展开/折叠
+          if (this.isStreamingThinkingExpanded()) {
+            SymbolGlyph($r('sys.symbol.chevron_down'))
+              .fontSize(9)
+              .fontColor([Theme.TextTertiary])
+          } else {
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(9)
+              .fontColor([Theme.TextTertiary])
+          }
         }
         .width('100%')
-        .padding({ left: 12, right: 12, top: 10, bottom: 6 })
+        .padding({ left: 12, right: 12, top: 10, bottom: this.isStreamingThinkingExpanded() ? 6 : 10 })
+        .onClick(() => {
+          this.toggleStreamingThinking()
+        })
 
-        Scroll(this.streamingThinkingScroller) {
-          Text(this.streamingThinking)
-            .fontSize(11)
-            .fontColor(Theme.TextSecondary)
-            .fontFamily('monospace')
-            .width('100%')
+        // 展开时显示内容
+        if (this.isStreamingThinkingExpanded()) {
+          Scroll(this.streamingThinkingScroller) {
+            Text(this.streamingThinking)
+              .fontSize(11)
+              .fontColor(Theme.TextSecondary)
+              .fontFamily('monospace')
+              .width('100%')
+          }
+          .height(Math.max(60, Math.min(200, this.streamingThinking.split('\n').length * 20)))
+          .scrollBar(BarState.Off)
+          .padding({ left: 12, right: 12, bottom: 10 })
         }
-        .height(Math.max(60, Math.min(200, this.streamingThinking.split('\n').length * 20)))
-        .scrollBar(BarState.Off)
-        .padding({ left: 12, right: 12, bottom: 10 })
       }
       .width('100%')
       .backgroundColor('#2C2C2E')
