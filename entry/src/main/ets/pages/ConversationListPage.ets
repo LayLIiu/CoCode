@@ -263,7 +263,8 @@ export struct ConversationListPage {
     }
 
     this.sessionsChangedListener = () => {
-      this.sessions = sessionStore.sessions || []
+      // 创建新数组引用，确保 @State 响应式更新
+      this.sessions = [...(sessionStore.sessions || [])]
       this.isLoading = sessionStore.isLoading
       this.refreshTrigger = Date.now()
     }
@@ -496,51 +497,6 @@ export struct ConversationListPage {
     return result
   }
 
-  private isBusyStatus(status: SessionStatus): boolean {
-    return status === 'thinking' || status === 'streaming' || status === 'tool_executing'
-  }
-
-  private isWaitingStatus(status: SessionStatus): boolean {
-    return status === 'permission_pending' || status === 'question_pending'
-  }
-
-  private getVisibleSessionCount(): number {
-    return this.getFilteredSessions().length
-  }
-
-  private getBusySessionCount(): number {
-    const sessions = this.getFilteredSessions()
-    let count = 0
-    for (let i = 0; i < sessions.length; i++) {
-      if (this.isBusyStatus(sessionStore.getSessionStatus(sessions[i].id))) {
-        count++
-      }
-    }
-    return count
-  }
-
-  private getWaitingSessionCount(): number {
-    const sessions = this.getFilteredSessions()
-    let count = 0
-    for (let i = 0; i < sessions.length; i++) {
-      if (this.isWaitingStatus(sessionStore.getSessionStatus(sessions[i].id))) {
-        count++
-      }
-    }
-    return count
-  }
-
-  private getCompletedSessionCount(): number {
-    const sessions = this.getFilteredSessions()
-    let count = 0
-    for (let i = 0; i < sessions.length; i++) {
-      if (sessionStore.getSessionStatus(sessions[i].id) === 'completed') {
-        count++
-      }
-    }
-    return count
-  }
-
   // 侧滑删除按钮
   @Builder
   SwipeDeleteButton(sessionId: string) {
@@ -554,9 +510,9 @@ export struct ConversationListPage {
     .borderRadius(25)
     .backgroundColor('#FF3B30')
     .margin({ right: 8 })
-    .onClick(() => {
+    .onClick(async () => {
       // 本地隐藏，服务端保留，可通过导入恢复
-      sessionStore.deleteLocalSession(sessionId)
+      await sessionStore.deleteLocalSession(sessionId)
     })
   }
 
@@ -568,12 +524,6 @@ export struct ConversationListPage {
           // 顶部占位：让列表内容默认从搜索框下方开始
           ListItem() {
             Column().width('100%').height(146)
-          }
-
-          if (this.sessions && this.sessions.length > 0) {
-            ListItem() {
-              this.StatusOverview()
-            }
           }
 
           if (this.isLoading && (!this.sessions || this.sessions.length === 0)) {
@@ -673,81 +623,6 @@ export struct ConversationListPage {
     }
     .width('100%')
     .padding({ top: Theme.SpacingLG, bottom: Theme.SpacingSM })
-  }
-
-  @Builder
-  StatusOverview() {
-    Column({ space: 12 }) {
-      Row() {
-        Column({ space: 4 }) {
-          Text('当前工作台')
-            .fontSize(Theme.FontCaption)
-            .fontColor(Theme.TextSecondary)
-
-          Text(`${this.getVisibleSessionCount()} 个会话`)
-            .fontSize(22)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Theme.TextPrimary)
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-
-        if (this.getWaitingSessionCount() > 0) {
-          Row({ space: 6 }) {
-            SymbolGlyph($r('sys.symbol.exclamationmark_triangle_fill'))
-              .fontSize(15)
-              .fontColor([Theme.AccentOrange])
-
-            Text(`${this.getWaitingSessionCount()} 个待处理`)
-              .fontSize(Theme.FontTiny)
-              .fontColor(Theme.AccentOrange)
-          }
-          .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-          .backgroundColor('rgba(255, 159, 10, 0.14)')
-          .borderRadius(10)
-        }
-      }
-      .width('100%')
-
-      Row({ space: 8 }) {
-        this.OverviewChip('运行中', this.getBusySessionCount(), Theme.AccentBlue, 'rgba(10, 132, 255, 0.12)')
-        this.OverviewChip('等待', this.getWaitingSessionCount(), Theme.AccentOrange, 'rgba(255, 159, 10, 0.13)')
-        this.OverviewChip('完成', this.getCompletedSessionCount(), Theme.AccentGreen, 'rgba(48, 209, 88, 0.11)')
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .padding(Theme.SpacingLG)
-    .margin({ bottom: Theme.SpacingSM })
-    .backgroundColor('rgba(255, 255, 255, 0.045)')
-    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.08)' })
-    .borderRadius(Theme.RadiusLarge)
-  }
-
-  @Builder
-  OverviewChip(label: string, count: number, color: string, bgColor: string) {
-    Row({ space: 6 }) {
-      Row()
-        .width(7)
-        .height(7)
-        .borderRadius(4)
-        .backgroundColor(color)
-        .opacity(count > 0 ? 1 : 0.35)
-
-      Text(label)
-        .fontSize(Theme.FontTiny)
-        .fontColor(Theme.TextSecondary)
-
-      Text(`${count}`)
-        .fontSize(Theme.FontTiny)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(color)
-    }
-    .layoutWeight(1)
-    .height(34)
-    .justifyContent(FlexAlign.Center)
-    .backgroundColor(bgColor)
-    .borderRadius(10)
   }
 
   @Builder

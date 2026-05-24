@@ -1010,6 +1010,35 @@ struct ChatDetailPage {
     }
   }
 
+  private getStatusBackgroundColor(): string {
+    switch (this.chatStatus) {
+      case 'thinking':
+      case 'streaming':
+      case 'tool_executing':
+        return 'rgba(10, 132, 255, 0.14)'
+      case 'permission_pending':
+      case 'question_pending':
+        return 'rgba(255, 159, 10, 0.16)'
+      case 'completed':
+        return 'rgba(48, 209, 88, 0.13)'
+      default:
+        return 'rgba(255, 255, 255, 0.055)'
+    }
+  }
+
+  private getSessionProjectText(): string {
+    const session = sessionStore.sessions.find((s: Session) => s.id === this.sessionId)
+    return session?.projectPath || session?.workDir || '当前会话'
+  }
+
+  private getSessionProviderText(): string {
+    const providerId = this.getSessionProviderId()
+    if (!providerId) return 'Claude'
+    if (providerId.toLowerCase().includes('codex') || providerId.toLowerCase().includes('openai')) return 'Codex'
+    if (providerId.toLowerCase().includes('opencode')) return 'OpenCode'
+    return providerId
+  }
+
   private startWorkTimer(): void {
     if (this.workTimer !== -1) return
     this.elapsedSeconds = 0
@@ -1228,12 +1257,15 @@ struct ChatDetailPage {
           }
         }
         .width('100%')
+        .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+        .backgroundColor(this.getStatusBackgroundColor())
+        .borderRadius(9)
         .padding(12)
       }
       .width('100%')
-      .backgroundColor('#1C1C1E')
-      .borderRadius(12)
-      .border({ width: 0.5, color: 'rgba(255,255,255,0.1)' })
+      .backgroundColor('rgba(255, 255, 255, 0.055)')
+      .borderRadius(16)
+      .border({ width: 0.5, color: 'rgba(255,255,255,0.09)' })
       .margin({ bottom: 8 })
     }
   }
@@ -1678,7 +1710,7 @@ struct ChatDetailPage {
 
           // 底部占位（翻转后视觉在顶部）
           ListItem() {
-            Row().width('100%').height(8)
+            Row().width('100%').height(150)
           }
           .rotate({ angle: 180 })
         }
@@ -1762,31 +1794,9 @@ struct ChatDetailPage {
         height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
       })
 
-      // 工作状态 & 上下文使用率（标题栏下方，永远显示）
-      Row({ space: 6 }) {
-        this.ContextRing()
-        if (this.streamingThinking) {
-          // 有思考内容时显示思考中
-          StatusIcon({ status: WorkStatus.THINKING })
-          Text('思考中...').fontSize(11).fontColor(Theme.AccentBlue)
-          if (this.elapsedSeconds > 0) {
-            Text(this.formatElapsed(this.elapsedSeconds)).fontSize(10).fontColor(Theme.TextTertiary)
-          }
-        } else if (this.chatStatus === 'idle') {
-          Text('休闲中').fontSize(11).fontColor(Theme.TextSecondary)
-        } else if (this.chatStatus === 'completed') {
-          Text('已完成').fontSize(11).fontColor(Theme.SuccessColor)
-        } else {
-          StatusIcon({ status: this.mapToWorkStatus(this.chatStatus) })
-          Text(this.getStatusText()).fontSize(11).fontColor(this.getStatusColor())
-          if (this.elapsedSeconds > 0) {
-            Text(this.formatElapsed(this.elapsedSeconds)).fontSize(10).fontColor(Theme.TextTertiary)
-          }
-        }
+      Column() {
+        this.ChatStatusPanel()
       }
-      .width('100%')
-      .justifyContent(FlexAlign.Center)
-      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
       .position({ x: 0, y: 88 })
       .zIndex(5)
 
@@ -1862,7 +1872,7 @@ struct ChatDetailPage {
       }
       .width('100%')
       .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, bottom: 20 })
-      .backgroundColor(Color.Transparent)
+      .backgroundColor('transparent')
       .position({ x: 0, y: '100%' })
       .translate({ y: '-100%' })
       .zIndex(2)
@@ -1889,12 +1899,67 @@ struct ChatDetailPage {
       }
     .width('100%')
     .height('100%')
-    .backgroundColor('#121214')
+    .backgroundColor('#101114')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .clip(false)
     .bindSheet($$this.showPermSheet, this.PermissionSheet(), {
       height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
     })
+  }
+
+  @Builder
+  ChatStatusPanel() {
+    Column({ space: 4 }) {
+      // 第一排：上下文容量 + 工作状态
+      Row({ space: 10 }) {
+        this.ContextRing()
+
+        Row({ space: 6 }) {
+          if (this.streamingThinking) {
+            StatusIcon({ status: WorkStatus.THINKING })
+            Text('思考中...')
+              .fontSize(Theme.FontTiny)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Theme.AccentBlue)
+          } else if (this.chatStatus !== 'idle' && this.chatStatus !== 'completed') {
+            StatusIcon({ status: this.mapToWorkStatus(this.chatStatus) })
+            Text(this.getStatusText())
+              .fontSize(Theme.FontTiny)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.getStatusColor())
+          } else {
+            Row()
+              .width(7)
+              .height(7)
+              .borderRadius(4)
+              .backgroundColor(this.chatStatus === 'completed' ? Theme.SuccessColor : Theme.TextTertiary)
+
+            Text(this.chatStatus === 'completed' ? '已完成' : '空闲')
+              .fontSize(Theme.FontTiny)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.getStatusColor())
+          }
+
+          if (this.elapsedSeconds > 0) {
+            Text(this.formatElapsed(this.elapsedSeconds))
+              .fontSize(10)
+              .fontColor(Theme.TextTertiary)
+          }
+        }
+      }
+
+      // 第二排：工作路径
+      Text(this.getSessionProjectText())
+        .fontSize(10)
+        .fontColor(Theme.TextTertiary)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width('100%')
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .padding({ top: 8, bottom: 8 })
+    .margin({ left: Theme.SpacingLG, right: Theme.SpacingLG })
   }
 
   // 标题栏状态行（与 iOS 一致：状态指示器 + 状态文字 + 上下文用量）
@@ -2176,9 +2241,8 @@ struct ChatDetailPage {
         } else if (message.type === 'tool_result') {
           this.ToolResultBubble(message)
         } else if (message.type === 'permission_request') {
-          if (message.toolName === 'AskUserQuestion') {
-            this.AskUserQuestionBubble(message)
-          } else {
+          // AskUserQuestion 的 permission_request 不单独渲染，已由 tool_use 渲染
+          if (message.toolName !== 'AskUserQuestion') {
             this.PermissionBubble(message)
           }
         } else if (message.type === 'question') {
@@ -3586,7 +3650,7 @@ struct ChatDetailPage {
         .width('100%')
       }
 
-      // 自定义输入
+      // 自定义输入 + 发送按钮
       if (!this.questionHasSubmitted) {
         Row({ space: 8 }) {
           TextInput({ placeholder: '自定义回答...', text: this.questionFreeText })
@@ -3600,13 +3664,13 @@ struct ChatDetailPage {
               this.questionFreeText = value
             })
 
-          Button('发送')
+          Button('确定')
             .fontSize(Theme.FontTiny)
             .fontColor(Theme.TextOnPrimary)
             .backgroundColor(Theme.PrimaryColor)
             .borderRadius(8)
             .height(36)
-            .enabled(this.questionFreeText.trim().length > 0)
+            .enabled(this.canSubmitQuestion())
             .onClick(() => {
               this.submitQuestionAnswer(message, this.questionFreeText.trim())
             })
@@ -3626,6 +3690,15 @@ struct ChatDetailPage {
         }
       }
     }
+  }
+
+  // 判断是否可以提交问题（选择了选项或有自定义输入）
+  private canSubmitQuestion(): boolean {
+    if (this.questionFreeText.trim().length > 0) {
+      return true
+    }
+    const selected = this.questionSelections.get(this.questionActiveTab) || []
+    return selected.length > 0
   }
 
   // QuestionCard 辅助方法
@@ -3651,7 +3724,8 @@ struct ChatDetailPage {
   }
 
   private isOptionSelected(qIndex: number, label: string): boolean {
-    return (this.questionSelections.get(qIndex) || []).includes(label || '')
+    // 使用 questionActiveTab 确保一致性
+    return (this.questionSelections.get(this.questionActiveTab) || []).includes(label || '')
   }
 
   @Builder
@@ -3738,56 +3812,70 @@ struct ChatDetailPage {
 
   // 切换问题选项
   private toggleQuestionOption(message: Message, qIndex: number, label: string, isMultiSelect: boolean): void {
-    const current = this.questionSelections.get(qIndex) || []
+    // 使用 questionActiveTab 确保一致性
+    const activeIndex = this.questionActiveTab
+    const current = this.questionSelections.get(activeIndex) || []
 
     if (isMultiSelect) {
       const newSelections = current.includes(label)
         ? current.filter(s => s !== label)
         : [...current, label]
-      this.questionSelections.set(qIndex, newSelections)
+      this.questionSelections.set(activeIndex, newSelections)
     } else {
-      this.questionSelections.set(qIndex, [label])
+      this.questionSelections.set(activeIndex, [label])
     }
 
-    // 触发更新
+    // 触发更新 - 创建新的 Map 引用
     const newMap = new Map(this.questionSelections)
     this.questionSelections = newMap
+
+    console.info(`[ChatDetailPage] toggleQuestionOption: activeIndex=${activeIndex}, label=${label}, selections=${JSON.stringify(Array.from(newMap.entries()))}`)
   }
 
   // 提交问题答案
   private submitQuestionAnswer(message: Message, answer: string): void {
+    console.info(`[ChatDetailPage] submitQuestionAnswer called`)
+    console.info(`[ChatDetailPage] sessionId: ${this.sessionId}`)
+    console.info(`[ChatDetailPage] questionActiveTab: ${this.questionActiveTab}`)
+    console.info(`[ChatDetailPage] questionFreeText: ${this.questionFreeText}`)
+    console.info(`[ChatDetailPage] questionSelections: ${JSON.stringify(Array.from(this.questionSelections.entries()))}`)
+
     const pendingPermission = sessionStore.pendingPermissions.get(this.sessionId || '')
-    if (!pendingPermission) return
+    console.info(`[ChatDetailPage] pendingPermission: ${JSON.stringify(pendingPermission)}`)
+
+    if (!pendingPermission) {
+      console.error('[ChatDetailPage] submitQuestionAnswer: no pendingPermission')
+      return
+    }
 
     const questions = this.parseAskUserQuestions(message)
+    console.info(`[ChatDetailPage] questions: ${JSON.stringify(questions)}`)
+
     const answers: Record<string, string> = {}
 
     if (this.questionFreeText.trim()) {
       // 使用自定义文本
-      for (const q of questions) {
-        if (q.question) {
-          answers[q.question] = this.questionFreeText.trim()
-        }
+      const currentQ = questions[this.questionActiveTab]
+      if (currentQ?.question) {
+        answers[currentQ.question] = this.questionFreeText.trim()
       }
     } else {
-      // 使用选择的选项
-      for (let i = 0; i < questions.length; i++) {
-        const selected = this.questionSelections.get(i) || []
-        if (selected.length > 0 && questions[i].question) {
-          answers[questions[i].question!] = selected.join(', ')
-        }
+      // 使用选择的选项 - 只提交当前活动问题的答案
+      const selected = this.questionSelections.get(this.questionActiveTab) || []
+      const currentQ = questions[this.questionActiveTab]
+      if (selected.length > 0 && currentQ?.question) {
+        answers[currentQ.question] = selected.join(', ')
       }
     }
 
+    console.info(`[ChatDetailPage] submitQuestionAnswer: answers=${JSON.stringify(answers)}`)
+    console.info(`[ChatDetailPage] submitQuestionAnswer: requestId=${pendingPermission.requestId}`)
+
     // 发送响应 - AskUserQuestion 使用专门的响应方法
-    const updatedInput: Record<string, string> = {}
-    const keys = Object.keys(answers)
-    for (let i = 0; i < keys.length; i++) {
-      updatedInput[keys[i]] = answers[keys[i]]
-    }
-    sessionStore.sendAskUserQuestionResponse(pendingPermission.requestId, updatedInput)
+    sessionStore.sendAskUserQuestionResponse(pendingPermission.requestId, answers)
 
     this.questionHasSubmitted = true
+    console.info(`[ChatDetailPage] submitQuestionAnswer done`)
   }
 
   @Builder
@@ -4572,7 +4660,7 @@ struct ChatDetailPage {
         })
 
         // 输入框
-        TextArea({ placeholder: this.pendingAttachments.length > 0 ? '添加描述...' : 'Chat with Claude', text: this.inputText })
+        TextArea({ placeholder: this.pendingAttachments.length > 0 ? '添加描述...' : '输入消息或指令', text: this.inputText })
           .layoutWeight(1)
           .constraintSize({ minHeight: 28, maxHeight: 100 })
           .backgroundColor(Color.Transparent)
@@ -4613,10 +4701,12 @@ struct ChatDetailPage {
           Image($r('app.media.ic_send'))
             .width(20)
             .height(20)
-            .fillColor(this.inputText.trim() || this.pendingAttachments.length > 0 ? Theme.AccentBlue : Theme.TextTertiary)
+            .fillColor(this.inputText.trim() || this.pendingAttachments.length > 0 ? Theme.TextOnPrimary : Theme.TextTertiary)
         }
         .width(32)
         .height(32)
+        .backgroundColor(this.inputText.trim() || this.pendingAttachments.length > 0 ? Theme.AccentBlue : 'rgba(255, 255, 255, 0.055)')
+        .borderRadius(16)
         .justifyContent(FlexAlign.Center)
         .onClick(() => {
           if (this.inputText.trim() || this.pendingAttachments.length > 0) {
@@ -4630,11 +4720,11 @@ struct ChatDetailPage {
     }
     .width('100%')
     .constraintSize({ minHeight: 44, maxHeight: 120 })
-    .backgroundColor(Theme.GlassBackground)
+    .backgroundColor('rgba(255, 255, 255, 0.07)')
     .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
     .borderRadius(22)
-    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.2)' })
-    .shadow({ radius: 20, color: 'rgba(0, 0, 0, 0.3)', offsetX: 0, offsetY: 5 })
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.16)' })
+    .shadow({ radius: 18, color: 'rgba(0, 0, 0, 0.26)', offsetX: 0, offsetY: 4 })
     // 静态边框发光（与 SearchBar 一致）
     .visualEffect(
       new hdsEffect.HdsEffectBuilder()

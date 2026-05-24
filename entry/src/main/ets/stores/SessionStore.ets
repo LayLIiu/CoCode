@@ -344,13 +344,14 @@ export class SessionStore {
 
   async deleteSession(sessionId: string): Promise<void> {
     try {
-      await apiService.deleteSession(sessionId)
-
-      // 记录到本地已删除列表，防止服务器缓存未清除前的 fetchSessions 重新拉回（先保存删除标记）
+      // 先记录到本地已删除列表，防止服务器广播 sessions_updated 时重新拉回
       this.locallyDeletedSessionIds.add(sessionId)
       const deletedIdsArray: string[] = []
       this.locallyDeletedSessionIds.forEach(id => deletedIdsArray.push(id))
       await storageService.saveString('locally_deleted_session_ids', JSON.stringify(deletedIdsArray))
+
+      // 再调用服务器 API 删除
+      await apiService.deleteSession(sessionId)
 
       // 更新内存数据
       this.sessions = this.sessions.filter(s => s.id !== sessionId)
@@ -378,34 +379,47 @@ export class SessionStore {
   }
 
   async deleteLocalSession(sessionId: string): Promise<void> {
-    // 记录到本地已删除列表，防止从服务器重新加载（先保存删除标记，确保原子性）
-    this.locallyDeletedSessionIds.add(sessionId)
-    const deletedIdsArray: string[] = []
-    this.locallyDeletedSessionIds.forEach(id => deletedIdsArray.push(id))
-    await storageService.saveString('locally_deleted_session_ids', JSON.stringify(deletedIdsArray))
+    console.info(`[SessionStore] deleteLocalSession called: ${sessionId}`)
+    try {
+      // 记录到本地已删除列表，防止从服务器重新加载（先保存删除标记，确保原子性）
+      this.locallyDeletedSessionIds.add(sessionId)
+      const deletedIdsArray: string[] = []
+      this.locallyDeletedSessionIds.forEach(id => deletedIdsArray.push(id))
+      await storageService.saveString('locally_deleted_session_ids', JSON.stringify(deletedIdsArray))
+      console.info(`[SessionStore] Saved ${deletedIdsArray.length} deleted session IDs`)
 
-    // 更新内存数据
-    this.sessions = this.sessions.filter(s => s.id !== sessionId)
-    this.messages.delete(sessionId)
-    this.sessionStatuses.delete(sessionId)
+      // 更新内存数据
+      const oldCount = this.sessions.length
+      this.sessions = this.sessions.filter(s => s.id !== sessionId)
+      console.info(`[SessionStore] Sessions: ${oldCount} -> ${this.sessions.length}`)
+      this.messages.delete(sessionId)
+      this.sessionStatuses.delete(sessionId)
 
-    // 清除 completed→idle 定时器
-    const timer = this.completedTimers.get(sessionId)
-    if (timer !== undefined) {
-      clearTimeout(timer)
-      this.completedTimers.delete(sessionId)
+      // 清除 completed→idle 定时器
+      const timer = this.completedTimers.get(sessionId)
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        this.completedTimers.delete(sessionId)
+      }
+
+      // 删除本地数据（先删除消息，再保存更新后的会话列表）
+      await storageService.deleteMessages(sessionId)
+      await storageService.saveSessions(this.sessions)
+      await storageService.saveSessionStatuses(this.sessionStatuses)
+
+      // 断开 WebSocket
+      wsService.disconnectSession(sessionId)
+
+      this.notifySessionsChanged()
+      console.info(`[SessionStore] Deleted local session done: ${sessionId}`)
+    } catch (e) {
+      console.error(`[SessionStore] deleteLocalSession error: ${e}`)
     }
+  }
 
-    // 删除本地数据（先删除消息，再保存更新后的会话列表）
-    await storageService.deleteMessages(sessionId)
-    await storageService.saveSessions(this.sessions)
-    await storageService.saveSessionStatuses(this.sessionStatuses)
-
-    // 断开 WebSocket
-    wsService.disconnectSession(sessionId)
-
-    this.notifySessionsChanged()
-    console.info(`[SessionStore] Deleted local session: ${sessionId}`)
+  // 检查会话是否已被本地删除
+  isSessionLocallyDeleted(sessionId: string): boolean {
+    return this.locallyDeletedSessionIds.has(sessionId)
   }
 
   // 从已删除列表中移除（用于导入会话时恢复）
@@ -792,9 +806,9 @@ export class SessionStore {
         for (let i = currentLocal.length; i < afterMerge.length; i++) {
           const newMsg = afterMerge[i]
           // 改用 messageContentKey 比较，避免 type+content 误判（tool_use content 全为空）
-          const newKey = this.messageContentKey(newMsg)
+          const newKey = this.messageSemanticKey(newMsg)
           const existsById = merged.some(m => m.id === newMsg.id)
-          const existsByKey = merged.some(m => this.messageContentKey(m) === newKey)
+          const existsByKey = merged.some(m => this.messageSemanticKey(m) === newKey)
           if (!existsById && !existsByKey) {
             merged.push(newMsg)
           }
@@ -804,11 +818,12 @@ export class SessionStore {
         )
       }
 
-      // 去重检测并清理：用 messageContentKey 去重（type:content），防止内容微差导致重复
+      // 去重检测并清理：用语义键去重，防止重新进入聊天页后
+      // 服务端正式消息和本地流式临时消息 ID/toolUseId 不一致导致重复。
       // 始终执行去重，而不是只在检测到重复时
       {
         const deduped: Message[] = []
-        const seenKeys: Map<string, boolean> = new Map()
+        const seenKeys: Set<string> = new Set()
         const seenIds: Set<string> = new Set()
         let removedDupCount = 0
         for (let i = 0; i < merged.length; i++) {
@@ -823,13 +838,13 @@ export class SessionStore {
             seenIds.add(m.id)
           }
           // 再按内容去重
-          const key = this.messageContentKey(m)
+          const key = this.messageSemanticKey(m)
           if (seenKeys.has(key)) {
             removedDupCount++
             console.warn(`[SessionStore] Removing dup after sync (by content): #${removedDupCount} key=${key.substring(0, 100)} type=${m.type} id=${m.id}`)
             continue
           }
-          seenKeys.set(key, true)
+          seenKeys.add(key)
           deduped.push(m)
         }
         if (removedDupCount > 0) {
@@ -985,10 +1000,8 @@ export class SessionStore {
         }
         seenFinalIds.add(m.id)
       }
-      // 使用规整化内容去重，捕获流式 vs 服务端格式差异（尾部换行、前后空格等）
-      const contentFull = m.content || m.toolResult || ''
-      const normalizedContent = contentFull.trim().replace(/\s+/g, ' ')
-      const finalKey = m.type + '|' + (m.toolUseId || '') + '|' + normalizedContent
+      // 使用语义键去重，捕获流式 vs 服务端格式差异，也避免 toolUseId 变化造成重复
+      const finalKey = this.messageSemanticKey(m)
       const existing = seenFinal.get(finalKey)
       if (existing) continue
       seenFinal.set(finalKey, true)
@@ -1052,6 +1065,38 @@ export class SessionStore {
     return msg.type + ':content:' + content.substring(0, 2000)
   }
 
+  // 生成跨来源的语义去重键：忽略服务端 ID / 临时 ID / 变化的 toolUseId。
+  // 用于历史同步和页面重新进入时清理“同一内容不同 ID”的重复消息。
+  private messageSemanticKey(msg: Message): string {
+    if (msg.type === 'tool_use' && msg.toolName) {
+      const inputStr = msg.toolInput ? this.stableStringify(msg.toolInput) : ''
+      const parentId = msg.parentToolUseId ? ':parent:' + msg.parentToolUseId : ''
+      return msg.type + ':tool:' + msg.toolName + ':' + inputStr.substring(0, 1000) + parentId
+    }
+
+    if (msg.type === 'permission_request' && msg.permissionId) {
+      return msg.type + ':perm:' + msg.permissionId
+    }
+
+    if (msg.type === 'question' && msg.questionId) {
+      return msg.type + ':q:' + msg.questionId
+    }
+
+    const content = this.normalizeMessageText(msg.content || msg.toolResult || '')
+    if (content.length > 0) {
+      return msg.type + ':content:' + content.substring(0, 4000)
+    }
+
+    return this.messageContentKey(msg)
+  }
+
+  private normalizeMessageText(text: string): string {
+    return text
+      .replace(/\r\n/g, '\n')
+      .trim()
+      .replace(/\s+/g, ' ')
+  }
+
   addMessage(sessionId: string, message: Message): void {
     let sessionMessages = this.messages.get(sessionId)
     if (!sessionMessages) {
@@ -1069,9 +1114,9 @@ export class SessionStore {
     if (!exists) {
       // 内容级去重：防止 ID 不同但内容相同的消息重复
       // （Head/Tail 双路径或 WS 重放可能导致同一内容抵达两次）
-      const newKey = this.messageContentKey(message)
+      const newKey = this.messageSemanticKey(message)
       for (let i = 0; i < sessionMessages.length; i++) {
-        if (this.messageContentKey(sessionMessages[i]) === newKey) {
+        if (this.messageSemanticKey(sessionMessages[i]) === newKey) {
           exists = true
           break
         }
@@ -1104,7 +1149,7 @@ export class SessionStore {
       headMsg.isStreaming = false
 
       // 使用 messageContentKey 进行统一的去重检查
-      const headKey = this.messageContentKey(headMsg)
+      const headKey = this.messageSemanticKey(headMsg)
       let exists = false
 
       // 先按 ID 检查
@@ -1120,7 +1165,7 @@ export class SessionStore {
       // 再按内容键检查
       if (!exists) {
         for (let j = tail.length - 1; j >= 0; j--) {
-          if (this.messageContentKey(tail[j]) === headKey) {
+          if (this.messageSemanticKey(tail[j]) === headKey) {
             exists = true
             break
           }
@@ -1179,8 +1224,7 @@ export class SessionStore {
 
       // 2. tool_use 消息：按 toolName + toolInput 去重
       if (msg.type === 'tool_use' && msg.toolName) {
-        const inputStr = msg.toolInput ? this.stableStringify(msg.toolInput) : ''
-        const toolKey = msg.type + ':' + msg.toolName + ':' + inputStr.substring(0, 500)
+        const toolKey = this.messageSemanticKey(msg)
         if (seenByTool.has(toolKey)) {
           console.info(`[SessionStore] deduplicateMessages: skip tool_use ${msg.toolName}`)
           continue
@@ -1190,8 +1234,8 @@ export class SessionStore {
 
       // 3. 其他消息：按规整化内容去重
       if (msg.type !== 'tool_use') {
-        const content = (msg.content || msg.toolResult || '').trim().replace(/\s+/g, ' ')
-        const contentKey = msg.type + ':' + content.substring(0, 2000)
+        const content = this.normalizeMessageText(msg.content || msg.toolResult || '')
+        const contentKey = this.messageSemanticKey(msg)
         if (content.length > 0 && seenByContent.has(contentKey)) {
           console.info(`[SessionStore] deduplicateMessages: skip ${msg.type} by content`)
           continue
@@ -1230,7 +1274,7 @@ export class SessionStore {
     let dupCount = 0
 
     for (let i = 0; i < tail.length; i++) {
-      const key = this.messageContentKey(tail[i])
+      const key = this.messageSemanticKey(tail[i])
       if (seen.has(key)) {
         dupCount++
         console.info(`[SessionStore] getDedupedMessages #${dupCount}: skip type=${tail[i].type} id=${tail[i].id} key=${key.substring(0, 80)}`)
@@ -1250,10 +1294,9 @@ export class SessionStore {
       let normKey: string
 
       if (msg.type === 'tool_use' && msg.toolName) {
-        const inputStr = msg.toolInput ? this.stableStringify(msg.toolInput) : ''
-        normKey = msg.type + ':tool:' + msg.toolName + ':' + inputStr.substring(0, 500)
+        normKey = this.messageSemanticKey(msg)
       } else {
-        const normContent = ((msg.content || '') || (msg.toolResult || '')).trim().replace(/\s+/g, ' ')
+        const normContent = this.normalizeMessageText((msg.content || '') || (msg.toolResult || ''))
         normKey = msg.type + ':content:' + normContent.substring(0, 2000)
       }
 
@@ -1362,7 +1405,11 @@ export class SessionStore {
   }
 
   sendAskUserQuestionResponse(requestId: string, answers: Record<string, string>): void {
-    if (!this.currentSessionId) return
+    console.info(`[SessionStore] sendAskUserQuestionResponse: currentSessionId=${this.currentSessionId}, requestId=${requestId}, answers=${JSON.stringify(answers)}`)
+    if (!this.currentSessionId) {
+      console.error('[SessionStore] sendAskUserQuestionResponse: no currentSessionId')
+      return
+    }
     wsService.sendAskUserQuestionResponse(this.currentSessionId, requestId, answers)
   }
 

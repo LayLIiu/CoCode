@@ -138,12 +138,27 @@ struct DashboardPage {
     return (count / 1000000).toFixed(1) + 'M'
   }
 
+  private getConnectionColor(): ResourceColor {
+    if (this.stats.connectionType === '未连接') return Theme.TextTertiary
+    if (this.stats.connectionLatency > 0 && this.stats.connectionLatency < 300) return Theme.AccentGreen
+    if (this.stats.connectionLatency >= 300) return Theme.AccentOrange
+    return Theme.AccentBlue
+  }
+
+  private getLatencyText(): string {
+    return this.stats.connectionLatency > 0 ? `${this.stats.connectionLatency}ms` : '未检测'
+  }
+
   build() {
     Stack() {
       HdsNavigation() {
         List({ space: Theme.SpacingMD, scroller: this.scroller }) {
           ListItem() {
             Row().width('100%').height(100)
+          }
+
+          ListItem() {
+            this.DashboardOverview()
           }
 
           // 设备状态
@@ -403,17 +418,96 @@ struct DashboardPage {
       .bindToScrollable([this.scroller])
       .titleMode(HdsNavigationTitleMode.MINI)
       .hideBackButton(false)
-      .linearGradient({
-        angle: 180,
-        colors: [
-          [Theme.BackgroundGradientStart, 0.0],
-          [Theme.BackgroundGradientMiddle, 0.5],
-          [Theme.BackgroundGradientEnd, 1.0]
-        ]
-      })
+      .backgroundColor('#101114')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
     .width('100%')
     .height('100%')
+  }
+
+  @Builder
+  DashboardOverview() {
+    Column({ space: 14 }) {
+      Row() {
+        Column({ space: 5 }) {
+          Text('运行概览')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextPrimary)
+
+          Text(`服务端 ${this.stats.version} · 已运行 ${this.stats.uptime}`)
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        Button() {
+          if (this.isRefreshing) {
+            LoadingProgress()
+              .width(18)
+              .height(18)
+              .color(Theme.TextOnPrimary)
+          } else {
+            SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+              .fontSize(16)
+              .fontColor([Theme.TextOnPrimary])
+          }
+        }
+        .width(38)
+        .height(34)
+        .backgroundColor(Theme.PrimaryColor)
+        .borderRadius(9)
+        .enabled(!this.isRefreshing)
+        .onClick(() => {
+          if (!this.isRefreshing) this.loadStats()
+        })
+      }
+      .width('100%')
+
+      Row({ space: 8 }) {
+        this.OverviewMetric('连接', this.stats.connectionType, this.getConnectionColor())
+        this.OverviewMetric('延迟', this.getLatencyText(), this.getConnectionColor())
+        this.OverviewMetric('事件', this.stats.logCount.toString(), Theme.AccentOrange)
+      }
+      .width('100%')
+
+      Row({ space: 8 }) {
+        this.OverviewMetric('会话', this.stats.sessionsCount.toString(), Theme.AccentBlue)
+        this.OverviewMetric('消息', this.stats.messagesCount.toString(), Theme.AccentBlue)
+        this.OverviewMetric('Tokens', this.formatTokens(this.stats.totalInputTokens + this.stats.totalOutputTokens), Theme.AccentGreen)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(Theme.SpacingLG)
+    .backgroundColor('rgba(255, 255, 255, 0.055)')
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.09)' })
+    .borderRadius(Theme.RadiusLarge)
+  }
+
+  @Builder
+  OverviewMetric(label: string, value: string, color: ResourceColor) {
+    Column({ space: 4 }) {
+      Text(label)
+        .fontSize(11)
+        .fontColor(Theme.TextTertiary)
+
+      Text(value)
+        .fontSize(Theme.FontTiny)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(color)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .layoutWeight(1)
+    .height(50)
+    .padding({ left: 10, right: 10 })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor('rgba(255, 255, 255, 0.045)')
+    .borderRadius(10)
   }
 }

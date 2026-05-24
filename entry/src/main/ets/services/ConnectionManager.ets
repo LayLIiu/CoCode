@@ -557,6 +557,50 @@ export class ConnectionManager {
   }
 
   /**
+   * 重新检测当前正在使用的连接。
+   * 这个方法不做智能切换，也不复用 smartConnect 的后台任务，适合设置页手动测速。
+   */
+  async retestCurrentConnection(): Promise<ConnectionStatus> {
+    const currentUrl = authStore.serverUrl || apiService.getBaseUrl()
+    const profile = authStore.activeProfile
+    const currentType: ConnectionType = (profile?.type as ConnectionType) || this.currentStatus?.type || 'unknown'
+
+    if (!currentUrl) {
+      const status: ConnectionStatus = {
+        type: 'unknown',
+        quality: 'unavailable',
+        latency: -1,
+        lastChecked: Date.now(),
+        lanUrl: '',
+        tunnelUrl: '',
+        cloudRelayUrl: ''
+      }
+      this.currentStatus = status
+      this.notifyListeners()
+      return status
+    }
+
+    const timeout = (currentType === 'cloud_relay' || currentType === 'tunnel')
+      ? this.CLOUD_RELAY_TIMEOUT
+      : this.FAST_CHECK_TIMEOUT
+    const result = await this.testConnection(currentUrl, timeout, currentType)
+
+    const status: ConnectionStatus = {
+      type: currentType,
+      quality: result.available ? (result.latency < this.POOR_LATENCY_THRESHOLD ? 'good' : 'poor') : 'unavailable',
+      latency: result.available ? result.latency : -1,
+      lastChecked: Date.now(),
+      lanUrl: currentType === 'lan' || currentType === 'pgy' ? currentUrl : '',
+      tunnelUrl: currentType === 'tunnel' ? currentUrl : '',
+      cloudRelayUrl: currentType === 'cloud_relay' ? currentUrl : ''
+    }
+
+    this.currentStatus = status
+    this.notifyListeners()
+    return status
+  }
+
+  /**
    * 强制使用 Tunnel（用户手动切换时）
    */
   async forceTunnel(): Promise<boolean> {

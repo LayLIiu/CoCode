@@ -65,12 +65,24 @@ struct UpdatesPage {
     this.isChecking = false
   }
 
+  private getUpdateCount(): number {
+    let count = 0
+    for (let i = 0; i < this.versions.length; i++) {
+      if (this.versions[i].updateAvailable) count++
+    }
+    return count
+  }
+
   build() {
     Stack() {
       HdsNavigation() {
         List({ space: Theme.SpacingMD, scroller: this.scroller }) {
           ListItem() {
             Row().width('100%').height(100)
+          }
+
+          ListItem() {
+            this.UpdatesOverview()
           }
 
           // 版本信息
@@ -197,17 +209,81 @@ struct UpdatesPage {
       .bindToScrollable([this.scroller])
       .titleMode(HdsNavigationTitleMode.MINI)
       .hideBackButton(false)
-      .linearGradient({
-        angle: 180,
-        colors: [
-          [Theme.BackgroundGradientStart, 0.0],
-          [Theme.BackgroundGradientMiddle, 0.5],
-          [Theme.BackgroundGradientEnd, 1.0]
-        ]
-      })
+      .backgroundColor('#101114')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
     .width('100%')
     .height('100%')
+  }
+
+  @Builder
+  UpdatesOverview() {
+    Column({ space: 14 }) {
+      Row() {
+        Column({ space: 5 }) {
+          Text('更新中心')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextPrimary)
+
+          Text(this.checkResultText || '检查 Agent 和 Link 的版本状态')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        Row({ space: 6 }) {
+          Row()
+            .width(8)
+            .height(8)
+            .borderRadius(4)
+            .backgroundColor(this.getUpdateCount() > 0 ? Theme.AccentOrange : Theme.AccentGreen)
+
+          Text(this.getUpdateCount() > 0 ? '可更新' : '最新')
+            .fontSize(Theme.FontTiny)
+            .fontColor(this.getUpdateCount() > 0 ? Theme.AccentOrange : Theme.AccentGreen)
+        }
+        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+        .backgroundColor(this.getUpdateCount() > 0 ? 'rgba(255, 159, 10, 0.14)' : 'rgba(48, 209, 88, 0.14)')
+        .borderRadius(10)
+      }
+      .width('100%')
+
+      Row({ space: 8 }) {
+        this.UpdateMetric('组件', this.versions.length.toString(), Theme.AccentBlue)
+        this.UpdateMetric('更新', this.getUpdateCount().toString(), this.getUpdateCount() > 0 ? Theme.AccentOrange : Theme.AccentGreen)
+        this.UpdateMetric('检查', this.lastCheckTime ? '已完成' : '待检查', this.lastCheckTime ? Theme.AccentGreen : Theme.TextTertiary)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(Theme.SpacingLG)
+    .backgroundColor('rgba(255, 255, 255, 0.055)')
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.09)' })
+    .borderRadius(Theme.RadiusLarge)
+  }
+
+  @Builder
+  UpdateMetric(label: string, value: string, color: ResourceColor) {
+    Column({ space: 4 }) {
+      Text(label)
+        .fontSize(11)
+        .fontColor(Theme.TextTertiary)
+
+      Text(value)
+        .fontSize(Theme.FontTiny)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(color)
+    }
+    .layoutWeight(1)
+    .height(50)
+    .padding({ left: 10, right: 10 })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor('rgba(255, 255, 255, 0.045)')
+    .borderRadius(10)
   }
 }

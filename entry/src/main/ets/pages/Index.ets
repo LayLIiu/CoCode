@@ -10,6 +10,7 @@ import { sessionStore } from '../stores/SessionStore'
 import { GlobalToast } from '../components/GlobalToast'
 import { connectionManager } from '../services/ConnectionManager'
 import type { Context } from '@kit.AbilityKit'
+import { Theme } from '../common/Theme'
 
 @Entry
 @Component
@@ -105,54 +106,76 @@ struct Index {
 
   @Builder
   SplashScreen() {
-    Column() {
-      SymbolGlyph($r('sys.symbol.message_fill'))
-        .fontSize(64)
-        .fontColor(['#0A84FF'])
+    Column({ space: 18 }) {
+      Stack() {
+        Circle()
+          .width(76)
+          .height(76)
+          .fill('rgba(10, 132, 255, 0.14)')
+
+        SymbolGlyph($r('sys.symbol.message_fill'))
+          .fontSize(38)
+          .fontColor([Theme.AccentBlue])
+      }
+      .width(76)
+      .height(76)
+
+      Text('正在进入工作台')
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(Theme.TextPrimary)
 
       LoadingProgress()
         .width(24)
         .height(24)
-        .color('#0A84FF')
-        .margin({ top: 24 })
+        .color(Theme.AccentBlue)
     }
     .width('100%')
     .height('100%')
     .justifyContent(FlexAlign.Center)
-    .backgroundColor('#000000')
+    .backgroundColor('#101114')
   }
 
   @Builder
   LockScreen() {
-    Column({ space: 24 }) {
-      SymbolGlyph($r('sys.symbol.message_fill'))
-        .fontSize(72)
-        .fontColor(['#0A84FF'])
+    Column({ space: 20 }) {
+      Stack() {
+        Circle()
+          .width(84)
+          .height(84)
+          .fill('rgba(10, 132, 255, 0.14)')
+
+        SymbolGlyph($r('sys.symbol.message_fill'))
+          .fontSize(42)
+          .fontColor([Theme.AccentBlue])
+      }
+      .width(84)
+      .height(84)
 
       Text('Claude Code')
         .fontSize(24)
         .fontWeight(FontWeight.Bold)
-        .fontColor('#FFFFFF')
+        .fontColor(Theme.TextPrimary)
 
       if (this.authFailed) {
         Text('验证失败，请重试')
           .fontSize(14)
-          .fontColor('#FF3B30')
+          .fontColor(Theme.ErrorColor)
       } else {
         Text('请验证身份以解锁')
           .fontSize(14)
-          .fontColor('#8E8E93')
+          .fontColor(Theme.TextSecondary)
       }
 
       LoadingProgress()
         .width(32)
         .height(32)
-        .color('#0A84FF')
+        .color(Theme.AccentBlue)
         .opacity(this.authFailed ? 0.3 : 1.0)
     }
     .width('100%')
     .height('100%')
     .justifyContent(FlexAlign.Center)
-    .backgroundColor('#000000')
+    .backgroundColor('#101114')
   }
 }

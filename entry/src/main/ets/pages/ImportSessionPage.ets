@@ -75,7 +75,7 @@ struct ImportSessionPage {
     return false
   }
 
-  // 过滤掉已存在的会话
+  // 过滤掉已存在的会话（已删除/归档的会话可以重新导入恢复）
   private getNotImportedSessions(): Session[] {
     const existingIds = new Set<string>()
     sessionStore.sessions.forEach((s: Session) => existingIds.add(s.id))

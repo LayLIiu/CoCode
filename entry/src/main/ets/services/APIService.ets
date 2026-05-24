@@ -84,6 +84,7 @@ export class NetworkInfoResponse {
   lanUrl: string = ''
   tailscaleUrl: string = ''
   tunnelUrl: string = ''
+  cloudRelayUrl: string = ''
   tunnelEnabled: boolean = false
   serverPort: number = 0
 }
@@ -443,6 +444,24 @@ export class SSHCommandResponse {
   exitCode: number = 0
 }
 
+export class DesktopCapabilityItem {
+  key: string = ''
+  title: string = ''
+  description: string = ''
+  path: string = ''
+  available: boolean = false
+  required: boolean = false
+  latency: number = -1
+  statusCode: number = 0
+  message: string = ''
+}
+
+export class DesktopCapabilityReport {
+  ok: boolean = false
+  checkedAt: number = 0
+  items: DesktopCapabilityItem[] = []
+}
+
 // MARK: - Markdown API 响应类型
 
 export class MarkdownRenderResponse {
@@ -598,9 +617,10 @@ export class APIService {
         const response = await this.request<NetworkInfoResponse>(paths[i], 'GET', '')
         const info: NetworkInfo = {
           recommendedType: response.recommendedType,
-          lanUrl: response.lanUrl,
-          tailscaleUrl: response.tailscaleUrl,
-          tunnelUrl: response.tunnelUrl,
+          lanUrl: response.lanUrl ? UrlUtils.normalizeUrl(response.lanUrl) : '',
+          tailscaleUrl: response.tailscaleUrl ? UrlUtils.normalizeUrl(response.tailscaleUrl) : '',
+          tunnelUrl: response.tunnelUrl ? UrlUtils.normalizeUrl(response.tunnelUrl) : '',
+          cloudRelayUrl: response.cloudRelayUrl ? UrlUtils.normalizeUrl(response.cloudRelayUrl) : '',
           tunnelEnabled: response.tunnelEnabled,
           serverPort: response.serverPort
         }
@@ -1237,7 +1257,89 @@ export class APIService {
     return response
   }
 
+  // MARK: - 桌面端能力自检
+
+  async checkDesktopCapabilities(): Promise<DesktopCapabilityReport> {
+    const checks: DesktopCapabilityItem[] = [
+      this.makeCapability('status', '服务状态', '桌面端 server 基础健康检查', '/api/status', true),
+      this.makeCapability('sessions', '会话控制', '读取和创建桌面端会话', '/api/sessions', true),
+      this.makeCapability('filesystem', '文件访问', '浏览桌面端工作目录与文件', '/api/filesystem/browse?includeFiles=true', true),
+      this.makeCapability('providers', '模型服务商', '读取和切换桌面端 Provider', '/api/providers', true),
+      this.makeCapability('models', '模型列表', '读取桌面端可用模型', '/api/models', true),
+      this.makeCapability('agents', 'Agent 管理', '读取桌面端 Agent 能力', '/api/agents', false),
+      this.makeCapability('skills', '技能管理', '读取桌面端技能列表', '/api/skills', false),
+      this.makeCapability('git', 'Git 能力', '检测桌面端 Git API 是否存在', '/api/git/status', false),
+      this.makeCapability('preview', '网页预览', '启动桌面端项目预览服务', '/api/preview/start', false),
+      this.makeCapability('ssh', 'SSH/终端', '通过桌面端执行远程命令', '/api/ssh/connect', false)
+    ]
+
+    const report = new DesktopCapabilityReport()
+    report.checkedAt = Date.now()
+
+    for (let i = 0; i < checks.length; i++) {
+      report.items.push(await this.probeCapability(checks[i]))
+    }
+
+    report.ok = report.items.filter((item: DesktopCapabilityItem) => item.required && !item.available).length === 0
+    return report
+  }
+
   // MARK: - 私有方法
+
+  private makeCapability(key: string, title: string, description: string, path: string, required: boolean): DesktopCapabilityItem {
+    const item = new DesktopCapabilityItem()
+    item.key = key
+    item.title = title
+    item.description = description
+    item.path = path
+    item.required = required
+    item.message = '未检测'
+    item.statusCode = 0
+    item.latency = -1
+    return item
+  }
+
+  private async probeCapability(item: DesktopCapabilityItem): Promise<DesktopCapabilityItem> {
+    if (!this.baseUrl) {
+      item.available = false
+      item.message = '服务器地址未设置'
+      return item
+    }
+
+    const startTime = Date.now()
+    const httpRequest = http.createHttp()
+
+    try {
+      const response = await httpRequest.request(this.baseUrl + item.path, {
+        method: http.RequestMethod.GET,
+        connectTimeout: 5000,
+        readTimeout: 5000,
+        header: {
+          'Accept': 'application/json'
+        }
+      })
+
+      item.latency = Date.now() - startTime
+      item.statusCode = response.responseCode
+      item.available = response.responseCode >= 200 && response.responseCode < 500 && response.responseCode !== 404
+      if (item.available) {
+        item.message = item.latency + 'ms'
+      } else if (response.responseCode === 404) {
+        item.message = '桌面端未实现'
+      } else {
+        item.message = 'HTTP ' + response.responseCode
+      }
+    } catch (e) {
+      const err = e as Error
+      item.available = false
+      item.latency = -1
+      item.message = err.message || '请求失败'
+    } finally {
+      httpRequest.destroy()
+    }
+
+    return item
+  }
 
   private async request<T>(path: string, method: string, body: string): Promise<T> {
     if (!this.baseUrl) {

@@ -712,13 +712,28 @@ export class WebSocketService {
   }
 
   sendAskUserQuestionResponse(sessionId: string, requestId: string, answers: Record<string, string>): boolean {
+    console.info(`[WS] sendAskUserQuestionResponse: sessionId=${sessionId}, requestId=${requestId}, answers=${JSON.stringify(answers)}`)
+
+    // 格式化答案为字符串
+    const answerText = Object.entries(answers)
+      .map((entry) => `${entry[0]}: ${entry[1]}`)
+      .join('\n')
+
+    // 尝试多种格式以确保兼容性
     const message: OutgoingMessage = {
       type: 'permission_response',
       requestId: requestId,
       allowed: true,
-      answers: answers
+      answers: answers,
+      input: answers,
+      response: answers,  // 备用字段名
+      content: answerText
     }
-    return this.send(sessionId, message)
+
+    console.info(`[WS] Sending AskUserQuestion response: ${JSON.stringify(message)}`)
+    const result = this.send(sessionId, message)
+    console.info(`[WS] sendAskUserQuestionResponse result: ${result}`)
+    return result
   }
 
   sendStop(sessionId: string): boolean {

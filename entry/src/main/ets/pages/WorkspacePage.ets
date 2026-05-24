@@ -83,6 +83,10 @@ struct WorkspacePage {
           ListItem() { Row().width('100%').height(80) }
 
           ListItem() {
+            this.WorkspaceOverview()
+          }
+
+          ListItem() {
             Column({ space: 4 }) {
               Row({ space: 8 }) {
                 SymbolGlyph($r('sys.symbol.folder')).fontSize(16).fontColor([Theme.AccentBlue])
@@ -131,15 +135,73 @@ struct WorkspacePage {
       .hideBackButton(false)
     }
     .width('100%').height('100%')
-    .linearGradient({
-      angle: 180,
-      colors: [
-        [Theme.BackgroundGradientStart, 0.0],
-        [Theme.BackgroundGradientMiddle, 0.5],
-        [Theme.BackgroundGradientEnd, 1.0]
-      ]
-    })
+    .backgroundColor('#101114')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+  }
+
+  @Builder
+  WorkspaceOverview() {
+    Column({ space: 14 }) {
+      Row() {
+        Column({ space: 5 }) {
+          Text('工作区')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextPrimary)
+
+          Text(this.rootPath || '等待选择项目目录')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        Row({ space: 6 }) {
+          Row()
+            .width(8)
+            .height(8)
+            .borderRadius(4)
+            .backgroundColor(this.rootPath ? Theme.AccentGreen : Theme.TextTertiary)
+
+          Text(this.rootPath ? '已加载' : '未加载')
+            .fontSize(Theme.FontTiny)
+            .fontColor(this.rootPath ? Theme.AccentGreen : Theme.TextTertiary)
+        }
+        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+        .backgroundColor(this.rootPath ? 'rgba(48, 209, 88, 0.14)' : 'rgba(255, 255, 255, 0.055)')
+        .borderRadius(10)
+      }
+      .width('100%')
+
+      Row({ space: 8 }) {
+        this.WorkspaceMetric('可见项', this.flatItems.length.toString(), Theme.AccentBlue)
+        this.WorkspaceMetric('根目录', this.rootEntries.length.toString(), Theme.AccentGreen)
+        this.WorkspaceMetric('状态', this.isLoading ? '加载中' : '就绪', this.isLoading ? Theme.AccentOrange : Theme.AccentGreen)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(Theme.SpacingLG)
+    .backgroundColor('rgba(255, 255, 255, 0.055)')
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.09)' })
+    .borderRadius(Theme.RadiusLarge)
+  }
+
+  @Builder
+  WorkspaceMetric(label: string, value: string, color: ResourceColor) {
+    Column({ space: 4 }) {
+      Text(label).fontSize(11).fontColor(Theme.TextTertiary)
+      Text(value).fontSize(Theme.FontTiny).fontWeight(FontWeight.Medium).fontColor(color)
+    }
+    .layoutWeight(1)
+    .height(50)
+    .padding({ left: 10, right: 10 })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor('rgba(255, 255, 255, 0.045)')
+    .borderRadius(10)
   }
 
   @Builder

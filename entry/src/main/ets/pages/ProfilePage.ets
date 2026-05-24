@@ -71,12 +71,24 @@ struct ProfilePage {
     this.isLoading = false
   }
 
+  private getConnectionText(): string {
+    return authStore.serverUrl ? '已连接' : '未连接'
+  }
+
+  private getConnectionColor(): ResourceColor {
+    return authStore.serverUrl ? Theme.AccentGreen : Theme.ErrorColor
+  }
+
   build() {
     Stack() {
       HdsNavigation() {
         List({ space: Theme.SpacingMD, scroller: this.scroller }) {
           ListItem() {
             Row().width('100%').height(100)
+          }
+
+          ListItem() {
+            this.ProfileOverview()
           }
 
           // 用户信息
@@ -295,17 +307,98 @@ struct ProfilePage {
       .bindToScrollable([this.scroller])
       .titleMode(HdsNavigationTitleMode.MINI)
       .hideBackButton(false)
-      .linearGradient({
-        angle: 180,
-        colors: [
-          [Theme.BackgroundGradientStart, 0.0],
-          [Theme.BackgroundGradientMiddle, 0.5],
-          [Theme.BackgroundGradientEnd, 1.0]
-        ]
-      })
+      .backgroundColor('#101114')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
     .width('100%')
     .height('100%')
+  }
+
+  @Builder
+  ProfileOverview() {
+    Column({ space: 14 }) {
+      Row() {
+        Stack() {
+          Circle()
+            .width(58)
+            .height(58)
+            .fill('rgba(10, 132, 255, 0.14)')
+
+          Text('U')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.AccentBlue)
+        }
+        .width(58)
+        .height(58)
+
+        Column({ space: 5 }) {
+          Text('当前用户')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextPrimary)
+
+          Text(authStore.serverUrl || '未连接到桌面端')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        .margin({ left: Theme.SpacingMD })
+
+        Row({ space: 6 }) {
+          Row()
+            .width(8)
+            .height(8)
+            .borderRadius(4)
+            .backgroundColor(this.getConnectionColor())
+
+          Text(this.getConnectionText())
+            .fontSize(Theme.FontTiny)
+            .fontColor(this.getConnectionColor())
+        }
+        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+        .backgroundColor(authStore.serverUrl ? 'rgba(48, 209, 88, 0.14)' : 'rgba(255, 59, 48, 0.12)')
+        .borderRadius(10)
+      }
+      .width('100%')
+
+      Row({ space: 8 }) {
+        this.ProfileMetric('项目', this.projects.length.toString(), Theme.AccentBlue)
+        this.ProfileMetric('配置', this.configDir ? '已读取' : '未获取', this.configDir ? Theme.AccentGreen : Theme.TextTertiary)
+        this.ProfileMetric('设置', this.settingsSummary || '加载中', Theme.AccentOrange)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(Theme.SpacingLG)
+    .backgroundColor('rgba(255, 255, 255, 0.055)')
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.09)' })
+    .borderRadius(Theme.RadiusLarge)
+  }
+
+  @Builder
+  ProfileMetric(label: string, value: string, color: ResourceColor) {
+    Column({ space: 4 }) {
+      Text(label)
+        .fontSize(11)
+        .fontColor(Theme.TextTertiary)
+
+      Text(value)
+        .fontSize(Theme.FontTiny)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(color)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .layoutWeight(1)
+    .height(50)
+    .padding({ left: 10, right: 10 })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor('rgba(255, 255, 255, 0.045)')
+    .borderRadius(10)
   }
 }

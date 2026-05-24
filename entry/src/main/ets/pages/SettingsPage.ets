@@ -6,13 +6,14 @@ import { Theme } from '../common/Theme'
 import { authStore } from '../stores/AuthStore'
 import { appState, ThemeMode } from '../stores/AppState'
 import { sessionStore } from '../stores/SessionStore'
-import { ModelInfo, ServerMode, PermissionMode, getPermissionModeDisplayName, getPermissionModeDescription, ServerProfile } from '../models/Models'
+import { ModelInfo, ServerMode, PermissionMode, getPermissionModeDescription, ServerProfile } from '../models/Models'
 import { HdsNavigation, ScrollEffectType, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import router from '@ohos.router'
 import http from '@ohos.net.http'
 import { openScanner, ScannedAddresses } from '../services/ScanService'
 import { connectionManager, ConnectionType, ConnectionQuality } from '../services/ConnectionManager'
+import { apiService, DesktopCapabilityItem } from '../services/APIService'
 
 @Component
 export struct SettingsPage {
@@ -35,6 +36,7 @@ export struct SettingsPage {
   @State showThemeSheet: boolean = false
   @State editUrl: string = ''
   @State themeMode: ThemeMode = 'dark'
+  @State showAdvancedTools: boolean = false
 
   // 生物识别
   @State biometricEnabled: boolean = true
@@ -52,6 +54,10 @@ export struct SettingsPage {
   @State connectionType: ConnectionType = 'unknown'
   @State connectionQuality: ConnectionQuality = 'unavailable'
   @State connectionLatency: number = -1
+  @State checkingCapabilities: boolean = false
+  @State desktopCapabilities: DesktopCapabilityItem[] = []
+  @State capabilityCheckedAt: number = 0
+  @State capabilityOk: boolean = false
 
   // 模型选择
   @State showModelSheet: boolean = false
@@ -137,7 +143,7 @@ export struct SettingsPage {
         List({ space: Theme.SpacingMD }) {
           // 顶部留白
           ListItem() {
-            Row().width('100%').height(100)
+            Row().width('100%').height(92)
           }
 
           // 账户
@@ -156,6 +162,10 @@ export struct SettingsPage {
 
           ListItem() {
             this.ConnectionItem()
+          }
+
+          ListItem() {
+            this.DesktopCapabilityPanel()
           }
 
           // 模型与权限
@@ -181,36 +191,9 @@ export struct SettingsPage {
             }
           }
 
-          // 功能
-          if (this.isLoggedIn) {
-            ListItem() {
-              this.SettingSection('功能')
-            }
-
-            ListItem() {
-              this.DashboardLinkItem()
-            }
-
-            ListItem() {
-              this.SkillsLinkItem()
-            }
-
-            ListItem() {
-              this.MemoryLinkItem()
-            }
-
-            ListItem() {
-              this.AgentLinkItem()
-            }
-
-            ListItem() {
-              this.ScheduledTaskLinkItem()
-            }
-          }
-
           // 外观设置
           ListItem() {
-            this.SettingSection('外观')
+            this.SettingSection('偏好')
           }
 
           ListItem() {
@@ -220,40 +203,57 @@ export struct SettingsPage {
           // 安全与隐私
           if (this.isLoggedIn) {
             ListItem() {
-              this.SettingSection('安全与隐私')
-            }
-
-            ListItem() {
               this.BiometricItem()
             }
           }
 
-          // 数据管理
+          // 高级工具
           if (this.isLoggedIn) {
             ListItem() {
-              this.SettingSection('数据管理')
+              this.SettingSection('高级')
             }
 
             ListItem() {
-              this.DataManageItem()
+              this.AdvancedToolsPanel()
             }
-          }
 
-          // 关于与更新
-          ListItem() {
-            this.SettingSection('关于与更新')
-          }
+            if (this.showAdvancedTools) {
+              ListItem() {
+                this.DashboardLinkItem()
+              }
 
-          ListItem() {
-            this.VersionItem()
-          }
+              ListItem() {
+                this.SkillsLinkItem()
+              }
 
-          ListItem() {
-            this.BuildTimeItem()
-          }
+              ListItem() {
+                this.MemoryLinkItem()
+              }
 
-          ListItem() {
-            this.CheckUpdateItem()
+              ListItem() {
+                this.AgentLinkItem()
+              }
+
+              ListItem() {
+                this.ScheduledTaskLinkItem()
+              }
+
+              ListItem() {
+                this.DataManageItem()
+              }
+
+              ListItem() {
+                this.CheckUpdateItem()
+              }
+
+              ListItem() {
+                this.VersionItem()
+              }
+
+              ListItem() {
+                this.BuildTimeItem()
+              }
+            }
           }
 
           // 退出登录
@@ -293,14 +293,7 @@ export struct SettingsPage {
       })
       .titleMode(HdsNavigationTitleMode.MINI)
       .hideBackButton(true)
-      .linearGradient({
-        angle: 180,
-        colors: [
-          [Theme.BackgroundGradientStart, 0.0],
-          [Theme.BackgroundGradientMiddle, 0.5],
-          [Theme.BackgroundGradientEnd, 1.0]
-        ]
-      })
+      .backgroundColor('#101114')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
       // 编辑 Sheet（独立 Column 避免多个 bindSheet 冲突）
@@ -342,31 +335,46 @@ export struct SettingsPage {
 
   @Builder
   SettingSection(title: string) {
-    Text(title)
-      .fontSize(Theme.FontCaption)
-      .fontWeight(FontWeight.Medium)
-      .fontColor(Theme.TextSecondary)
+    Row() {
+      Text(title)
+        .fontSize(Theme.FontCaption)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Theme.TextSecondary)
+
+      Row()
+        .height(1)
+        .layoutWeight(1)
+        .backgroundColor('rgba(255, 255, 255, 0.06)')
+        .margin({ left: Theme.SpacingMD })
+    }
       .width('100%')
       .padding({ top: Theme.SpacingSM, bottom: Theme.SpacingXS })
   }
 
   @Builder
   AccountItem() {
-    Row() {
-      Text('用户')
-        .fontSize(Theme.FontBody)
-        .fontColor(Theme.TextPrimary)
+    Column({ space: Theme.SpacingSM }) {
+      Row() {
+        Text('用户')
+          .fontSize(Theme.FontBody)
+          .fontColor(Theme.TextPrimary)
 
-      Blank()
+        Blank()
 
-      Text(this.userName)
-        .fontSize(Theme.FontBody)
-        .fontColor(Theme.TextSecondary)
+        Text(this.userName)
+          .fontSize(Theme.FontBody)
+          .fontColor(Theme.TextSecondary)
 
-      SymbolGlyph($r('sys.symbol.chevron_right'))
-        .fontSize(14)
-        .fontColor([Theme.TextSecondary])
-        .margin({ left: 8 })
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(14)
+          .fontColor([Theme.TextSecondary])
+          .margin({ left: 8 })
+      }
+      .width('100%')
+      .onClick(() => {
+        router.pushUrl({ url: 'pages/ProfilePage' })
+      })
+
     }
     .width('100%')
     .padding(Theme.SpacingMD)
@@ -374,30 +382,24 @@ export struct SettingsPage {
     .borderRadius(Theme.RadiusMedium)
     .border({ width: 0.5, color: Theme.GlassBorder })
     .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
-    .onClick(() => {
-      router.pushUrl({ url: 'pages/ProfilePage' })
-    })
   }
 
   @Builder
   ConnectionItem() {
-    Column({ space: Theme.SpacingSM }) {
-      // 当前连接状态
+    Column({ space: Theme.SpacingMD }) {
       Row() {
-        Column({ space: 2 }) {
+        Column({ space: 5 }) {
           Text('当前连接')
-            .fontSize(Theme.FontBody)
+            .fontSize(Theme.FontHeading)
+            .fontWeight(FontWeight.Bold)
             .fontColor(Theme.TextPrimary)
 
           if (this.currentUrl) {
-            Row({ space: 6 }) {
-              Text('●')
-                .fontSize(8)
-                .fontColor(this.getConnectionQualityColor())
-              Text(this.getConnectionStatusText())
-                .fontSize(Theme.FontCaption)
-                .fontColor(this.getConnectionQualityColor())
-            }
+            Text(this.getConnectionStatusText())
+              .fontSize(Theme.FontCaption)
+              .fontColor(Theme.TextSecondary)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
           } else {
             Text('未连接')
               .fontSize(Theme.FontCaption)
@@ -407,55 +409,63 @@ export struct SettingsPage {
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
 
-        // 连接类型标签
-        if (this.connectionType !== 'unknown') {
-          Text(this.getConnectionTypeText())
-            .fontSize(Theme.FontTiny)
-            .fontColor(this.connectionType === 'lan' ? Theme.AccentGreen : Theme.AccentBlue)
-            .backgroundColor(this.connectionType === 'lan' ? Theme.AccentGreen + '20' : Theme.AccentBlue + '20')
-            .borderRadius(4)
-            .padding({ left: 8, right: 8, top: 2, bottom: 2 })
-            .margin({ right: 8 })
-        }
+        Button() {
+          if (this.testingLatency) {
+            LoadingProgress()
+              .width(18)
+              .height(18)
+              .color(Theme.TextOnPrimary)
+          } else {
+            Row({ space: 6 }) {
+              SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+                .fontSize(14)
+                .fontColor([Theme.TextOnPrimary])
 
-        // 连接速度
-        if (this.testingLatency) {
-          LoadingProgress()
-            .width(20)
-            .height(20)
-            .color(Theme.PrimaryColor)
-        } else if (this.connectionLatency > 0) {
-          Text(this.formatLatency(this.connectionLatency))
-            .fontSize(Theme.FontCaption)
-            .fontColor(this.getLatencyColor(this.connectionLatency))
-        } else {
-          Text('测速').fontSize(Theme.FontCaption).fontColor(Theme.TextSecondary)
+              Text('测速')
+                .fontSize(Theme.FontTiny)
+                .fontColor(Theme.TextOnPrimary)
+            }
+          }
         }
+        .height(34)
+        .padding({ left: 12, right: 12 })
+        .backgroundColor(this.currentUrl ? Theme.PrimaryColor : Theme.BackgroundTertiary)
+        .borderRadius(9)
+        .enabled(!this.testingLatency && this.currentUrl.length > 0)
+        .onClick(() => {
+          if (!this.testingLatency && this.currentUrl.length > 0) {
+            this.testSmartConnection()
+          }
+        })
       }
       .width('100%')
-      .onClick(() => {
-        if (!this.testingLatency && this.currentUrl.length > 0) {
-          this.testSmartConnection()
-        }
-      })
 
-      Divider().color(Theme.GlassBorder)
+      Row({ space: 8 }) {
+        this.ConnectionMetric('方式', this.connectionType !== 'unknown' ? this.getConnectionTypeText() : '未知',
+          this.getConnectionTypeColor(), this.getConnectionTypeBackground())
+        this.ConnectionMetric('质量', this.currentUrl ? this.getQualityText() : '未连接',
+          this.currentUrl ? this.getConnectionQualityColor() : Theme.ErrorColor,
+          this.currentUrl ? this.getConnectionQualityBackground() : 'rgba(255, 59, 48, 0.12)')
+        this.LatencyMetric()
+      }
+      .width('100%')
 
       // 服务器列表
       if (this.serverProfiles.length > 0) {
         ForEach(this.serverProfiles, (profile: ServerProfile) => {
           Row() {
+            Row()
+              .width(3)
+              .height(36)
+              .borderRadius(2)
+              .backgroundColor(this.activeProfileId === profile.id ? this.getProfileTypeColor(profile.type) : 'rgba(255, 255, 255, 0.08)')
+              .margin({ right: 10 })
+
             // 类型图标
-            Column() {
-              SymbolGlyph(this.getProfileIcon(profile.type))
-                .fontSize(14)
-                .fontColor([this.activeProfileId === profile.id ? Theme.PrimaryColor : Theme.TextSecondary])
-            }
-            .width(28)
-            .height(28)
-            .backgroundColor(this.activeProfileId === profile.id ?
-              Theme.PrimaryColor + '20' : Theme.GlassBackground)
-            .borderRadius(7)
+            SymbolGlyph(this.getProfileIcon(profile.type))
+              .fontSize(16)
+              .fontColor([this.activeProfileId === profile.id ? this.getProfileTypeColor(profile.type) : Theme.TextSecondary])
+              .margin({ right: 10 })
 
             Column({ space: 2 }) {
               Text(profile.name)
@@ -478,7 +488,7 @@ export struct SettingsPage {
               Text('使用中')
                 .fontSize(Theme.FontTiny)
                 .fontColor(Theme.PrimaryColor)
-                .backgroundColor(Theme.PrimaryColor + '20')
+                .backgroundColor('rgba(10, 132, 255, 0.14)')
                 .borderRadius(4)
                 .padding({ left: 8, right: 8, top: 2, bottom: 2 })
             }
@@ -488,15 +498,14 @@ export struct SettingsPage {
               .fontColor([Theme.TextTertiary])
           }
           .width('100%')
-          .padding({ top: 8, bottom: 8 })
+          .padding({ top: 10, bottom: 10 })
+          .borderRadius(10)
+          .backgroundColor(this.activeProfileId === profile.id ? 'rgba(255, 255, 255, 0.055)' : Color.Transparent)
           .onClick(() => {
             this.switchProfile(profile.id)
           })
         }, (profile: ServerProfile) => profile.id)
       }
-
-      Divider().color(Theme.GlassBorder)
-
       // 添加服务器 + 管理按钮
       Row({ space: 12 }) {
         Row({ space: 6 }) {
@@ -552,33 +561,218 @@ export struct SettingsPage {
         }
       }
       .width('100%')
+      .padding({ top: Theme.SpacingXS })
     }
     .width('100%')
-    .padding(Theme.SpacingMD)
-    .backgroundColor(Theme.GlassBackground)
-    .borderRadius(Theme.RadiusMedium)
-    .border({ width: 0.5, color: Theme.GlassBorder })
-    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
+    .padding(Theme.SpacingLG)
+    .backgroundColor('rgba(255, 255, 255, 0.055)')
+    .borderRadius(Theme.RadiusLarge)
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.09)' })
+  }
+
+  @Builder
+  DesktopCapabilityPanel() {
+    Column({ space: Theme.SpacingMD }) {
+      Row() {
+        Column({ space: 5 }) {
+          Text('桌面端能力')
+            .fontSize(Theme.FontHeading)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextPrimary)
+
+          Text(this.getCapabilitySummaryText())
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        Button() {
+          if (this.checkingCapabilities) {
+            LoadingProgress()
+              .width(18)
+              .height(18)
+              .color(Theme.TextOnPrimary)
+          } else {
+            Row({ space: 6 }) {
+              SymbolGlyph($r('sys.symbol.checkmark_circle'))
+                .fontSize(14)
+                .fontColor([Theme.TextOnPrimary])
+
+              Text('自检')
+                .fontSize(Theme.FontTiny)
+                .fontColor(Theme.TextOnPrimary)
+            }
+          }
+        }
+        .height(34)
+        .padding({ left: 12, right: 12 })
+        .backgroundColor(this.currentUrl ? Theme.PrimaryColor : Theme.BackgroundTertiary)
+        .borderRadius(9)
+        .enabled(!this.checkingCapabilities && this.currentUrl.length > 0)
+        .onClick(() => {
+          if (!this.checkingCapabilities && this.currentUrl.length > 0) {
+            this.runDesktopCapabilityCheck()
+          }
+        })
+      }
+      .width('100%')
+
+      if (this.desktopCapabilities.length > 0) {
+        Row({ space: 8 }) {
+          this.ConnectionMetric('核心能力', this.getRequiredCapabilityText(),
+            this.capabilityOk ? Theme.SuccessColor : Theme.ErrorColor,
+            this.capabilityOk ? 'rgba(48, 209, 88, 0.12)' : 'rgba(255, 59, 48, 0.12)')
+          this.ConnectionMetric('已接通', this.getAvailableCapabilityText(),
+            Theme.AccentBlue, 'rgba(10, 132, 255, 0.12)')
+          this.ConnectionMetric('未接通', this.getMissingCapabilityText(),
+            this.getMissingCapabilityCount() > 0 ? Theme.AccentOrange : Theme.SuccessColor,
+            'rgba(255, 255, 255, 0.045)')
+        }
+        .width('100%')
+
+        ForEach(this.desktopCapabilities, (item: DesktopCapabilityItem) => {
+          Row({ space: 10 }) {
+            Row()
+              .width(3)
+              .height(34)
+              .borderRadius(2)
+              .backgroundColor(this.getCapabilityColor(item))
+
+            Column() {
+              SymbolGlyph(item.available ? $r('sys.symbol.checkmark_circle') : $r('sys.symbol.questionmark_circle'))
+                .fontSize(15)
+                .fontColor([this.getCapabilityColor(item)])
+            }
+            .width(28)
+            .height(28)
+            .backgroundColor(this.getCapabilityBackground(item))
+            .borderRadius(7)
+
+            Column({ space: 2 }) {
+              Row({ space: 6 }) {
+                Text(item.title)
+                  .fontSize(Theme.FontBody)
+                  .fontWeight(item.required ? FontWeight.Medium : FontWeight.Normal)
+                  .fontColor(Theme.TextPrimary)
+
+                if (item.required) {
+                  Text('核心')
+                    .fontSize(10)
+                    .fontColor(Theme.AccentBlue)
+                    .padding({ left: 5, right: 5, top: 1, bottom: 1 })
+                    .backgroundColor('rgba(10, 132, 255, 0.12)')
+                    .borderRadius(4)
+                }
+              }
+
+              Text(item.description)
+                .fontSize(Theme.FontTiny)
+                .fontColor(Theme.TextTertiary)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            Text(item.message)
+              .fontSize(Theme.FontTiny)
+              .fontColor(this.getCapabilityColor(item))
+              .maxLines(1)
+          }
+          .width('100%')
+          .padding({ top: 8, bottom: 8 })
+        }, (item: DesktopCapabilityItem) => item.key)
+      } else {
+        Text('点击自检后，会实际访问桌面端 API，确认手机端哪些功能可以真正工作。')
+          .fontSize(Theme.FontCaption)
+          .fontColor(Theme.TextTertiary)
+          .lineHeight(19)
+      }
+    }
+    .width('100%')
+    .padding(Theme.SpacingLG)
+    .backgroundColor('rgba(255, 255, 255, 0.055)')
+    .borderRadius(Theme.RadiusLarge)
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.09)' })
+  }
+
+  @Builder
+  LatencyMetric() {
+    Column({ space: 4 }) {
+      Text('延迟')
+        .fontSize(11)
+        .fontColor(Theme.TextTertiary)
+
+      Text(this.testingLatency ? '检测中' :
+        (this.connectionLatency > 0 ? this.formatLatency(this.connectionLatency) : '未检测'))
+        .fontSize(Theme.FontTiny)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.testingLatency ? Theme.PrimaryColor :
+          (this.connectionLatency > 0 ? this.getLatencyColor(this.connectionLatency) : Theme.TextTertiary))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .layoutWeight(1)
+    .height(50)
+    .padding({ left: 10, right: 10 })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor('rgba(255, 255, 255, 0.045)')
+    .borderRadius(10)
+  }
+
+  @Builder
+  ConnectionMetric(label: string, value: string, color: ResourceColor, bgColor: string) {
+    Column({ space: 4 }) {
+      Text(label)
+        .fontSize(11)
+        .fontColor(Theme.TextTertiary)
+
+      Text(value)
+        .fontSize(Theme.FontTiny)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(color)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .layoutWeight(1)
+    .height(50)
+    .padding({ left: 10, right: 10 })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor(bgColor)
+    .borderRadius(10)
   }
 
   @Builder
   ModelItem() {
-    Row() {
-      Column({ space: 4 }) {
-        Text('当前模型')
-          .fontSize(Theme.FontBody)
-          .fontColor(Theme.TextPrimary)
+    Column({ space: Theme.SpacingSM }) {
+      Row() {
+        Column({ space: 4 }) {
+          Text('当前模型')
+            .fontSize(Theme.FontBody)
+            .fontColor(Theme.TextPrimary)
 
-        Text(this.currentModel?.name || '未选择')
-          .fontSize(Theme.FontCaption)
-          .fontColor(Theme.TextSecondary)
+          Text(this.currentModel?.name || '未选择')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(14)
+          .fontColor([Theme.TextSecondary])
       }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
+      .width('100%')
+      .onClick(() => {
+        this.loadModels()
+        this.showModelSheet = true
+      })
 
-      SymbolGlyph($r('sys.symbol.chevron_right'))
-        .fontSize(14)
-        .fontColor([Theme.TextSecondary])
     }
     .width('100%')
     .padding(Theme.SpacingMD)
@@ -586,78 +780,78 @@ export struct SettingsPage {
     .borderRadius(Theme.RadiusMedium)
     .border({ width: 0.5, color: Theme.GlassBorder })
     .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
-    .onClick(() => {
-      this.loadModels()
-      this.showModelSheet = true
-    })
   }
 
   @Builder
   PermissionModeItem() {
-    Column({ space: Theme.SpacingSM }) {
-      this.PermissionModeRow(PermissionMode.DEFAULT)
-      Divider().color(Theme.GlassBorder)
-      this.PermissionModeRow(PermissionMode.ACCEPT_EDITS)
-      Divider().color(Theme.GlassBorder)
-      this.PermissionModeRow(PermissionMode.PLAN)
-      Divider().color(Theme.GlassBorder)
-      this.PermissionModeRow(PermissionMode.BYPASS_PERMISSIONS)
+    Column({ space: Theme.SpacingMD }) {
+      Text('权限模式')
+        .fontSize(Theme.FontBody)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Theme.TextPrimary)
+        .width('100%')
+
+      Row({ space: 8 }) {
+        this.PermissionChip(PermissionMode.DEFAULT, '询问')
+        this.PermissionChip(PermissionMode.ACCEPT_EDITS, '自动')
+        this.PermissionChip(PermissionMode.PLAN, '计划')
+        this.PermissionChip(PermissionMode.BYPASS_PERMISSIONS, '跳过')
+      }
+      .width('100%')
+
+      Text(getPermissionModeDescription(this.currentPermissionMode))
+        .fontSize(Theme.FontCaption)
+        .fontColor(Theme.TextSecondary)
+        .width('100%')
     }
     .width('100%')
-    .padding(Theme.SpacingMD)
-    .backgroundColor(Theme.GlassBackground)
-    .borderRadius(Theme.RadiusMedium)
-    .border({ width: 0.5, color: Theme.GlassBorder })
-    .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
+    .padding(Theme.SpacingLG)
+    .backgroundColor('rgba(255, 255, 255, 0.055)')
+    .borderRadius(Theme.RadiusLarge)
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.09)' })
   }
 
   @Builder
-  PermissionModeRow(mode: PermissionMode) {
-    Row() {
-      Column({ space: 2 }) {
-        Text(getPermissionModeDisplayName(mode))
-          .fontSize(Theme.FontBody)
-          .fontColor(Theme.TextPrimary)
-
-        Text(getPermissionModeDescription(mode))
-          .fontSize(Theme.FontTiny)
-          .fontColor(Theme.TextSecondary)
-      }
+  PermissionChip(mode: PermissionMode, label: string) {
+    Text(label)
+      .fontSize(Theme.FontTiny)
+      .fontWeight(this.currentPermissionMode === mode ? FontWeight.Bold : FontWeight.Medium)
+      .fontColor(this.currentPermissionMode === mode ? Theme.TextOnPrimary : Theme.TextSecondary)
+      .textAlign(TextAlign.Center)
       .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-
-      Radio({ value: mode, group: 'permissionMode' })
-        .checked(this.currentPermissionMode === mode)
-        .onChange((isChecked: boolean) => {
-          if (isChecked) {
-            this.currentPermissionMode = mode
-            sessionStore.changePermissionMode(mode)
-          }
-        })
-    }
-    .width('100%')
+      .height(36)
+      .backgroundColor(this.currentPermissionMode === mode ? Theme.PrimaryColor : 'rgba(255, 255, 255, 0.055)')
+      .borderRadius(9)
+      .onClick(() => {
+        this.currentPermissionMode = mode
+        sessionStore.changePermissionMode(mode)
+      })
   }
 
   @Builder
   BiometricItem() {
-    Row() {
-      Column({ space: 2 }) {
-        Text('生物识别锁屏')
-          .fontSize(Theme.FontBody)
-          .fontColor(Theme.TextPrimary)
+    Column({ space: Theme.SpacingSM }) {
+      Row() {
+        Column({ space: 2 }) {
+          Text('生物识别锁屏')
+            .fontSize(Theme.FontBody)
+            .fontColor(Theme.TextPrimary)
 
-        Text('切回前台时验证指纹/面部')
-          .fontSize(Theme.FontTiny)
-          .fontColor(Theme.TextSecondary)
+          Text('切回前台时验证指纹/面部')
+            .fontSize(Theme.FontTiny)
+            .fontColor(Theme.TextSecondary)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        Toggle({ type: ToggleType.Switch, isOn: this.biometricEnabled })
+          .onChange(async (isOn: boolean) => {
+            this.biometricEnabled = isOn
+            await authStore.setBiometricEnabled(isOn)
+          })
       }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
+      .width('100%')
 
-      Toggle({ type: ToggleType.Switch, isOn: this.biometricEnabled })
-        .onChange(async (isOn: boolean) => {
-          this.biometricEnabled = isOn
-          await authStore.setBiometricEnabled(isOn)
-        })
     }
     .width('100%')
     .padding(Theme.SpacingMD)
@@ -669,21 +863,36 @@ export struct SettingsPage {
 
   @Builder
   ThemeItem() {
-    Row() {
-      Text('主题')
-        .fontSize(Theme.FontBody)
-        .fontColor(Theme.TextPrimary)
+    Column({ space: Theme.SpacingSM }) {
+      Row() {
+        Text('主题')
+          .fontSize(Theme.FontBody)
+          .fontColor(Theme.TextPrimary)
 
-      Blank()
+        Blank()
 
-      Text(this.getThemeLabel(this.themeMode))
-        .fontSize(Theme.FontBody)
-        .fontColor(Theme.TextSecondary)
+        Text(this.getThemeLabel(this.themeMode))
+          .fontSize(Theme.FontBody)
+          .fontColor(Theme.TextSecondary)
 
-      SymbolGlyph($r('sys.symbol.chevron_right'))
-        .fontSize(14)
-        .fontColor([Theme.TextSecondary])
-        .margin({ left: 8 })
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(14)
+          .fontColor([Theme.TextSecondary])
+          .margin({ left: 8 })
+      }
+      .width('100%')
+      .onClick(() => {
+        // 切换主题
+        if (this.themeMode === 'dark') {
+          this.themeMode = 'light'
+        } else if (this.themeMode === 'light') {
+          this.themeMode = 'glass'
+        } else {
+          this.themeMode = 'dark'
+        }
+        appState.setThemeMode(this.themeMode)
+      })
+
     }
     .width('100%')
     .padding(Theme.SpacingMD)
@@ -691,17 +900,6 @@ export struct SettingsPage {
     .borderRadius(Theme.RadiusMedium)
     .border({ width: 0.5, color: Theme.GlassBorder })
     .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
-    .onClick(() => {
-      // 切换主题
-      if (this.themeMode === 'dark') {
-        this.themeMode = 'light'
-      } else if (this.themeMode === 'light') {
-        this.themeMode = 'glass'
-      } else {
-        this.themeMode = 'dark'
-      }
-      appState.setThemeMode(this.themeMode)
-    })
   }
 
   @Builder
@@ -741,22 +939,29 @@ export struct SettingsPage {
 
   @Builder
   ProviderManageItem() {
-    Row() {
-      Column({ space: 2 }) {
-        Text('服务商管理')
-          .fontSize(Theme.FontBody)
-          .fontColor(Theme.TextPrimary)
+    Column({ space: Theme.SpacingSM }) {
+      Row() {
+        Column({ space: 2 }) {
+          Text('服务商管理')
+            .fontSize(Theme.FontBody)
+            .fontColor(Theme.TextPrimary)
 
-        Text('管理自定义 API 服务商')
-          .fontSize(Theme.FontCaption)
-          .fontColor(Theme.TextSecondary)
+          Text('管理自定义 API 服务商')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(14)
+          .fontColor([Theme.TextSecondary])
       }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
+      .width('100%')
+      .onClick(() => {
+        router.pushUrl({ url: 'pages/ProvidersPage' })
+      })
 
-      SymbolGlyph($r('sys.symbol.chevron_right'))
-        .fontSize(14)
-        .fontColor([Theme.TextSecondary])
     }
     .width('100%')
     .padding(Theme.SpacingMD)
@@ -764,9 +969,6 @@ export struct SettingsPage {
     .borderRadius(Theme.RadiusMedium)
     .border({ width: 0.5, color: Theme.GlassBorder })
     .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
-    .onClick(() => {
-      router.pushUrl({ url: 'pages/ProvidersPage' })
-    })
   }
 
   @Builder
@@ -821,6 +1023,7 @@ export struct SettingsPage {
       .onClick(() => {
         router.pushUrl({ url: 'pages/StorageManagementPage' })
       })
+
     }
     .width('100%')
     .padding(Theme.SpacingMD)
@@ -832,16 +1035,20 @@ export struct SettingsPage {
 
   @Builder
   VersionItem() {
-    Row() {
-      Text('版本')
-        .fontSize(Theme.FontBody)
-        .fontColor(Theme.TextPrimary)
+    Column({ space: Theme.SpacingSM }) {
+      Row() {
+        Text('版本')
+          .fontSize(Theme.FontBody)
+          .fontColor(Theme.TextPrimary)
 
-      Blank()
+        Blank()
 
-      Text(this.appVersion)
-        .fontSize(Theme.FontBody)
-        .fontColor(Theme.TextSecondary)
+        Text(this.appVersion)
+          .fontSize(Theme.FontBody)
+          .fontColor(Theme.TextSecondary)
+      }
+      .width('100%')
+
     }
     .width('100%')
     .padding(Theme.SpacingMD)
@@ -1212,6 +1419,80 @@ export struct SettingsPage {
   }
 
   @Builder
+  AdvancedToolsPanel() {
+    Column({ space: Theme.SpacingMD }) {
+      Row() {
+        Column({ space: 4 }) {
+          Text('高级工具')
+            .fontSize(Theme.FontHeading)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextPrimary)
+
+          Text(this.showAdvancedTools ? '已展开桌面端高级能力入口' : '技能、记忆、Agent、任务、数据和更新')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        Row({ space: 6 }) {
+          Text(this.showAdvancedTools ? '收起' : '展开')
+            .fontSize(Theme.FontTiny)
+            .fontColor(Theme.PrimaryColor)
+
+          SymbolGlyph(this.showAdvancedTools ? $r('sys.symbol.chevron_up') : $r('sys.symbol.chevron_down'))
+            .fontSize(12)
+            .fontColor([Theme.PrimaryColor])
+        }
+        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+        .backgroundColor('rgba(10, 132, 255, 0.12)')
+        .borderRadius(9)
+      }
+      .width('100%')
+
+      Row({ space: 8 }) {
+        this.AdvancedToolMetric('工具', '5 项', Theme.AccentBlue)
+        this.AdvancedToolMetric('维护', '数据/更新', Theme.AccentOrange)
+        this.AdvancedToolMetric('默认', '已隐藏', Theme.TextSecondary)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(Theme.SpacingLG)
+    .backgroundColor('rgba(255, 255, 255, 0.055)')
+    .borderRadius(Theme.RadiusLarge)
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.09)' })
+    .onClick(() => {
+      this.showAdvancedTools = !this.showAdvancedTools
+    })
+  }
+
+  @Builder
+  AdvancedToolMetric(label: string, value: string, color: ResourceColor) {
+    Column({ space: 4 }) {
+      Text(label)
+        .fontSize(11)
+        .fontColor(Theme.TextTertiary)
+
+      Text(value)
+        .fontSize(Theme.FontTiny)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(color)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .layoutWeight(1)
+    .height(48)
+    .padding({ left: 10, right: 10 })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor('rgba(255, 255, 255, 0.045)')
+    .borderRadius(10)
+  }
+
+  @Builder
   DashboardLinkItem() {
     Row() {
       Column({ space: 2 }) {
@@ -1449,6 +1730,16 @@ export struct SettingsPage {
     }
   }
 
+  private getProfileTypeColor(type: string): ResourceColor {
+    switch (type) {
+      case 'lan':
+      case 'pgy': return Theme.AccentGreen
+      case 'cloud_relay': return Theme.AccentBlue
+      case 'tunnel': return Theme.AccentPurple
+      default: return Theme.TextSecondary
+    }
+  }
+
   private getProfileIcon(type: string): Resource {
     switch (type) {
       case 'lan': return $r('sys.symbol.gearshape')
@@ -1562,6 +1853,34 @@ export struct SettingsPage {
     }
   }
 
+  private getConnectionTypeColor(): ResourceColor {
+    switch (this.connectionType) {
+      case 'lan':
+      case 'pgy': return Theme.AccentGreen
+      case 'cloud_relay': return Theme.AccentBlue
+      case 'tunnel': return Theme.AccentPurple
+      default: return Theme.TextSecondary
+    }
+  }
+
+  private getConnectionTypeBackground(): string {
+    switch (this.connectionType) {
+      case 'lan':
+      case 'pgy': return 'rgba(48, 209, 88, 0.14)'
+      case 'cloud_relay': return 'rgba(10, 132, 255, 0.14)'
+      case 'tunnel': return 'rgba(191, 90, 242, 0.14)'
+      default: return 'rgba(255, 255, 255, 0.055)'
+    }
+  }
+
+  private getConnectionQualityBackground(): string {
+    switch (this.connectionQuality) {
+      case 'good': return 'rgba(48, 209, 88, 0.14)'
+      case 'poor': return 'rgba(255, 159, 10, 0.14)'
+      default: return 'rgba(255, 255, 255, 0.055)'
+    }
+  }
+
   private getConnectionStatusText(): string {
     const profileName = this.getProfileDisplayName()
     const qualityText = this.getQualityText()
@@ -1586,9 +1905,10 @@ export struct SettingsPage {
 
   private async testSmartConnection(): Promise<void> {
     this.testingLatency = true
+    this.connectionLatency = 0
 
     try {
-      const status = await connectionManager.smartConnect()
+      const status = await connectionManager.retestCurrentConnection()
       this.connectionType = status.type
       this.connectionQuality = status.quality
       this.connectionLatency = status.latency
@@ -1597,8 +1917,69 @@ export struct SettingsPage {
       this.activeProfileId = authStore.activeProfileId
     } catch (e) {
       console.error(`[Settings] Smart connect error: ${e}`)
+      this.connectionLatency = -1
+      this.connectionQuality = 'unavailable'
     }
 
     this.testingLatency = false
+  }
+
+  private async runDesktopCapabilityCheck(): Promise<void> {
+    if (this.currentUrl.length === 0) return
+
+    this.checkingCapabilities = true
+    try {
+      apiService.setBaseUrl(this.currentUrl)
+      const report = await apiService.checkDesktopCapabilities()
+      this.desktopCapabilities = report.items
+      this.capabilityCheckedAt = report.checkedAt
+      this.capabilityOk = report.ok
+    } catch (e) {
+      console.error(`[Settings] Desktop capability check error: ${e}`)
+      this.desktopCapabilities = []
+      this.capabilityOk = false
+    }
+    this.checkingCapabilities = false
+  }
+
+  private getCapabilitySummaryText(): string {
+    if (this.checkingCapabilities) return '正在逐项检测桌面端 API'
+    if (this.desktopCapabilities.length === 0) return '确认手机端是否真的能调用桌面端功能'
+    if (this.capabilityOk) return '核心能力已接通，可进行真实操作'
+    return '核心能力未完全接通，需要修复桌面端接口'
+  }
+
+  private getAvailableCapabilityCount(): number {
+    return this.desktopCapabilities.filter((item: DesktopCapabilityItem) => item.available).length
+  }
+
+  private getMissingCapabilityCount(): number {
+    return this.desktopCapabilities.filter((item: DesktopCapabilityItem) => !item.available).length
+  }
+
+  private getRequiredCapabilityText(): string {
+    const required = this.desktopCapabilities.filter((item: DesktopCapabilityItem) => item.required)
+    const available = required.filter((item: DesktopCapabilityItem) => item.available)
+    return `${available.length}/${required.length}`
+  }
+
+  private getAvailableCapabilityText(): string {
+    return `${this.getAvailableCapabilityCount()}/${this.desktopCapabilities.length}`
+  }
+
+  private getMissingCapabilityText(): string {
+    return `${this.getMissingCapabilityCount()} 项`
+  }
+
+  private getCapabilityColor(item: DesktopCapabilityItem): ResourceColor {
+    if (item.available) return Theme.SuccessColor
+    if (item.required) return Theme.ErrorColor
+    return Theme.AccentOrange
+  }
+
+  private getCapabilityBackground(item: DesktopCapabilityItem): string {
+    if (item.available) return 'rgba(48, 209, 88, 0.14)'
+    if (item.required) return 'rgba(255, 59, 48, 0.12)'
+    return 'rgba(255, 159, 10, 0.12)'
   }
 }

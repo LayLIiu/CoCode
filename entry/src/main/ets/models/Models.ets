@@ -247,6 +247,8 @@ export interface OutgoingMessage {
   questionId?: string
   answer?: string
   answers?: Record<string, string>
+  input?: Record<string, string>  // AskUserQuestion 响应
+  response?: Record<string, string>  // AskUserQuestion 响应备用字段
   mode?: string
   attachments?: AttachmentRef[]
 }

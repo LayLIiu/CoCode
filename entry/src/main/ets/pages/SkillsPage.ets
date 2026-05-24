@@ -89,6 +89,10 @@ struct SkillsPage {
           }
 
           ListItem() {
+            this.SkillsOverview()
+          }
+
+          ListItem() {
             Column({ space: Theme.SpacingSM }) {
               Text('自定义技能')
                 .fontSize(Theme.FontCaption)
@@ -202,17 +206,81 @@ struct SkillsPage {
       .bindToScrollable([this.scroller])
       .titleMode(HdsNavigationTitleMode.MINI)
       .hideBackButton(false)
-      .linearGradient({
-        angle: 180,
-        colors: [
-          [Theme.BackgroundGradientStart, 0.0],
-          [Theme.BackgroundGradientMiddle, 0.5],
-          [Theme.BackgroundGradientEnd, 1.0]
-        ]
-      })
+      .backgroundColor('#101114')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
     .width('100%')
     .height('100%')
+  }
+
+  @Builder
+  SkillsOverview() {
+    Column({ space: 14 }) {
+      Row() {
+        Column({ space: 5 }) {
+          Text('技能中心')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextPrimary)
+
+          Text('管理 Claude 可调用的扩展能力')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        Row({ space: 6 }) {
+          Row()
+            .width(8)
+            .height(8)
+            .borderRadius(4)
+            .backgroundColor(this.skills.length > 0 ? Theme.AccentGreen : Theme.TextTertiary)
+
+          Text(this.skills.length > 0 ? '可用' : '暂无')
+            .fontSize(Theme.FontTiny)
+            .fontColor(this.skills.length > 0 ? Theme.AccentGreen : Theme.TextTertiary)
+        }
+        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+        .backgroundColor(this.skills.length > 0 ? 'rgba(48, 209, 88, 0.14)' : 'rgba(255, 255, 255, 0.055)')
+        .borderRadius(10)
+      }
+      .width('100%')
+
+      Row({ space: 8 }) {
+        this.SkillMetric('总数', this.skills.length.toString(), Theme.AccentBlue)
+        this.SkillMetric('启用', this.getEnabledSkillCount().toString(), Theme.AccentGreen)
+        this.SkillMetric('状态', this.isLoading ? '加载中' : '就绪', this.isLoading ? Theme.AccentOrange : Theme.AccentGreen)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(Theme.SpacingLG)
+    .backgroundColor('rgba(255, 255, 255, 0.055)')
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.09)' })
+    .borderRadius(Theme.RadiusLarge)
+  }
+
+  private getEnabledSkillCount(): number {
+    let count = 0
+    for (let i = 0; i < this.skills.length; i++) {
+      if (this.skills[i].enabled) count++
+    }
+    return count
+  }
+
+  @Builder
+  SkillMetric(label: string, value: string, color: ResourceColor) {
+    Column({ space: 4 }) {
+      Text(label).fontSize(11).fontColor(Theme.TextTertiary)
+      Text(value).fontSize(Theme.FontTiny).fontWeight(FontWeight.Medium).fontColor(color)
+    }
+    .layoutWeight(1)
+    .height(50)
+    .padding({ left: 10, right: 10 })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor('rgba(255, 255, 255, 0.045)')
+    .borderRadius(10)
   }
 }

@@ -167,6 +167,8 @@ struct ProvidersPage {
           // 内容区域
           Scroll() {
             Column({ space: 20 }) {
+              this.ProviderOverview()
+
               // 连接设置
               Column({ space: 8 }) {
                 Row() {
@@ -357,7 +359,7 @@ struct ProvidersPage {
       })
       .titleMode(HdsNavigationTitleMode.MINI)
       .hideBackButton(false)
-      .backgroundColor(Theme.BackgroundPrimary)
+      .backgroundColor('#101114')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
     .width('100%')
@@ -367,6 +369,75 @@ struct ProvidersPage {
       backgroundColor: Color.Transparent,
       onDisappear: () => this.showForm = false
     })
+  }
+
+  @Builder
+  ProviderOverview() {
+    Column({ space: 14 }) {
+      Row() {
+        Column({ space: 5 }) {
+          Text('服务商中心')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextPrimary)
+
+          Text(this.activeProviderId ? '正在使用自定义服务商' : '正在使用官方认证')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        Row({ space: 6 }) {
+          Row()
+            .width(8)
+            .height(8)
+            .borderRadius(4)
+            .backgroundColor(this.activeProviderId ? Theme.AccentBlue : Theme.AccentGreen)
+
+          Text(this.activeProviderId ? '自定义' : '官方')
+            .fontSize(Theme.FontTiny)
+            .fontColor(this.activeProviderId ? Theme.AccentBlue : Theme.AccentGreen)
+        }
+        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+        .backgroundColor(this.activeProviderId ? 'rgba(10, 132, 255, 0.14)' : 'rgba(48, 209, 88, 0.14)')
+        .borderRadius(10)
+      }
+      .width('100%')
+
+      Row({ space: 8 }) {
+        this.ProviderMetric('自定义', this.providers.length.toString(), Theme.AccentBlue)
+        this.ProviderMetric('网络', this.networkInfo ? '已获取' : '未获取', this.networkInfo ? Theme.AccentGreen : Theme.TextTertiary)
+        this.ProviderMetric('隧道', this.networkInfo?.tunnelEnabled ? '开启' : '关闭', this.networkInfo?.tunnelEnabled ? Theme.AccentOrange : Theme.TextTertiary)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(Theme.SpacingLG)
+    .backgroundColor('rgba(255, 255, 255, 0.055)')
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.09)' })
+    .borderRadius(Theme.RadiusLarge)
+  }
+
+  @Builder
+  ProviderMetric(label: string, value: string, color: ResourceColor) {
+    Column({ space: 4 }) {
+      Text(label)
+        .fontSize(11)
+        .fontColor(Theme.TextTertiary)
+
+      Text(value)
+        .fontSize(Theme.FontTiny)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(color)
+    }
+    .layoutWeight(1)
+    .height(50)
+    .padding({ left: 10, right: 10 })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor('rgba(255, 255, 255, 0.045)')
+    .borderRadius(10)
   }
 
   @Builder

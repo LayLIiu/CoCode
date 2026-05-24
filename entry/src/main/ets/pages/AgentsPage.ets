@@ -82,6 +82,10 @@ struct AgentsPage {
             Row().width('100%').height(100)
           }
 
+          ListItem() {
+            this.AgentsOverview()
+          }
+
           // 活跃 Agent
           ListItem() {
             Column({ space: Theme.SpacingSM }) {
@@ -203,14 +207,7 @@ struct AgentsPage {
       .bindToScrollable([this.scroller])
       .titleMode(HdsNavigationTitleMode.MINI)
       .hideBackButton(false)
-      .linearGradient({
-        angle: 180,
-        colors: [
-          [Theme.BackgroundGradientStart, 0.0],
-          [Theme.BackgroundGradientMiddle, 0.5],
-          [Theme.BackgroundGradientEnd, 1.0]
-        ]
-      })
+      .backgroundColor('#101114')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
       // Agent 详情弹窗
@@ -220,6 +217,69 @@ struct AgentsPage {
     }
     .width('100%')
     .height('100%')
+  }
+
+  @Builder
+  AgentsOverview() {
+    Column({ space: 14 }) {
+      Row() {
+        Column({ space: 5 }) {
+          Text('Agent 中心')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextPrimary)
+
+          Text('浏览 Claude 的预设角色和工具权限')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        Row({ space: 6 }) {
+          Row()
+            .width(8)
+            .height(8)
+            .borderRadius(4)
+            .backgroundColor(this.activeAgents.length > 0 ? Theme.AccentGreen : Theme.TextTertiary)
+
+          Text(this.activeAgents.length > 0 ? '活跃' : '空闲')
+            .fontSize(Theme.FontTiny)
+            .fontColor(this.activeAgents.length > 0 ? Theme.AccentGreen : Theme.TextTertiary)
+        }
+        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+        .backgroundColor(this.activeAgents.length > 0 ? 'rgba(48, 209, 88, 0.14)' : 'rgba(255, 255, 255, 0.055)')
+        .borderRadius(10)
+      }
+      .width('100%')
+
+      Row({ space: 8 }) {
+        this.AgentMetric('活跃', this.activeAgents.length.toString(), Theme.AccentGreen)
+        this.AgentMetric('全部', this.allAgents.length.toString(), Theme.AccentBlue)
+        this.AgentMetric('状态', this.isLoading ? '加载中' : '就绪', this.isLoading ? Theme.AccentOrange : Theme.AccentGreen)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(Theme.SpacingLG)
+    .backgroundColor('rgba(255, 255, 255, 0.055)')
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.09)' })
+    .borderRadius(Theme.RadiusLarge)
+  }
+
+  @Builder
+  AgentMetric(label: string, value: string, color: ResourceColor) {
+    Column({ space: 4 }) {
+      Text(label).fontSize(11).fontColor(Theme.TextTertiary)
+      Text(value).fontSize(Theme.FontTiny).fontWeight(FontWeight.Medium).fontColor(color)
+    }
+    .layoutWeight(1)
+    .height(50)
+    .padding({ left: 10, right: 10 })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor('rgba(255, 255, 255, 0.045)')
+    .borderRadius(10)
   }
 
   @Builder

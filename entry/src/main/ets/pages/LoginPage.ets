@@ -12,13 +12,16 @@ import { User, DiscoveredServer } from '../models/Models'
 import { mdnsDiscoveryService } from '../services/MdnsDiscoveryService'
 import { openScanner } from '../services/ScanService'
 import { connectionManager } from '../services/ConnectionManager'
+import type { Context } from '@kit.AbilityKit'
 
 type ConnectionMode = 'pairing' | 'manual'
+type AccessMode = 'lan' | 'remote'
 
 @Entry
 @Component
 export struct LoginPage {
-  @State mode: ConnectionMode = 'pairing'
+  @State mode: ConnectionMode = 'manual'
+  @State accessMode: AccessMode = 'lan'
   @State pairingCode: string = ''
   @State serverUrl: string = ''
   @State isConnecting: boolean = false
@@ -36,64 +39,147 @@ export struct LoginPage {
   }
 
   build() {
-    Column() {
-      // Logo
-      this.LogoSection()
+    Scroll() {
+      Column({ space: 18 }) {
+        this.LogoSection()
+        this.AccessModeSelector()
+        this.ModeSwitch()
+        this.DiscoveredServersSection()
 
-      // 模式切换
-      this.ModeSwitch()
+        if (this.mode === 'pairing') {
+          this.PairingInput()
+        } else {
+          this.ManualInput()
+        }
 
-      // 发现服务器列表
-      this.DiscoveredServersSection()
-
-      // 输入区域
-      if (this.mode === 'pairing') {
-        this.PairingInput()
-      } else {
-        this.ManualInput()
+        this.Instructions()
       }
-
-      // 使用说明
-      this.Instructions()
-
-      Blank()
+      .width('100%')
+      .padding({ top: 52, bottom: 42 })
     }
     .width('100%')
     .height('100%')
-    .linearGradient({
-      angle: 180,
-      colors: [
-        [Theme.BackgroundGradientStart, 0.0],
-        [Theme.BackgroundGradientMiddle, 0.5],
-        [Theme.BackgroundGradientEnd, 1.0]
-      ]
-    })
-    .padding({ top: 60 })
+    .backgroundColor('#101114')
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring)
   }
 
   @Builder
   LogoSection() {
     Column({ space: 16 }) {
-      SymbolGlyph($r('sys.symbol.message_fill'))
-        .fontSize(64)
-        .fontColor([Theme.TextPrimary])
+      Stack() {
+        Circle()
+          .width(78)
+          .height(78)
+          .fill('rgba(10, 132, 255, 0.14)')
 
-      Text('Claude Code')
+        SymbolGlyph($r('sys.symbol.message_fill'))
+          .fontSize(40)
+          .fontColor([Theme.AccentBlue])
+      }
+      .width(78)
+      .height(78)
+
+      Text('远程工作台')
         .fontSize(28)
         .fontWeight(FontWeight.Bold)
         .fontColor(Theme.TextPrimary)
 
-      Text('移动端助手')
+      Text('连接桌面端后，在手机上继续处理会话和项目')
         .fontSize(16)
         .fontColor(Theme.TextSecondary)
+        .textAlign(TextAlign.Center)
+        .width('82%')
+
+      Row({ space: 8 }) {
+        this.LoginMetric('局域网', '低延迟', Theme.AccentGreen)
+        this.LoginMetric('公网', '远程访问', Theme.AccentBlue)
+      }
+      .width('85%')
     }
-    .margin({ bottom: 40 })
+    .width('100%')
+  }
+
+  @Builder
+  LoginMetric(label: string, value: string, color: ResourceColor) {
+    Column({ space: 3 }) {
+      Text(label)
+        .fontSize(11)
+        .fontColor(Theme.TextTertiary)
+
+      Text(value)
+        .fontSize(Theme.FontTiny)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(color)
+    }
+    .layoutWeight(1)
+    .height(46)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor('rgba(255, 255, 255, 0.045)')
+    .borderRadius(10)
+  }
+
+  @Builder
+  AccessModeSelector() {
+    Row({ space: 10 }) {
+      this.AccessModeCard('lan', '局域网直连', '手机和电脑在同一个 Wi-Fi 下', $r('sys.symbol.wifi'), Theme.AccentGreen)
+      this.AccessModeCard('remote', '公网访问', '外出时使用隧道或中继地址', $r('sys.symbol.cloud'), Theme.AccentBlue)
+    }
+    .width('85%')
+    .alignSelf(ItemAlign.Center)
+  }
+
+  @Builder
+  AccessModeCard(mode: AccessMode, title: string, desc: string, icon: Resource, color: ResourceColor) {
+    Column({ space: 8 }) {
+      Row() {
+        SymbolGlyph(icon)
+          .fontSize(22)
+          .fontColor([this.accessMode === mode ? color : Theme.TextSecondary])
+
+        Blank()
+
+        Row()
+          .width(8)
+          .height(8)
+          .borderRadius(4)
+          .backgroundColor(this.accessMode === mode ? color : Theme.TextTertiary)
+      }
+      .width('100%')
+
+      Text(title)
+        .fontSize(Theme.FontCaption)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(Theme.TextPrimary)
+        .width('100%')
+
+      Text(desc)
+        .fontSize(11)
+        .fontColor(Theme.TextTertiary)
+        .lineHeight(16)
+        .width('100%')
+        .maxLines(2)
+    }
+    .layoutWeight(1)
+    .height(116)
+    .padding(Theme.SpacingMD)
+    .backgroundColor(this.accessMode === mode ? 'rgba(255, 255, 255, 0.075)' : 'rgba(255, 255, 255, 0.045)')
+    .border({
+      width: 0.8,
+      color: this.accessMode === mode ? color : 'rgba(255, 255, 255, 0.08)'
+    })
+    .borderRadius(Theme.RadiusLarge)
+    .onClick(() => {
+      this.accessMode = mode
+      this.mode = mode === 'lan' ? 'manual' : 'pairing'
+    })
   }
 
   @Builder
   ModeSwitch() {
     Row() {
-      Button('配对码连接')
+      Button('配对连接')
         .fontSize(14)
         .fontWeight(FontWeight.Medium)
         .layoutWeight(1)
@@ -106,7 +192,7 @@ export struct LoginPage {
           this.mode = 'pairing'
         })
 
-      Button('手动输入')
+      Button('地址连接')
         .fontSize(14)
         .fontWeight(FontWeight.Medium)
         .layoutWeight(1)
@@ -125,20 +211,19 @@ export struct LoginPage {
     .border({ width: 0.5, color: Theme.GlassBorder })
     .shadow({ radius: Theme.LiquidGlassShadowRadius, color: Theme.LiquidGlassShadowColor, offsetX: 0, offsetY: 4 })
     .padding(4)
-    .margin({ bottom: 24 })
   }
 
   @Builder
   PairingInput() {
     Column({ space: 16 }) {
       Column({ space: 8 }) {
-        Text('配对码')
+        Text(this.accessMode === 'remote' ? '公网连接串' : '配对连接串')
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(Theme.TextPrimary)
           .width('85%')
 
-        TextInput({ placeholder: '粘贴连接串或 IP:端口:配对码' })
+        TextInput({ placeholder: this.accessMode === 'remote' ? 'https://example.com::ABC123' : '192.168.1.100:3456:ABC123' })
           .width('85%')
           .height(48)
           .backgroundColor(Theme.GlassBackground)
@@ -151,7 +236,7 @@ export struct LoginPage {
           })
       }
 
-      Text('支持局域网或公网隧道连接，在桌面端获取配对码')
+      Text(this.accessMode === 'remote' ? '适合外出访问桌面端，粘贴公网隧道连接串即可' : '适合家里或办公室同网段访问，延迟更低')
         .fontSize(12)
         .fontColor(Theme.TextSecondary)
         .textAlign(TextAlign.Center)
@@ -185,14 +270,14 @@ export struct LoginPage {
   ManualInput() {
     Column({ space: 16 }) {
       Column({ space: 8 }) {
-        Text('服务器地址')
+        Text(this.accessMode === 'remote' ? '公网地址' : '桌面端地址')
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(Theme.TextPrimary)
           .width('85%')
 
         Row({ space: 8 }) {
-          TextInput({ placeholder: 'http://192.168.1.100:3456', text: this.serverUrl })
+          TextInput({ placeholder: this.accessMode === 'remote' ? 'https://your-tunnel.example.com' : 'http://192.168.1.100:3456', text: this.serverUrl })
             .layoutWeight(1)
             .height(48)
             .backgroundColor(Theme.GlassBackground)
@@ -237,7 +322,7 @@ export struct LoginPage {
         .width('85%')
       }
 
-      Text('请输入桌面端服务地址（确保手机和电脑在同一网络）')
+      Text(this.accessMode === 'remote' ? '请输入公网隧道或云中继地址' : '请输入桌面端局域网地址，或使用扫码填入')
         .fontSize(12)
         .fontColor(Theme.TextSecondary)
         .textAlign(TextAlign.Center)
@@ -270,15 +355,14 @@ export struct LoginPage {
   @Builder
   Instructions() {
     Column({ space: 16 }) {
-      Text('使用步骤')
+      Text('连接建议')
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
         .fontColor(Theme.TextPrimary)
 
-      this.InstructionStep(1, '在电脑上启动 Claude Code 桌面应用')
-      this.InstructionStep(2, '设置 → IM 接入 → 生成配对码')
-      this.InstructionStep(3, '局域网：输入 IP:端口:配对码')
-      this.InstructionStep(4, '公网：粘贴完整连接串')
+      this.InstructionStep(1, '桌面端保持运行，手机才能远程调用能力')
+      this.InstructionStep(2, '同一 Wi-Fi 下优先使用局域网直连')
+      this.InstructionStep(3, '外出时使用公网隧道或云中继地址')
     }
     .width('85%')
     .padding(20)
