@@ -20,6 +20,9 @@ const DOMAIN = 0x0000
 
 export default class EntryAbility extends UIAbility {
   private isBackgroundTaskRunning: boolean = false
+  private foregroundLockTimer: number = -1
+  private foregroundReconnectTimer: number = -1
+  private foregroundRefreshTimer: number = -1
 
   async onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): Promise<void> {
     try {
@@ -64,8 +67,24 @@ export default class EntryAbility extends UIAbility {
 
   onDestroy(): void {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy')
+    this.clearForegroundTimers()
     // 断开所有 WebSocket 连接
     wsService.disconnectAll()
+  }
+
+  private clearForegroundTimers(): void {
+    if (this.foregroundLockTimer >= 0) {
+      clearTimeout(this.foregroundLockTimer)
+      this.foregroundLockTimer = -1
+    }
+    if (this.foregroundReconnectTimer >= 0) {
+      clearTimeout(this.foregroundReconnectTimer)
+      this.foregroundReconnectTimer = -1
+    }
+    if (this.foregroundRefreshTimer >= 0) {
+      clearTimeout(this.foregroundRefreshTimer)
+      this.foregroundRefreshTimer = -1
+    }
   }
 
   /**
@@ -164,77 +183,85 @@ export default class EntryAbility extends UIAbility {
   async onForeground(): Promise<void> {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground')
     appState.isInForeground = true
+    this.clearForegroundTimers()
 
-    // 已登录且开启生物识别 → 锁定应用
+    // 已登录且开启生物识别 → 锁定应用（异步执行，不阻塞 UI）
     if (authStore.isLoggedIn && authStore.biometricEnabled) {
-      authStore.lock()
+      // 使用 setTimeout 延后执行，避免阻塞 UI 渲染
+      this.foregroundLockTimer = setTimeout(() => {
+        this.foregroundLockTimer = -1
+        authStore.lock()
+      }, 100)
     }
 
-    // 取消所有通知（用户已回到应用）
-    await notificationHelper.cancelAll()
+    // 异步执行所有清理操作，不阻塞 UI
+    // 1. 取消通知
+    notificationHelper.cancelAll().catch((e: Error) => {
+      hilog.error(DOMAIN, 'testTag', 'Cancel notifications error: %{public}s', e.message)
+    })
 
-    // 请求通知授权（onForeground 时 UI 已就绪，确保权限弹窗能正常显示）
-    // 如果已授权则为空操作，不会重复弹窗
-    try {
-      await notificationHelper.requestNotificationPermission()
-    } catch (e) {
-      hilog.error(DOMAIN, 'testTag', 'Notification permission request on foreground error: %{public}s', JSON.stringify(e))
-    }
+    // 2. 请求通知权限（异步，不等待）
+    notificationHelper.requestNotificationPermission().catch((e: Error) => {
+      hilog.error(DOMAIN, 'testTag', 'Notification permission request error: %{public}s', e.message)
+    })
 
-    // 停止后台任务
-    try {
-      await backgroundTaskManager.stopBackgroundRunning(this.context)
+    // 3. 停止后台任务（异步，不等待）
+    backgroundTaskManager.stopBackgroundRunning(this.context).then(() => {
       hilog.info(DOMAIN, 'testTag', 'Background task stopped')
-    } catch (e) {
-      // 可能本来就没有在运行后台任务
-    }
+      this.isBackgroundTaskRunning = false
+    }).catch(() => {
+      // 可能本来就没有在运行后台任务，忽略错误
+      this.isBackgroundTaskRunning = false
+    })
 
-    // 停止后台任务后清除标志
-    this.isBackgroundTaskRunning = false
-
-    // 快速启动连接：立即使用已配置的 URL，后台执行完整检测
+    // 4. 连接恢复（延后执行，优先恢复 UI 响应）
     if (authStore.serverUrl) {
       // 快速设置连接，不等待网络检测
       connectionManager.quickStart()
 
-      // 重连 WebSocket
-      wsService.setServerUrl(authStore.serverUrl)
-      if (wsService.isHealthy()) {
-        hilog.info(DOMAIN, 'testTag', 'WS connections healthy, skipping reconnect')
-      } else {
-        wsService.forceReconnectAll()
-        hilog.info(DOMAIN, 'testTag', 'WebSocket reconnected on foreground')
-      }
+      // 延后 WebSocket 重连，避免阻塞 UI
+      this.foregroundReconnectTimer = setTimeout(() => {
+        this.foregroundReconnectTimer = -1
+        wsService.setServerUrl(authStore.serverUrl)
+        if (wsService.isHealthy()) {
+          hilog.info(DOMAIN, 'testTag', 'WS connections healthy, skipping reconnect')
+        } else {
+          wsService.forceReconnectAll()
+          hilog.info(DOMAIN, 'testTag', 'WebSocket reconnected on foreground')
+        }
+      }, 300)
     }
 
-    // 立即开始数据加载（与连接检查并行）
-    const dataAgeMs = Date.now() - sessionStore.lastFetchedAt
-    if (dataAgeMs < 30_000) {
-      hilog.info(DOMAIN, 'testTag', 'Data fetched %{public}dms ago, skipping refresh', dataAgeMs)
-    } else {
-      sessionStore.fetchSessions().then(() => {
-        hilog.info(DOMAIN, 'testTag', 'Sessions loaded')
-        if (sessionStore.currentSessionId) {
-          sessionStore.loadMessages(sessionStore.currentSessionId)
-        }
-      }).catch((e: Error) => {
-        hilog.error(DOMAIN, 'testTag', 'Data refresh error: %{public}s', e.message)
-      })
-    }
+    // 5. 数据加载（延后执行，不阻塞 UI）
+    this.foregroundRefreshTimer = setTimeout(() => {
+      this.foregroundRefreshTimer = -1
+      const dataAgeMs = Date.now() - sessionStore.lastFetchedAt
+      if (dataAgeMs < 30_000) {
+        hilog.info(DOMAIN, 'testTag', 'Data fetched %{public}dms ago, skipping refresh', dataAgeMs)
+      } else {
+        sessionStore.fetchSessions().then(() => {
+          hilog.info(DOMAIN, 'testTag', 'Sessions loaded')
+          if (sessionStore.currentSessionId) {
+            sessionStore.loadMessages(sessionStore.currentSessionId)
+          }
+        }).catch((e: Error) => {
+          hilog.error(DOMAIN, 'testTag', 'Data refresh error: %{public}s', e.message)
+        })
+      }
+    }, 500)
   }
 
   async onBackground(): Promise<void> {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground')
     appState.isInForeground = false
-
-    // 进入后台前刷新 WebSocket 连接，确保以最新状态进入后台
-    if (authStore.serverUrl) {
-      wsService.forceReconnectAll()
-      hilog.info(DOMAIN, 'testTag', 'WebSocket reconnected before background')
-    }
+    this.clearForegroundTimers()
 
     // 记录进入后台的时间戳，前台回来时检测后台期间的新消息
     appState.lastBackgroundTimestamp = Date.now()
+
+    // 注意：不再在进入后台时刷新 WebSocket 连接
+    // 原因：forceReconnectAll 会阻塞应用切换到后台，导致卡顿
+    // WebSocket 连接在后台期间通过后台任务保持，断开后会在 onForeground 时重连
 
     // 申请后台长时任务，保持 WebSocket 连接
     if (this.isBackgroundTaskRunning) {

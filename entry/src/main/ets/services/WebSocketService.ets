@@ -96,8 +96,12 @@ export class WebSocketService {
   private globalConn: WSSessionConnection | null = null
   private globalMsgHandler: ((msg: WSMessage) => void) | null = null
   private globalReconnectTimer: number = -1
+  private reconnectAllTimers: number[] = []
   // 连接状态变化回调（供 SessionStore/UI 层监听）
   private connectionStateListeners: Map<string, Array<(state: ConnectionState) => void>> = new Map()
+  // 防抖：记录上次 forceReconnectAll 时间，避免短时间内多次重连
+  private lastReconnectAllTime: number = 0
+  private static readonly RECONNECT_ALL_DEBOUNCE_MS = 2000  // 2秒内不重复重连
 
   static getInstance(): WebSocketService {
     if (!WebSocketService.instance) {
@@ -225,8 +229,8 @@ export class WebSocketService {
 
     // 检查是否已连接
     const existing = this.connections.get(sessionId)
-    if (existing && existing.status === 'connected' && existing.ws) {
-      console.info(`[WS] Already connected to ${sessionId}`)
+    if (existing && existing.ws && (existing.status === 'connected' || existing.status === 'connecting')) {
+      console.info(`[WS] Already ${existing.status} to ${sessionId}`)
       return
     }
 
@@ -256,6 +260,16 @@ export class WebSocketService {
     this.notifyConnectionState(sessionId, ConnectionState.CONNECTING)
 
     ws.connect(wsUrl, (err, value) => {
+      const currentConn = this.connections.get(sessionId)
+      if (!currentConn || currentConn.ws !== ws) {
+        try {
+          ws.close()
+        } catch (e) {
+          // ignore stale connection close errors
+        }
+        return
+      }
+
       if (err) {
         console.error(`[WS] Connect failed: ${err.message}`)
         this.notifyConnectionState(sessionId, ConnectionState.ERROR)
@@ -269,7 +283,6 @@ export class WebSocketService {
       this.notifyConnectionState(sessionId, ConnectionState.CONNECTED)
 
       // 连接成功后重置重试计数
-      const currentConn = this.connections.get(sessionId)
       if (currentConn) {
         currentConn.reconnectAttempts = 0
       }
@@ -400,6 +413,15 @@ export class WebSocketService {
 
     ws.connect(wsUrl, (err, value) => {
       this.globalConnecting = false
+      if (!this.globalConn || this.globalConn.ws !== ws) {
+        try {
+          ws.close()
+        } catch (e) {
+          // ignore stale connection close errors
+        }
+        return
+      }
+
       if (err) {
         console.error(`[WS-Global] Connect failed: ${err.message}`)
         this.handleGlobalDisconnect()
@@ -470,6 +492,10 @@ export class WebSocketService {
 
   private startGlobalReceiving(ws: webSocket.WebSocket): void {
     ws.on('message', (err, value) => {
+      if (!this.globalConn || this.globalConn.ws !== ws) {
+        return
+      }
+
       if (err) {
         console.error(`[WS-Global] Receive error: ${err.message}`)
         return
@@ -565,6 +591,7 @@ export class WebSocketService {
   }
 
   disconnectAll(): void {
+    this.clearReconnectAllTimers()
     this.connections.forEach((_, sessionId) => {
       this.disconnectSession(sessionId)
     })
@@ -703,6 +730,11 @@ export class WebSocketService {
 
   private startReceiving(sessionId: string, ws: webSocket.WebSocket): void {
     ws.on('message', (err, value) => {
+      const currentConn = this.connections.get(sessionId)
+      if (!currentConn || currentConn.ws !== ws) {
+        return
+      }
+
       if (err) {
         console.error(`[WS] Receive error: ${err.message}`)
         return
@@ -1075,6 +1107,7 @@ export class WebSocketService {
 
   /**
    * 强制重连所有已订阅的会话（用于 onForeground 恢复连接）
+   * 添加防抖机制，避免短时间内多次重连导致卡顿
    */
   forceReconnectAll(): void {
     if (!this.serverUrl) {
@@ -1082,19 +1115,61 @@ export class WebSocketService {
       return
     }
 
+    // 防抖：2秒内不重复重连
+    const now = Date.now()
+    if (now - this.lastReconnectAllTime < WebSocketService.RECONNECT_ALL_DEBOUNCE_MS) {
+      console.info(`[WS] forceReconnectAll: debounced (last was ${now - this.lastReconnectAllTime}ms ago)`)
+      return
+    }
+    this.lastReconnectAllTime = now
+
     console.info(`[WS] forceReconnectAll: ${this.subscribedSessions.size} sessions`)
+    this.clearReconnectAllTimers()
 
-    this.subscribedSessions.forEach((sessionId) => {
-      this.forceReconnectSession(sessionId)
-    })
+    // 分批重连，避免同时创建大量连接导致卡顿
+    const sessionIds: string[] = []
+    this.subscribedSessions.forEach((id) => sessionIds.push(id))
 
-    // 重连全局 WS - 使用原子方法避免竞态
-    this.reconnectGlobal()
+    // 每批最多 3 个会话，间隔 100ms
+    const BATCH_SIZE = 3
+    const BATCH_DELAY = 100
+
+    for (let i = 0; i < sessionIds.length; i += BATCH_SIZE) {
+      const batch = sessionIds.slice(i, i + BATCH_SIZE)
+      const timer = setTimeout(() => {
+        this.removeReconnectAllTimer(timer)
+        batch.forEach((sessionId) => {
+          this.forceReconnectSession(sessionId)
+        })
+      }, (i / BATCH_SIZE) * BATCH_DELAY)
+      this.reconnectAllTimers.push(timer)
+    }
+
+    // 延后重连全局 WS
+    const globalTimer = setTimeout(() => {
+      this.removeReconnectAllTimer(globalTimer)
+      this.reconnectGlobal()
+    }, sessionIds.length > BATCH_SIZE ? BATCH_DELAY * 2 : 50)
+    this.reconnectAllTimers.push(globalTimer)
 
     // 重启 ping/pong
     this.startPingLoop()
     this.startPongCheck()
     this.startCleanup()
+  }
+
+  private clearReconnectAllTimers(): void {
+    for (let i = 0; i < this.reconnectAllTimers.length; i++) {
+      clearTimeout(this.reconnectAllTimers[i])
+    }
+    this.reconnectAllTimers = []
+  }
+
+  private removeReconnectAllTimer(timer: number): void {
+    const index = this.reconnectAllTimers.indexOf(timer)
+    if (index >= 0) {
+      this.reconnectAllTimers.splice(index, 1)
+    }
   }
 
   /**

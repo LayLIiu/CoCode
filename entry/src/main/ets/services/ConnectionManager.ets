@@ -38,6 +38,8 @@ export class ConnectionManager {
   private listeners: ConnectionChangeListener[] = []
   private lastNetworkInfo: NetworkInfo | null = null
   private isInitialized: boolean = false  // 是否已完成首次连接
+  private smartConnectPromise: Promise<ConnectionStatus> | null = null
+  private lastSmartConnectStartedAt: number = 0
 
   // 配置参数
   private readonly CHECK_INTERVAL = 60000  // 60秒检查一次
@@ -46,6 +48,7 @@ export class ConnectionManager {
   private readonly CLOUD_RELAY_TIMEOUT = 15000  // 云中继专用超时 15秒
   private readonly GOOD_LATENCY_THRESHOLD = 100  // 100ms 以下为良好
   private readonly POOR_LATENCY_THRESHOLD = 500  // 500ms 以上为差
+  private readonly QUICK_START_CHECK_DEBOUNCE = 30000  // 前台恢复 30 秒内不重复探测
 
   static getInstance(): ConnectionManager {
     if (!ConnectionManager.instance) {
@@ -111,7 +114,13 @@ export class ConnectionManager {
 
     console.info(`[ConnectionManager] Quick start: using ${connType} ${serverUrl}`)
 
-    // 后台执行完整连接检查（不阻塞启动）
+    // 后台执行完整连接检查（不阻塞启动），避免前后台切换时堆积探测请求
+    const now = Date.now()
+    if (this.smartConnectPromise || now - this.lastSmartConnectStartedAt < this.QUICK_START_CHECK_DEBOUNCE) {
+      console.info('[ConnectionManager] Smart connect already running or recently checked, skipping quickStart check')
+      return
+    }
+
     setTimeout(() => {
       this.smartConnect().catch((e: Error) => {
         console.error(`[ConnectionManager] Background smart connect error: ${e.message}`)
@@ -301,6 +310,23 @@ export class ConnectionManager {
    * LAN 优先，Tunnel 回退
    */
   async smartConnect(): Promise<ConnectionStatus> {
+    if (this.smartConnectPromise) {
+      console.info('[ConnectionManager] Smart connect already running, reusing current task')
+      return this.smartConnectPromise
+    }
+
+    this.lastSmartConnectStartedAt = Date.now()
+    this.smartConnectPromise = this.smartConnectInternal().then((status: ConnectionStatus) => {
+      this.smartConnectPromise = null
+      return status
+    }).catch((err: Error) => {
+      this.smartConnectPromise = null
+      throw err
+    })
+    return this.smartConnectPromise
+  }
+
+  private async smartConnectInternal(): Promise<ConnectionStatus> {
     console.info('[ConnectionManager] Starting smart connect...')
 
     // 2. 收集可用的 URL 列表

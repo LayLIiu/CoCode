@@ -43,7 +43,10 @@ struct SessionItemView {
     if (this.currentStatus !== 'idle' && this.currentStatus !== 'completed') {
       return this.getStatusText(this.currentStatus)
     }
-    return ''
+    if (this.currentStatus === 'completed') {
+      return '已完成'
+    }
+    return '空闲'
   }
 
   private getStatusText(status: SessionStatus): string {
@@ -55,6 +58,66 @@ struct SessionItemView {
       case 'question_pending': return '等待回答'
       default: return ''
     }
+  }
+
+  private getStatusColor(): string {
+    switch (this.currentStatus) {
+      case 'thinking':
+      case 'streaming':
+      case 'tool_executing':
+        return Theme.AccentBlue
+      case 'permission_pending':
+      case 'question_pending':
+        return Theme.AccentOrange
+      case 'completed':
+        return Theme.AccentGreen
+      default:
+        return Theme.TextTertiary
+    }
+  }
+
+  private getStatusBackground(): string {
+    switch (this.currentStatus) {
+      case 'thinking':
+      case 'streaming':
+      case 'tool_executing':
+        return 'rgba(10, 132, 255, 0.14)'
+      case 'permission_pending':
+      case 'question_pending':
+        return 'rgba(255, 159, 10, 0.16)'
+      case 'completed':
+        return 'rgba(48, 209, 88, 0.13)'
+      default:
+        return 'rgba(255, 255, 255, 0.06)'
+    }
+  }
+
+  private getStatusBorderColor(): string {
+    switch (this.currentStatus) {
+      case 'thinking':
+      case 'streaming':
+      case 'tool_executing':
+        return 'rgba(10, 132, 255, 0.32)'
+      case 'permission_pending':
+      case 'question_pending':
+        return 'rgba(255, 159, 10, 0.34)'
+      case 'completed':
+        return 'rgba(48, 209, 88, 0.30)'
+      default:
+        return 'rgba(255, 255, 255, 0.07)'
+    }
+  }
+
+  private getRelativeTime(): string {
+    const modified = new Date(this.session.modifiedAt)
+    const modifiedTime = modified.getTime()
+    if (modifiedTime !== modifiedTime) return ''
+    const diff = Date.now() - modifiedTime
+    if (diff < 60 * 1000) return '刚刚'
+    if (diff < 60 * 60 * 1000) return `${Math.floor(diff / 60000)}分钟前`
+    if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / 3600000)}小时前`
+    if (diff < 7 * 24 * 60 * 60 * 1000) return `${Math.floor(diff / 86400000)}天前`
+    return `${modified.getMonth() + 1}/${modified.getDate()}`
   }
 
   private getMascotStatus(): MascotStatus {
@@ -84,48 +147,73 @@ struct SessionItemView {
   build() {
     Column() {
       Row() {
+        Row()
+          .width(3)
+          .height(46)
+          .borderRadius(2)
+          .backgroundColor(this.getStatusColor())
+          .opacity(this.currentStatus === 'idle' ? 0.28 : 1)
+          .margin({ right: Theme.SpacingMD })
+
         PixelMascot({
-          mascotSize: 40,
+          mascotSize: 38,
           status: this.getMascotStatus(),
           bodyColor: getMascotColorForSession(this.session.id),
           mascotType: getMascotTypeForProvider(this.session.aiTool || '')
         })
 
-        Column({ space: 4 }) {
+        Column({ space: 6 }) {
           Text(this.session.title)
             .fontSize(Theme.FontBody)
             .fontColor(Theme.TextPrimary)
+            .fontWeight(FontWeight.Medium)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-          Text(this.session.projectPath)
-            .fontSize(Theme.FontTiny)
-            .fontColor(Theme.TextSecondary)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          Row({ space: 6 }) {
+            SymbolGlyph($r('sys.symbol.folder'))
+              .fontSize(12)
+              .fontColor([this.session.workDirExists ? Theme.TextTertiary : Theme.AccentOrange])
+
+            Text(this.session.projectPath || this.session.workDir || '未设置工作目录')
+              .fontSize(Theme.FontTiny)
+              .fontColor(this.session.workDirExists ? Theme.TextSecondary : Theme.AccentOrange)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .layoutWeight(1)
+          }
+          .width('100%')
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
         .margin({ left: Theme.SpacingMD })
 
-        Column({ space: 4 }) {
-          if (this.getSessionStatusText() !== '') {
-            Text(this.getSessionStatusText())
-              .fontSize(Theme.FontTiny)
-              .fontColor(Theme.AccentGreen)
-          }
+        Column({ space: 8 }) {
+          Text(this.getSessionStatusText())
+            .fontSize(11)
+            .fontColor(this.getStatusColor())
+            .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+            .backgroundColor(this.getStatusBackground())
+            .borderRadius(8)
 
-          Text(`${this.session.messageCount}`)
-            .fontSize(Theme.FontTiny)
-            .fontColor(Theme.TextTertiary)
+          Row({ space: 6 }) {
+            Text(`${this.session.messageCount}`)
+              .fontSize(Theme.FontTiny)
+              .fontColor(Theme.TextTertiary)
+
+            Text(this.getRelativeTime())
+              .fontSize(Theme.FontTiny)
+              .fontColor(Theme.TextTertiary)
+          }
         }
         .alignItems(HorizontalAlign.End)
       }
       .width('100%')
-      .padding(Theme.SpacingMD)
+      .padding({ left: Theme.SpacingMD, right: Theme.SpacingMD, top: 14, bottom: 14 })
     }
     .width('100%')
-    .backgroundColor('#1C1C1E')
+    .backgroundColor('rgba(28, 28, 30, 0.82)')
+    .border({ width: 0.5, color: this.getStatusBorderColor() })
     .borderRadius(Theme.RadiusMedium)
     .margin({ bottom: Theme.SpacingSM })
     .onClick(() => {
@@ -408,6 +496,51 @@ export struct ConversationListPage {
     return result
   }
 
+  private isBusyStatus(status: SessionStatus): boolean {
+    return status === 'thinking' || status === 'streaming' || status === 'tool_executing'
+  }
+
+  private isWaitingStatus(status: SessionStatus): boolean {
+    return status === 'permission_pending' || status === 'question_pending'
+  }
+
+  private getVisibleSessionCount(): number {
+    return this.getFilteredSessions().length
+  }
+
+  private getBusySessionCount(): number {
+    const sessions = this.getFilteredSessions()
+    let count = 0
+    for (let i = 0; i < sessions.length; i++) {
+      if (this.isBusyStatus(sessionStore.getSessionStatus(sessions[i].id))) {
+        count++
+      }
+    }
+    return count
+  }
+
+  private getWaitingSessionCount(): number {
+    const sessions = this.getFilteredSessions()
+    let count = 0
+    for (let i = 0; i < sessions.length; i++) {
+      if (this.isWaitingStatus(sessionStore.getSessionStatus(sessions[i].id))) {
+        count++
+      }
+    }
+    return count
+  }
+
+  private getCompletedSessionCount(): number {
+    const sessions = this.getFilteredSessions()
+    let count = 0
+    for (let i = 0; i < sessions.length; i++) {
+      if (sessionStore.getSessionStatus(sessions[i].id) === 'completed') {
+        count++
+      }
+    }
+    return count
+  }
+
   // 侧滑删除按钮
   @Builder
   SwipeDeleteButton(sessionId: string) {
@@ -434,7 +567,13 @@ export struct ConversationListPage {
         List({ space: 0, scroller: this.scroller }) {
           // 顶部占位：让列表内容默认从搜索框下方开始
           ListItem() {
-            Column().width('100%').height(135)
+            Column().width('100%').height(146)
+          }
+
+          if (this.sessions && this.sessions.length > 0) {
+            ListItem() {
+              this.StatusOverview()
+            }
           }
 
           if (this.isLoading && (!this.sessions || this.sessions.length === 0)) {
@@ -520,11 +659,95 @@ export struct ConversationListPage {
 
   @Builder
   GroupHeader(groupName: DateGroup) {
-    Text(groupName)
-      .fontSize(Theme.FontCaption)
-      .fontColor(Theme.TextSecondary)
+    Row() {
+      Text(groupName)
+        .fontSize(Theme.FontCaption)
+        .fontColor(Theme.TextSecondary)
+        .fontWeight(FontWeight.Medium)
+
+      Row()
+        .height(1)
+        .layoutWeight(1)
+        .backgroundColor('rgba(255, 255, 255, 0.06)')
+        .margin({ left: Theme.SpacingMD })
+    }
+    .width('100%')
+    .padding({ top: Theme.SpacingLG, bottom: Theme.SpacingSM })
+  }
+
+  @Builder
+  StatusOverview() {
+    Column({ space: 12 }) {
+      Row() {
+        Column({ space: 4 }) {
+          Text('当前工作台')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+
+          Text(`${this.getVisibleSessionCount()} 个会话`)
+            .fontSize(22)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextPrimary)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        if (this.getWaitingSessionCount() > 0) {
+          Row({ space: 6 }) {
+            SymbolGlyph($r('sys.symbol.exclamationmark_triangle_fill'))
+              .fontSize(15)
+              .fontColor([Theme.AccentOrange])
+
+            Text(`${this.getWaitingSessionCount()} 个待处理`)
+              .fontSize(Theme.FontTiny)
+              .fontColor(Theme.AccentOrange)
+          }
+          .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+          .backgroundColor('rgba(255, 159, 10, 0.14)')
+          .borderRadius(10)
+        }
+      }
       .width('100%')
-      .padding({ top: Theme.SpacingLG, bottom: Theme.SpacingSM })
+
+      Row({ space: 8 }) {
+        this.OverviewChip('运行中', this.getBusySessionCount(), Theme.AccentBlue, 'rgba(10, 132, 255, 0.12)')
+        this.OverviewChip('等待', this.getWaitingSessionCount(), Theme.AccentOrange, 'rgba(255, 159, 10, 0.13)')
+        this.OverviewChip('完成', this.getCompletedSessionCount(), Theme.AccentGreen, 'rgba(48, 209, 88, 0.11)')
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(Theme.SpacingLG)
+    .margin({ bottom: Theme.SpacingSM })
+    .backgroundColor('rgba(255, 255, 255, 0.045)')
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.08)' })
+    .borderRadius(Theme.RadiusLarge)
+  }
+
+  @Builder
+  OverviewChip(label: string, count: number, color: string, bgColor: string) {
+    Row({ space: 6 }) {
+      Row()
+        .width(7)
+        .height(7)
+        .borderRadius(4)
+        .backgroundColor(color)
+        .opacity(count > 0 ? 1 : 0.35)
+
+      Text(label)
+        .fontSize(Theme.FontTiny)
+        .fontColor(Theme.TextSecondary)
+
+      Text(`${count}`)
+        .fontSize(Theme.FontTiny)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(color)
+    }
+    .layoutWeight(1)
+    .height(34)
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor(bgColor)
+    .borderRadius(10)
   }
 
   @Builder
