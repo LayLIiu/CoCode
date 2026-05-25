@@ -2,7 +2,6 @@ import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.Ab
 import { hilog } from '@kit.PerformanceAnalysisKit'
 import { window, router } from '@kit.ArkUI'
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit'
-import { wantAgent } from '@kit.AbilityKit'
 import { pushService } from '@kit.PushKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { authStore } from '../stores/AuthStore'
@@ -214,25 +213,18 @@ export default class EntryAbility extends UIAbility {
       this.isBackgroundTaskRunning = false
     })
 
-    // 4. 连接恢复（延后执行，优先恢复 UI 响应）
+    // 4. 连接恢复（延后执行，避开窗口恢复和后台任务停止的高峰）
     if (authStore.serverUrl) {
-      // 快速设置连接，不等待网络检测
-      connectionManager.quickStart()
-
-      // 延后 WebSocket 重连，避免阻塞 UI
+      // 回前台后先让首帧稳定，再恢复网络探测和 WebSocket。
       this.foregroundReconnectTimer = setTimeout(() => {
         this.foregroundReconnectTimer = -1
-        wsService.setServerUrl(authStore.serverUrl)
-        if (wsService.isHealthy()) {
-          hilog.info(DOMAIN, 'testTag', 'WS connections healthy, skipping reconnect')
-        } else {
-          wsService.forceReconnectAll()
-          hilog.info(DOMAIN, 'testTag', 'WebSocket reconnected on foreground')
-        }
-      }, 300)
+        connectionManager.quickStart()
+        wsService.resumeFromForeground(authStore.serverUrl)
+        hilog.info(DOMAIN, 'testTag', 'WebSocket resumed on foreground')
+      }, 1200)
     }
 
-    // 5. 数据加载（延后执行，不阻塞 UI）
+    // 5. 数据加载（放在连接恢复之后，避免回前台瞬间同时触发大量任务）
     this.foregroundRefreshTimer = setTimeout(() => {
       this.foregroundRefreshTimer = -1
       const dataAgeMs = Date.now() - sessionStore.lastFetchedAt
@@ -248,7 +240,7 @@ export default class EntryAbility extends UIAbility {
           hilog.error(DOMAIN, 'testTag', 'Data refresh error: %{public}s', e.message)
         })
       }
-    }, 500)
+    }, 2500)
   }
 
   async onBackground(): Promise<void> {
@@ -259,33 +251,10 @@ export default class EntryAbility extends UIAbility {
     // 记录进入后台的时间戳，前台回来时检测后台期间的新消息
     appState.lastBackgroundTimestamp = Date.now()
 
-    // 注意：不再在进入后台时刷新 WebSocket 连接
-    // 原因：forceReconnectAll 会阻塞应用切换到后台，导致卡顿
-    // WebSocket 连接在后台期间通过后台任务保持，断开后会在 onForeground 时重连
-
-    // 申请后台长时任务，保持 WebSocket 连接
-    if (this.isBackgroundTaskRunning) {
-      return  // 已有后台任务在运行，不重复申请
-    }
-
-    try {
-      const wantAgentInfo: wantAgent.WantAgentInfo = {
-        wants: [{
-          bundleName: this.context.applicationInfo.name,
-          abilityName: 'EntryAbility'
-        }],
-        operationType: wantAgent.OperationType.START_ABILITY,
-        requestCode: 0,
-        wantAgentFlags: [wantAgent.WantAgentFlags.CONSTANT_FLAG]
-      }
-
-      const agent = await wantAgent.getWantAgent(wantAgentInfo)
-      await backgroundTaskManager.startBackgroundRunning(this.context,
-        backgroundTaskManager.BackgroundMode.DATA_TRANSFER, agent)
-      hilog.info(DOMAIN, 'testTag', 'Background task started for WebSocket keepalive')
-      this.isBackgroundTaskRunning = true
-    } catch (e) {
-      hilog.error(DOMAIN, 'testTag', 'Background task start error: %{public}s', JSON.stringify(e))
-    }
+    // 后台期间不再保持 WebSocket 心跳/重连/连接探测。
+    // HarmonyOS 长时间冻结后，这些定时器会在回前台集中补跑，容易造成卡死和崩溃。
+    wsService.pauseForBackground()
+    connectionManager.stopPeriodicCheck()
+    this.isBackgroundTaskRunning = false
   }
 }

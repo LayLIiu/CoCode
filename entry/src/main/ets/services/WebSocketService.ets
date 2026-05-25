@@ -97,11 +97,13 @@ export class WebSocketService {
   private globalMsgHandler: ((msg: WSMessage) => void) | null = null
   private globalReconnectTimer: number = -1
   private reconnectAllTimers: number[] = []
+  private pausedForBackground: boolean = false
   // 连接状态变化回调（供 SessionStore/UI 层监听）
   private connectionStateListeners: Map<string, Array<(state: ConnectionState) => void>> = new Map()
   // 防抖：记录上次 forceReconnectAll 时间，避免短时间内多次重连
   private lastReconnectAllTime: number = 0
   private static readonly RECONNECT_ALL_DEBOUNCE_MS = 2000  // 2秒内不重复重连
+  private static readonly HEALTHY_IDLE_LIMIT_MS = 60000
 
   static getInstance(): WebSocketService {
     if (!WebSocketService.instance) {
@@ -129,16 +131,21 @@ export class WebSocketService {
 
   /** 检查连接是否健康（至少有一个会话 WS 在连接中，用于 onForeground 避免全量重连） */
   isHealthy(): boolean {
+    if (this.pausedForBackground) return false
+
+    const now = Date.now()
     // 检查会话级连接
     let anyConnected = false
     this.connections.forEach((conn) => {
-      if (conn.status === 'connected') {
+      if (conn.status === 'connected' && now - conn.lastPongTime < WebSocketService.HEALTHY_IDLE_LIMIT_MS) {
         anyConnected = true
       }
     })
     if (anyConnected) return true
     // 检查全局连接
-    return this.globalConn !== null && this.globalConn.status === 'connected'
+    return this.globalConn !== null &&
+      this.globalConn.status === 'connected' &&
+      now - this.globalConn.lastPongTime < WebSocketService.HEALTHY_IDLE_LIMIT_MS
   }
 
   // MARK: - 连接状态监听
@@ -222,6 +229,11 @@ export class WebSocketService {
   }
 
   connectSession(sessionId: string): void {
+    if (this.pausedForBackground) {
+      console.info(`[WS] App is background paused, skip connectSession: ${sessionId}`)
+      return
+    }
+
     if (!this.serverUrl) {
       console.error('[WS] serverUrl is empty')
       return
@@ -378,6 +390,11 @@ export class WebSocketService {
   private globalConnecting: boolean = false
 
   connectGlobal(): void {
+    if (this.pausedForBackground) {
+      console.info('[WS-Global] App is background paused, skip connectGlobal')
+      return
+    }
+
     if (!this.serverUrl) {
       console.error('[WS-Global] serverUrl is empty')
       return
@@ -471,6 +488,10 @@ export class WebSocketService {
   }
 
   private reconnectGlobal(): void {
+    if (this.pausedForBackground) {
+      return
+    }
+
     // 先清理旧连接状态（同步）
     if (this.globalConn && this.globalConn.ws) {
       try {
@@ -486,6 +507,9 @@ export class WebSocketService {
     }
     // 延迟建立新连接，确保旧连接完全释放
     setTimeout(() => {
+      if (this.pausedForBackground) {
+        return
+      }
       this.connectGlobal()
     }, 150)
   }
@@ -551,6 +575,10 @@ export class WebSocketService {
   }
 
   private scheduleGlobalReconnect(): void {
+    if (this.pausedForBackground) {
+      return
+    }
+
     if (!this.globalConn) {
       return
     }
@@ -566,6 +594,9 @@ export class WebSocketService {
     }
 
     this.globalReconnectTimer = setTimeout(() => {
+      if (this.pausedForBackground) {
+        return
+      }
       this.connectGlobal()
     }, delay)
   }
@@ -841,6 +872,10 @@ export class WebSocketService {
   }
 
   private scheduleReconnect(sessionId: string): void {
+    if (this.pausedForBackground) {
+      return
+    }
+
     if (!this.subscribedSessions.has(sessionId)) {
       return
     }
@@ -868,6 +903,9 @@ export class WebSocketService {
 
     this.reconnectTimers.set(sessionId, setTimeout(() => {
       this.reconnectTimers.delete(sessionId)
+      if (this.pausedForBackground) {
+        return
+      }
       this.connectSession(sessionId)
     }, delay))
   }
@@ -1125,6 +1163,11 @@ export class WebSocketService {
    * 添加防抖机制，避免短时间内多次重连导致卡顿
    */
   forceReconnectAll(): void {
+    if (this.pausedForBackground) {
+      console.info('[WS] forceReconnectAll: app is background paused, skipping')
+      return
+    }
+
     if (!this.serverUrl) {
       console.info('[WS] forceReconnectAll: no serverUrl, skipping')
       return
@@ -1185,6 +1228,77 @@ export class WebSocketService {
     if (index >= 0) {
       this.reconnectAllTimers.splice(index, 1)
     }
+  }
+
+  private clearReconnectTimers(): void {
+    this.reconnectTimers.forEach((timer) => {
+      clearTimeout(timer)
+    })
+    this.reconnectTimers.clear()
+    if (this.globalReconnectTimer >= 0) {
+      clearTimeout(this.globalReconnectTimer)
+      this.globalReconnectTimer = -1
+    }
+  }
+
+  pauseForBackground(): void {
+    if (this.pausedForBackground) return
+    console.info('[WS] Pausing websocket activity for background')
+    this.pausedForBackground = true
+    this.clearReconnectAllTimers()
+    this.clearReconnectTimers()
+    this.stopPingLoop()
+    this.stopPongCheck()
+    if (this.cleanupTimer >= 0) {
+      clearInterval(this.cleanupTimer)
+      this.cleanupTimer = -1
+    }
+
+    this.connections.forEach((conn) => {
+      const ws = conn.ws
+      conn.status = 'disconnected'
+      conn.ws = null
+      conn.missedPongs = 0
+      conn.pingTimestamp = 0
+      if (ws) {
+        try {
+          ws.close()
+        } catch (e) {
+          // ignore close errors
+        }
+      }
+    })
+
+    this.globalConnecting = false
+    if (this.globalConn) {
+      const ws = this.globalConn.ws
+      this.globalConn.status = 'disconnected'
+      this.globalConn.ws = null
+      this.globalConn.missedPongs = 0
+      this.globalConn.pingTimestamp = 0
+      if (ws) {
+        try {
+          ws.close()
+        } catch (e) {
+          // ignore close errors
+        }
+      }
+    }
+  }
+
+  resumeFromForeground(serverUrl?: string): void {
+    if (serverUrl) {
+      this.setServerUrl(serverUrl)
+    }
+    if (!this.serverUrl) {
+      console.info('[WS] resumeFromForeground: no serverUrl, skipping')
+      return
+    }
+
+    console.info('[WS] Resuming websocket activity from foreground')
+    this.pausedForBackground = false
+    this.lastReconnectAllTime = 0
+    this.forceReconnectAll()
   }
 
   /**
