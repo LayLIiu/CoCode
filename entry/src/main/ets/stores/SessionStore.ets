@@ -73,6 +73,7 @@ export class SessionStore {
   // 消息去重缓存（防止全局 WS + 会话 WS 双通道重复传递）
   private recentMessageIds: Set<string> = new Set()
   private static readonly DEDUP_CACHE_TTL_MS = 30000 // 30 秒去重窗口（云中继延迟较高）
+  private static readonly LOCAL_MESSAGE_CACHE_LIMIT = 100
 
   // 定期状态同步定时器（每 15 秒检查一次过期的工作状态）
   private staleStatusTimer: number = -1
@@ -725,6 +726,14 @@ export class SessionStore {
     return next
   }
 
+  private persistMessages(sessionId: string, messages?: Message[]): Promise<void> {
+    const source = messages || this.messages.get(sessionId) || []
+    const deduped = this.deduplicateMessages(source)
+    const start = Math.max(0, deduped.length - SessionStore.LOCAL_MESSAGE_CACHE_LIMIT)
+    const cached = deduped.slice(start)
+    return this.enqueueSave(sessionId, () => storageService.saveMessages(sessionId, cached))
+  }
+
   // 保存会话到本地存储
   async saveSessionsToStorage(): Promise<void> {
     await storageService.saveSessions(this.sessions)
@@ -750,7 +759,7 @@ export class SessionStore {
           console.warn(`[SessionStore] loadMessages: cleaned ${existing.length - deduped.length} duplicates from memory for ${sessionId}`)
           this.messages.set(sessionId, deduped)
           // 立即保存去重后的消息到本地存储
-          this.enqueueSave(sessionId, () => storageService.saveMessages(sessionId, deduped))
+          this.persistMessages(sessionId, deduped)
           this.notifyMessagesChanged(sessionId)
         }
       } else {
@@ -762,7 +771,7 @@ export class SessionStore {
           if (deduped.length !== localMessages.length) {
             console.warn(`[SessionStore] loadMessages: cleaned ${localMessages.length - deduped.length} duplicates from local storage for ${sessionId}`)
             // 更新本地存储
-            this.enqueueSave(sessionId, () => storageService.saveMessages(sessionId, deduped))
+            this.persistMessages(sessionId, deduped)
           }
           this.messages.set(sessionId, deduped)
           this.notifyMessagesChanged(sessionId)
@@ -877,7 +886,7 @@ export class SessionStore {
       }
 
       // 串行化保存到本地（通过队列确保顺序）
-      this.enqueueSave(sessionId, () => storageService.saveMessages(sessionId, merged))
+      this.persistMessages(sessionId, merged)
     } catch (e) {
       console.error(`[SessionStore] Sync messages error: ${e}`)
     } finally {
@@ -892,18 +901,35 @@ export class SessionStore {
     const serverKeys: Map<string, boolean> = new Map()
     const serverIds: Set<string> = new Set()
 
+    // 先对服务器消息本身去重（防止服务器返回重复消息）
+    const dedupedServerMessages: Message[] = []
     for (let i = 0; i < serverMessages.length; i++) {
       const msg = serverMessages[i]
-      // 主键: type + toolUseId / type + id / type + content
       const primaryKey = this.messageContentKey(msg)
-      serverKeys.set(primaryKey, true)
-      if (msg.id) {
-        serverIds.add(msg.id)
+
+      // 检查是否已在去重后的列表中
+      let isDup = false
+      if (msg.id && !msg.id.startsWith('tool-')) {
+        if (serverIds.has(msg.id)) {
+          isDup = true
+        } else {
+          serverIds.add(msg.id)
+        }
+      }
+      if (!isDup && serverKeys.has(primaryKey)) {
+        isDup = true
+      }
+
+      if (!isDup) {
+        serverKeys.set(primaryKey, true)
+        dedupedServerMessages.push(msg)
+      } else {
+        console.info(`[SessionStore] mergeMessages: skip dup server msg id=${msg.id} type=${msg.type}`)
       }
     }
 
-    // 先添加服务器消息
-    const result: Message[] = [...serverMessages]
+    // 先添加去重后的服务器消息
+    const result: Message[] = [...dedupedServerMessages]
 
     // 再检查本地消息中是否有服务器没有的
     for (let i = 0; i < localMessages.length; i++) {
@@ -958,9 +984,8 @@ export class SessionStore {
               foundByContent = true
               break
             }
-            // 本地被切分的段落可能是服务端合并消息的子串（流式输出被 tool 事件打断后）
-            if (localContent.length > 0 && localContent.length < serverContent.length &&
-                serverContent.includes(localContent)) {
+            // 本地和服务端可能一个是整段、一个是拆分段（页面重进后历史同步常见）
+            if (this.isOverlappingText(localContent, serverContent)) {
               foundByContent = true
               break
             }
@@ -1012,15 +1037,26 @@ export class SessionStore {
   }
 
 
-  // 稳定化 JSON.stringify：对 key 排序，消除属性顺序不确定性
-  private stableStringify(obj: Record<string, Object> | undefined | null): string {
-    if (!obj) return ''
-    const keys = Object.keys(obj).sort()
-    const pairs: string[] = []
-    for (const key of keys) {
-      pairs.push(JSON.stringify(key) + ':' + JSON.stringify(obj[key]))
+  // 稳定化 JSON.stringify：递归对 key 排序，消除嵌套对象属性顺序不确定性
+  private stableStringify(value: Object | undefined | null): string {
+    if (value === undefined || value === null) return ''
+    if (Array.isArray(value)) {
+      const items: string[] = []
+      for (let i = 0; i < value.length; i++) {
+        items.push(this.stableStringify(value[i] as Object))
+      }
+      return '[' + items.join(',') + ']'
     }
-    return '{' + pairs.join(',') + '}'
+    if (typeof value === 'object') {
+      const obj = value as Record<string, Object>
+      const keys = Object.keys(obj).sort()
+      const pairs: string[] = []
+      for (const key of keys) {
+        pairs.push(JSON.stringify(key) + ':' + this.stableStringify(obj[key]))
+      }
+      return '{' + pairs.join(',') + '}'
+    }
+    return JSON.stringify(value)
   }
 
   // 生成消息内容去重键
@@ -1039,10 +1075,11 @@ export class SessionStore {
 
     // 2. tool_use 消息：用 toolName + 稳定化的 toolInput 作为键
     // 关键修复：tool_use 的 content 为空，不能靠内容去重
+    // 注意：截取长度必须与 messageSemanticKey 保持一致（1000字符），否则会导致去重失败
     if (msg.type === 'tool_use' && msg.toolName) {
       const inputStr = msg.toolInput ? this.stableStringify(msg.toolInput) : ''
       const parentId = msg.parentToolUseId ? ':parent:' + msg.parentToolUseId : ''
-      return msg.type + ':tool:' + msg.toolName + ':' + inputStr.substring(0, 500) + parentId
+      return msg.type + ':tool:' + msg.toolName + ':' + inputStr.substring(0, 1000) + parentId
     }
 
     // 3. tool_result 消息：关联到对应的 tool_use
@@ -1061,12 +1098,13 @@ export class SessionStore {
     }
 
     // 6. 普通消息：用规整化内容
-    const content = (msg.content || msg.toolResult || '').trim().replace(/\s+/g, ' ')
-    return msg.type + ':content:' + content.substring(0, 2000)
+    // 注意：截取长度必须与 messageSemanticKey 保持一致（4000字符），且使用相同的规整化方法
+    const content = this.normalizeMessageText(msg.content || msg.toolResult || '')
+    return msg.type + ':content:' + content.substring(0, 4000)
   }
 
   // 生成跨来源的语义去重键：忽略服务端 ID / 临时 ID / 变化的 toolUseId。
-  // 用于历史同步和页面重新进入时清理“同一内容不同 ID”的重复消息。
+  // 用于历史同步和页面重新进入时清理”同一内容不同 ID”的重复消息。
   private messageSemanticKey(msg: Message): string {
     if (msg.type === 'tool_use' && msg.toolName) {
       const inputStr = msg.toolInput ? this.stableStringify(msg.toolInput) : ''
@@ -1095,6 +1133,18 @@ export class SessionStore {
       .replace(/\r\n/g, '\n')
       .trim()
       .replace(/\s+/g, ' ')
+  }
+
+  private isOverlappingText(a: string, b: string): boolean {
+    const left = this.normalizeMessageText(a)
+    const right = this.normalizeMessageText(b)
+    if (!left || !right) return false
+    if (left === right) return true
+
+    const shorter = left.length < right.length ? left : right
+    const longer = left.length < right.length ? right : left
+    // 短文本容易误伤，例如“好的”和“好的，已完成”，只对较长内容做包含式去重
+    return shorter.length >= 80 && longer.includes(shorter)
   }
 
   addMessage(sessionId: string, message: Message): void {
@@ -1129,7 +1179,7 @@ export class SessionStore {
       this.notifyMessagesChanged(sessionId)
 
       // 串行化保存到本地（通过队列确保顺序，防止并发竞态）
-      this.enqueueSave(sessionId, () => storageService.saveMessages(sessionId, this.messages.get(sessionId) || []))
+      this.persistMessages(sessionId)
     }
   }
 
@@ -1187,7 +1237,7 @@ export class SessionStore {
       }
       this.messages.set(sessionId, tail)
       // 串行化保存到本地（通过队列确保顺序）
-      this.enqueueSave(sessionId, () => storageService.saveMessages(sessionId, tail))
+      this.persistMessages(sessionId, tail)
       this.notifyMessagesChanged(sessionId)
     }
     this.streamHeads.set(sessionId, [])
@@ -1246,6 +1296,47 @@ export class SessionStore {
       result.push(msg)
     }
 
+    return this.removeOverlappingTextMessages(result)
+  }
+
+  private removeOverlappingTextMessages(messages: Message[]): Message[] {
+    if (messages.length < 2) return messages
+
+    const removedIndexes: Set<number> = new Set()
+    for (let i = 0; i < messages.length; i++) {
+      if (removedIndexes.has(i)) continue
+      const a = messages[i]
+      const aText = this.normalizeMessageText(a.content || a.toolResult || '')
+      if (aText.length < 80 || a.type === 'tool_use') continue
+
+      for (let j = i + 1; j < messages.length; j++) {
+        if (removedIndexes.has(j)) continue
+        const b = messages[j]
+        if (a.type !== b.type) continue
+
+        const bText = this.normalizeMessageText(b.content || b.toolResult || '')
+        if (bText.length < 80) continue
+        if (!this.isOverlappingText(aText, bText)) continue
+
+        if (aText.length >= bText.length) {
+          removedIndexes.add(j)
+          console.info(`[SessionStore] removeOverlappingTextMessages: skip contained ${b.type} id=${b.id}`)
+        } else {
+          removedIndexes.add(i)
+          console.info(`[SessionStore] removeOverlappingTextMessages: skip contained ${a.type} id=${a.id}`)
+          break
+        }
+      }
+    }
+
+    if (removedIndexes.size === 0) return messages
+
+    const result: Message[] = []
+    for (let i = 0; i < messages.length; i++) {
+      if (!removedIndexes.has(i)) {
+        result.push(messages[i])
+      }
+    }
     return result
   }
 
@@ -1297,7 +1388,8 @@ export class SessionStore {
         normKey = this.messageSemanticKey(msg)
       } else {
         const normContent = this.normalizeMessageText((msg.content || '') || (msg.toolResult || ''))
-        normKey = msg.type + ':content:' + normContent.substring(0, 2000)
+        // 注意：截取长度必须与 messageSemanticKey 保持一致（4000字符）
+        normKey = msg.type + ':content:' + normContent.substring(0, 4000)
       }
 
       if (normalizedSeen.has(normKey)) {
@@ -1314,7 +1406,7 @@ export class SessionStore {
       console.info(`[SessionStore] getDedupedMessages: removed ${totalRemoved} dups from ${tail.length} msgs for ${sessionId}`)
     }
 
-    return finalResult
+    return this.removeOverlappingTextMessages(finalResult)
   }
 
   /**
@@ -1337,7 +1429,7 @@ export class SessionStore {
       if (cleaned.length !== msgs.length) {
         console.info(`[SessionStore] Cleaned ${msgs.length - cleaned.length} duplicate(s) for ${sessionId}`)
         this.messages.set(sessionId, cleaned)
-        this.enqueueSave(sessionId, () => storageService.saveMessages(sessionId, cleaned))
+        this.persistMessages(sessionId, cleaned)
         this.notifyMessagesChanged(sessionId)
       }
     }

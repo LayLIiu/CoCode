@@ -222,10 +222,17 @@ export class WebSocketService {
    * 追加订阅单个会话，不清理已有连接（用于多会话同时工作）
    */
   addSubscription(sessionId: string): void {
+    const existing = this.connections.get(sessionId)
     if (!this.subscribedSessions.has(sessionId)) {
       this.subscribedSessions.add(sessionId)
       this.connectSession(sessionId)
+    } else if (!existing || existing.status === 'disconnected' || existing.status === 'error' || !existing.ws) {
+      this.connectSession(sessionId)
     }
+
+    this.startPingLoop()
+    this.startPongCheck()
+    this.startCleanup()
   }
 
   connectSession(sessionId: string): void {
@@ -673,8 +680,14 @@ export class WebSocketService {
         }
         conn.pendingMessages.push(jsonStr)
       }
-      // 触发重连（如果正在重连则忽略）
-      if (conn && conn.status !== 'reconnecting') {
+
+      // 用户主动发送消息时不要等待退避重连，立即拉起当前 session WS。
+      if (!this.subscribedSessions.has(sessionId)) {
+        this.subscribedSessions.add(sessionId)
+      }
+      if (!conn || conn.status === 'disconnected' || conn.status === 'error' || !conn.ws) {
+        this.connectSession(sessionId)
+      } else if (conn.status !== 'connecting' && conn.status !== 'reconnecting') {
         this.scheduleReconnect(sessionId)
       }
       return true // 返回 true 表示已入队
