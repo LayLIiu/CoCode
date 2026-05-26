@@ -13,20 +13,31 @@ export struct HdsGlassInput {
   @Param maxHeight: number = 150;
   @Param onTextChange: ((text: string) => void) | undefined = undefined;
 
+  @Local inputWidth: number = 1;
+
+  private getInputWidth(): number {
+    return this.inputWidth > 1 ? this.inputWidth : 1;
+  }
+
+  @Builder
+  glassBarContent() {
+    Row()
+      .width(this.getInputWidth())
+      .height(this.minHeight)
+      .backgroundColor(Color.Transparent)
+  }
+
   build() {
     Stack() {
       // 底层：沉浸光感材质层（HdsTabs）
       HdsTabs() {
-        TabContent() {
-          // 占位内容，用于撑开高度
-          Column()
-            .width('100%')
-            .height('100%')
-        }
-        .tabBar('')
+        TabContent()
+          .tabBar(this.glassBarContent())
       }
-      .barWidth('100%')
-      .barHeight(0)
+      .width(this.getInputWidth())
+      .height(this.minHeight)
+      .barWidth(this.getInputWidth())
+      .barHeight(this.minHeight)
       .barOverlap(true)
       .barPosition(BarPosition.End)
       .scrollable(false)
@@ -68,5 +79,8 @@ export struct HdsGlassInput {
     .borderRadius(24)
     .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.15)' })
     .clip(true)
+    .onAreaChange((_oldArea: Area, newArea: Area) => {
+      this.inputWidth = newArea.width as number;
+    })
   }
 }

@@ -7,7 +7,7 @@ import { Theme } from '../common/Theme'
 import { Message, Session, SessionStatus, ModelInfo, WSMessage, TaskItem, TaskStatus, AttachmentRef, QuestionOption, QuestionItem, PermissionMode, PendingPermission, getPermissionModeDisplayName, getPermissionModeDescription, MessageImage } from '../models/Models'
 import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial, HdsTabs, hdsEffect } from '@kit.UIDesignKit'
-import { curves, RectShape } from '@kit.ArkUI'
+import { curves } from '@kit.ArkUI'
 import { speechRecognizer } from '@kit.CoreSpeechKit'
 import { audio } from '@kit.AudioKit'
 import { abilityAccessCtrl, common } from '@kit.AbilityKit'
@@ -28,6 +28,7 @@ import { StatusIcon, WorkStatus } from '../components/StatusIcon'
 import { DotMatrixBackground } from '../components/DotMatrixBackground'
 import { HdsMiniBarButton } from '../components/HdsMiniBarButton'
 import { HdsGlassInput } from '../components/HdsGlassInput'
+import { HdsLiquidGlassContainer } from '../components/HdsLiquidGlassContainer'
 import { translateService } from '../services/TranslateService'
 import { KeyboardAvoidMode } from '@kit.ArkUI'
 import router from '@ohos.router'
@@ -162,6 +163,7 @@ struct ChatDetailPage {
   @State lightIntensity: number = 0
   @State lightFingerX: number = 0
   @State lightFingerY: number = 0
+  @State inputAreaWidth: number = 1
   @State userIsViewingHistory: boolean = false
 
   // 用户触控追踪：手指在屏幕上时不自动滚动
@@ -212,6 +214,63 @@ struct ChatDetailPage {
   // 流式 thinking 自动滚动
   private streamingThinkingScroller: Scroller = new Scroller()
   private thinkingScrollTimer: number = -1
+
+  private readonly inputGlassMinHeight: number = 56
+  private readonly inputGlassMaxHeight: number = 112
+  private readonly inputGlassCornerRadius: number = 16
+  private readonly inputGlassHorizontalOverflow: number = 0
+  private readonly inputGlassVerticalOverflow: number = 16
+  private readonly inputActionGlassSize: number = 44
+  private readonly inputActionGlassOverflow: number = 12
+  private readonly inputModuleGap: number = 6
+  private readonly inputActionIconOffsetY: number = -3
+  private readonly inputGlassVisualInset: number = 7.5
+
+  private getInputAreaWidth(): number {
+    return this.inputAreaWidth > 1 ? this.inputAreaWidth : 1
+  }
+
+  private getInputAreaContentWidth(): number {
+    const visibleWidth = this.getInputAreaWidth() - this.inputGlassVisualInset * 2
+    return visibleWidth > 1 ? visibleWidth : 1
+  }
+
+  private getInputActionHostSize(): number {
+    return this.inputActionGlassSize + this.inputActionGlassOverflow * 2
+  }
+
+  private getInputGlassHostWidth(): number {
+    const width = this.getInputAreaContentWidth() -
+      this.inputActionGlassSize * 2 -
+      this.inputModuleGap * 2
+    return width > 1 ? width : 1
+  }
+
+  private getInputGlassWidth(): number {
+    const width = this.getInputGlassHostWidth() - this.inputGlassHorizontalOverflow * 2
+    return width > 1 ? width : 1
+  }
+
+  private getInputGlassHeight(): number {
+    const text = this.inputText.length > 0 ? this.inputText : ''
+    const explicitLines = text.split('\n').length
+    const wrappedLines = Math.ceil(text.length / 18)
+    const lineCount = Math.max(1, explicitLines, wrappedLines)
+    const height = this.inputGlassMinHeight + (lineCount - 1) * 20
+    return Math.min(this.inputGlassMaxHeight, Math.max(this.inputGlassMinHeight, height))
+  }
+
+  private getInputGlassHostHeight(): number {
+    return this.getInputGlassHeight() + this.inputGlassVerticalOverflow * 2
+  }
+
+  private getInputAreaHostHeight(): number {
+    return Math.max(this.getInputGlassHostHeight(), this.getInputActionHostSize())
+  }
+
+  private getInputTextAreaMaxHeight(): number {
+    return Math.max(32, this.getInputGlassHeight() - 20)
+  }
 
   // 斜杠命令列表
   private slashCommands: SlashCommand[] = [
@@ -1981,44 +2040,78 @@ struct ChatDetailPage {
   }
 
   @Builder
+  StreamingIndicatorContent() {
+    Row({ space: 6 }) {
+      // 像素吉祥物 — 根据工作状态实时变化
+      PixelMascot({
+        mascotSize: 27,
+        status: this.getMascotStatus(),
+        bodyColor: getMascotColorForSession(this.sessionId),
+        mascotType: getMascotTypeForProvider(this.getSessionProviderId())
+      })
+
+      // 状态文字
+      Text(this.getStatusText())
+        .fontSize(11)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Theme.TextSecondary)
+
+      // 已用时间
+      if (this.elapsedSeconds > 0) {
+        Text(this.formatElapsed(this.elapsedSeconds))
+          .fontSize(10)
+          .fontColor(Theme.TextTertiary)
+      }
+
+      // Token 数
+      if (this.tokenUsage > 0) {
+        Text(`· ↓ ${this.tokenUsage}`)
+          .fontSize(10)
+          .fontColor(Theme.TextTertiary)
+      }
+    }
+    .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+    .translate({ x: -5 })
+  }
+
+  @Builder
   StreamingIndicator() {
     Row() {
-      Row({ space: 6 }) {
-        // 像素吉祥物 — 根据工作状态实时变化
-        PixelMascot({
-          mascotSize: 27,
-          status: this.getMascotStatus(),
-          bodyColor: getMascotColorForSession(this.sessionId),
-          mascotType: getMascotTypeForProvider(this.getSessionProviderId())
+      Stack() {
+        HdsTabs() {
+          TabContent()
+            .tabBar(this.StreamingIndicatorContent())
+        }
+        .width(120 + 32 * 2)
+        .height(40 + 16 * 2)
+        .padding({
+          left: 32,
+          right: 32,
+          top: 16,
+          bottom: 16
         })
-
-        // 状态文字
-        Text(this.getStatusText())
-          .fontSize(11)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.TextSecondary)
-
-        // 已用时间
-        if (this.elapsedSeconds > 0) {
-          Text(this.formatElapsed(this.elapsedSeconds))
-            .fontSize(10)
-            .fontColor(Theme.TextTertiary)
-        }
-
-        // Token 数
-        if (this.tokenUsage > 0) {
-          Text(`· ↓ ${this.tokenUsage}`)
-            .fontSize(10)
-            .fontColor(Theme.TextTertiary)
-        }
+        .barWidth(120)
+        .barHeight(40)
+        .barOverlap(true)
+        .barPosition(BarPosition.End)
+        .scrollable(false)
+        .animationDuration(0)
+        .barFloatingStyle({
+          gradientMask: {
+            maskColor: 'rgba(0,0,0,0)'
+          },
+          barBottomMargin: 0,
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.IMMERSIVE,
+            materialLevel: hdsMaterial.MaterialLevel.EXQUISITE
+          }
+        })
+        .backgroundColor(Color.Transparent)
+        .border({ width: 0 })
+        .shadow({ radius: 0 })
       }
-      .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-      .backgroundColor(Theme.GlassBackground)
-      .borderRadius(18)
-      .border({
-        width: 0.5,
-        color: Theme.GlassBorder
-      })
+      .clip(false)
+      .translate({ x: -35, y: 35 })
 
       Blank()
     }
@@ -4623,9 +4716,127 @@ struct ChatDetailPage {
 
   @Builder
   InputAreaContent() {
-    // Stack 包裹：手指追光（Flex 在上层）+ 内容行
     Stack() {
-      // 手指追光组件 —— 在内容行之上，不触控
+      Row({ space: this.inputModuleGap }) {
+        this.InputActionGlassButton($r('sys.symbol.plus'), '#E3E3E3', 1, () => {
+          this.showMenu = !this.showMenu
+        })
+
+        HdsTabs() {
+          TabContent()
+            .tabBar(this.InputGlassContent())
+        }
+        .width(this.getInputGlassHostWidth())
+        .height(this.getInputGlassHostHeight())
+        .padding({
+          left: this.inputGlassHorizontalOverflow,
+          right: this.inputGlassHorizontalOverflow,
+          top: this.inputGlassVerticalOverflow,
+          bottom: this.inputGlassVerticalOverflow
+        })
+        .barWidth(this.getInputGlassWidth())
+        .barHeight(this.getInputGlassHeight())
+        .barOverlap(true)
+        .barPosition(BarPosition.End)
+        .scrollable(false)
+        .animationDuration(0)
+        .barFloatingStyle({
+          gradientMask: {
+            maskColor: 'rgba(0,0,0,0)'
+          },
+          barBottomMargin: 0,
+          systemMaterialEffect: {
+            materialType: hdsMaterial.MaterialType.IMMERSIVE,
+            materialLevel: hdsMaterial.MaterialLevel.EXQUISITE
+          }
+        })
+        .backgroundColor(Color.Transparent)
+        .border({ width: 0 })
+        .shadow({ radius: 0 })
+
+        this.InputActionGlassButton($r('sys.symbol.arrow_up'),
+          this.inputText.trim() || this.pendingAttachments.length > 0 ? Color.White : '#8E8E8E',
+          1, () => {
+            if (this.inputText.trim() || this.pendingAttachments.length > 0) {
+              this.sendMessage()
+            }
+          })
+      }
+      .width(this.getInputAreaContentWidth())
+      .height(this.getInputAreaHostHeight())
+      .alignItems(VerticalAlign.Center)
+    }
+    .width('100%')
+    .height(this.getInputAreaHostHeight())
+    .alignContent(Alignment.Center)
+    .clip(false)
+    .onAreaChange((_oldArea: Area, newArea: Area) => {
+      this.inputAreaWidth = newArea.width as number
+    })
+  }
+
+  @Builder
+  InputActionGlassButton(icon: Resource, color: ResourceColor, opacityValue: number, action: () => void) {
+    Stack() {
+      HdsTabs() {
+        TabContent()
+          .tabBar(this.InputActionGlassContent(icon, color, opacityValue))
+      }
+      .width(this.getInputActionHostSize())
+      .height(this.getInputActionHostSize())
+      .padding({
+        left: this.inputActionGlassOverflow,
+        right: this.inputActionGlassOverflow,
+        top: this.inputActionGlassOverflow,
+        bottom: this.inputActionGlassOverflow
+      })
+      .barWidth(this.inputActionGlassSize)
+      .barHeight(this.inputActionGlassSize)
+      .barOverlap(true)
+      .barPosition(BarPosition.End)
+      .scrollable(false)
+      .animationDuration(0)
+      .barFloatingStyle({
+        gradientMask: {
+          maskColor: 'rgba(0,0,0,0)'
+        },
+        barBottomMargin: 0,
+        systemMaterialEffect: {
+          materialType: hdsMaterial.MaterialType.IMMERSIVE,
+          materialLevel: hdsMaterial.MaterialLevel.EXQUISITE
+        }
+      })
+      .backgroundColor(Color.Transparent)
+      .border({ width: 0 })
+      .shadow({ radius: 0 })
+      .opacity(opacityValue)
+      .onTabBarClick(() => {
+        action()
+      })
+    }
+    .width(this.inputActionGlassSize)
+    .height(this.getInputActionHostSize())
+    .alignContent(Alignment.Center)
+    .clip(false)
+  }
+
+  @Builder
+  InputActionGlassContent(icon: Resource, color: ResourceColor, opacityValue: number) {
+    Column() {
+      SymbolGlyph(icon)
+        .fontSize(22)
+        .fontColor([color])
+        .translate({ y: this.inputActionIconOffsetY })
+    }
+    .width(this.inputActionGlassSize)
+    .height(this.inputActionGlassSize)
+    .justifyContent(FlexAlign.Center)
+    .opacity(opacityValue)
+  }
+
+  @Builder
+  InputGlassContent() {
+    Stack() {
       if (this.lightIntensity > 0) {
         Flex()
           .size({ width: 1, height: 1 })
@@ -4644,97 +4855,31 @@ struct ChatDetailPage {
           .position({ x: this.lightFingerX, y: this.lightFingerY })
       }
 
-      // 内容行
-      Row() {
-        // 附件按钮
-        Column() {
-          SymbolGlyph($r('sys.symbol.plus'))
-            .fontSize(20)
-            .fontColor([Color.White])
-        }
-        .width(32)
-        .height(32)
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => {
-          this.showMenu = !this.showMenu
+      TextArea({ placeholder: this.pendingAttachments.length > 0 ? '添加描述...' : '输入消息或指令', text: this.inputText })
+        .width('100%')
+        .constraintSize({ minHeight: 32, maxHeight: this.getInputTextAreaMaxHeight() })
+        .backgroundColor(Color.Transparent)
+        .fontColor(Theme.TextPrimary)
+        .placeholderColor('#8E8E8E')
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .textAlign(TextAlign.Start)
+        .padding({ left: 2, right: 2, top: 4, bottom: 4 })
+        .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+        .onChange((value: string) => {
+          this.inputText = value
         })
-
-        // 输入框
-        TextArea({ placeholder: this.pendingAttachments.length > 0 ? '添加描述...' : '输入消息或指令', text: this.inputText })
-          .layoutWeight(1)
-          .constraintSize({ minHeight: 28, maxHeight: 100 })
-          .backgroundColor(Color.Transparent)
-          .fontColor(Theme.TextPrimary)
-          .placeholderColor('rgba(200, 200, 200, 0.6)')
-          .fontSize(14)
-          .textAlign(TextAlign.Start)
-          .padding({ left: 8, right: 8, top: 6, bottom: 6 })
-          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-          .onChange((value: string) => {
-            this.inputText = value
-          })
-          .onSubmit(() => {
-            if (this.inputText.trim() || this.pendingAttachments.length > 0) {
-              this.sendMessage()
-            }
-          })
-
-        // 语音按钮
-        Column() {
-          SymbolGlyph($r('sys.symbol.mic'))
-            .fontSize(20)
-            .fontColor([this.isRecording ? Theme.ErrorColor : Theme.TextSecondary])
-        }
-        .width(32)
-        .height(32)
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => {
-          if (this.isRecording) {
-            this.stopVoiceRecording()
-          } else {
-            this.startVoiceRecording()
-          }
-        })
-
-        // 发送按钮
-        Column() {
-          Image($r('app.media.ic_send'))
-            .width(20)
-            .height(20)
-            .fillColor(this.inputText.trim() || this.pendingAttachments.length > 0 ? Theme.TextOnPrimary : Theme.TextTertiary)
-        }
-        .width(32)
-        .height(32)
-        .backgroundColor(this.inputText.trim() || this.pendingAttachments.length > 0 ? Theme.AccentBlue : 'rgba(255, 255, 255, 0.055)')
-        .borderRadius(16)
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => {
+        .onSubmit(() => {
           if (this.inputText.trim() || this.pendingAttachments.length > 0) {
             this.sendMessage()
           }
         })
-      }
-      .width('100%')
-      .padding({ left: 8, right: 8 })
-      .alignItems(VerticalAlign.Center)
     }
-    .width('100%')
-    .constraintSize({ minHeight: 44, maxHeight: 120 })
-    .backgroundColor('rgba(255, 255, 255, 0.07)')
-    .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
-    .borderRadius(22)
-    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.16)' })
-    .shadow({ radius: 18, color: 'rgba(0, 0, 0, 0.26)', offsetX: 0, offsetY: 4 })
-    // 静态边框发光（与 SearchBar 一致）
-    .visualEffect(
-      new hdsEffect.HdsEffectBuilder()
-        .pointLight({
-          illuminatedType: hdsEffect.PointLightIlluminatedType.BORDER_CONTENT,
-        })
-        .buildEffect()
-    )
-    .clip(true)
-    // 手指追光 —— onTouch 直接在外层 Stack（不阻止子组件触控）
+    .width(this.getInputGlassWidth())
+    .height(this.getInputGlassHeight())
+    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+    .alignContent(Alignment.Center)
+    .clip(false)
     .onTouch((event: TouchEvent) => {
       if (event.type === TouchType.Down) {
         animateTo({ duration: 100, curve: Curve.EaseIn }, () => {

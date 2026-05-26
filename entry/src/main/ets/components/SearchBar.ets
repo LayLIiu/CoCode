@@ -1,136 +1,116 @@
 import { Theme } from '../common/Theme'
-import { hdsEffect } from '@kit.UIDesignKit'
-import { curves, RectShape } from '@kit.ArkUI'
+import { hdsMaterial, HdsTabs } from '@kit.UIDesignKit'
 
 /**
- * 搜索栏组件 - 沉浸光感效果
- * 使用 hdsEffect 点光源实现手指追光
+ * 搜索栏组件 - 沉浸光感液态玻璃效果
+ * 使用 HdsTabs 的 barFloatingStyle 承载搜索输入内容
  */
 @Component
 export struct SearchBar {
   @Link searchText: string
   placeholder: string = '搜索对话...'
   onSearchChange: () => void = () => {}
+  @State searchBarWidth: number = 1
 
-  // 沉浸光感追光状态
-  @State lightIntensity: number = 0
-  @State lightFingerX: number = 0
-  @State lightFingerY: number = 0
+  private readonly barHeight: number = 48
+  private readonly containerHeight: number = 72
+  private readonly barBottomMargin: number = 12
+  private readonly horizontalOverflow: number = 32
+  private readonly visualInset: number = 7.5
+
+  private getSearchBarWidth(): number {
+    return this.searchBarWidth > 1 ? this.searchBarWidth : 1
+  }
+
+  private getVisibleBarWidth(): number {
+    const visibleWidth = this.getSearchBarWidth() - this.visualInset * 2
+    return visibleWidth > 1 ? visibleWidth : 1
+  }
+
+  private getHostWidth(): number {
+    return this.getVisibleBarWidth() + this.horizontalOverflow * 2
+  }
+
+  @Builder
+  searchContent() {
+    Row() {
+      Image($r('app.media.ic_search'))
+        .width(20)
+        .height(20)
+        .fillColor(Theme.TextSecondary)
+        .margin({ right: Theme.SpacingSM })
+        .translate({ y: -3 })
+
+      TextInput({ placeholder: this.placeholder, text: this.searchText })
+        .layoutWeight(1)
+        .height(36)
+        .padding({ top: 0, bottom: 0 })
+        .backgroundColor(Color.Transparent)
+        .placeholderColor(Theme.TextSecondary)
+        .placeholderFont({ size: Theme.FontBody })
+        .fontColor(Theme.TextPrimary)
+        .fontSize(Theme.FontBody)
+        .caretColor(Theme.AccentBlue)
+        .translate({ y: -3 })
+        .onChange((value: string) => {
+          this.searchText = value
+          this.onSearchChange()
+        })
+
+      if (this.searchText.length > 0) {
+        Image($r('app.media.ic_clear'))
+          .width(18)
+          .height(18)
+          .fillColor(Theme.TextSecondary)
+          .translate({ y: -3 })
+          .onClick(() => {
+            this.searchText = ''
+            this.onSearchChange()
+          })
+      }
+    }
+      .width(this.getVisibleBarWidth())
+      .height(this.barHeight)
+      .padding({ left: Theme.SpacingMD, right: Theme.SpacingMD })
+      .alignItems(VerticalAlign.Center)
+      .backgroundColor(Color.Transparent)
+  }
 
   build() {
     Stack() {
-      // 光泽渐变层
-      Row()
-        .width('100%')
-        .height('100%')
-        .borderRadius(24)
-        .linearGradient({
-          angle: 145,
-          colors: [
-            ['rgba(255, 255, 255, 0.18)', 0.0],
-            ['rgba(255, 255, 255, 0.03)', 0.4],
-            ['rgba(255, 255, 255, 0.01)', 0.6],
-            ['rgba(255, 255, 255, 0.12)', 1.0]
-          ]
-        })
-
-      // 内容层
-      Row() {
-        // 搜索图标
-        Image($r('app.media.ic_search'))
-          .width(20)
-          .height(20)
-          .fillColor(Theme.TextSecondary)
-          .margin({ right: Theme.SpacingSM })
-
-        // 输入框
-        TextInput({ placeholder: this.placeholder, text: this.searchText })
-          .layoutWeight(1)
-          .height(40)
-          .backgroundColor(Color.Transparent)
-          .placeholderColor(Theme.TextSecondary)
-          .placeholderFont({ size: Theme.FontBody })
-          .fontColor(Theme.TextPrimary)
-          .fontSize(Theme.FontBody)
-          .caretColor(Theme.AccentBlue)
-          .onChange((value: string) => {
-            this.searchText = value
-            this.onSearchChange()
-          })
-
-        // 清除按钮
-        if (this.searchText.length > 0) {
-          Image($r('app.media.ic_clear'))
-            .width(18)
-            .height(18)
-            .fillColor(Theme.TextSecondary)
-            .onClick(() => {
-              this.searchText = ''
-              this.onSearchChange()
-            })
+      HdsTabs() {
+        TabContent()
+          .tabBar(this.searchContent())
+      }
+      .width(this.getHostWidth())
+      .height(this.containerHeight)
+      .padding({ left: this.horizontalOverflow, right: this.horizontalOverflow })
+      .barWidth(this.getVisibleBarWidth())
+      .barHeight(this.barHeight)
+      .barOverlap(true)
+      .barPosition(BarPosition.End)
+      .scrollable(false)
+      .animationDuration(0)
+      .barFloatingStyle({
+        gradientMask: {
+          maskColor: 'rgba(0,0,0,0)'
+        },
+        barBottomMargin: this.barBottomMargin,
+        systemMaterialEffect: {
+          materialType: hdsMaterial.MaterialType.IMMERSIVE,
+          materialLevel: hdsMaterial.MaterialLevel.EXQUISITE
         }
-      }
-      .width('100%')
-      .height('100%')
-      .padding({ left: Theme.SpacingMD, right: Theme.SpacingMD })
-
-      // 沉浸光感追光组件
-      if (this.lightIntensity > 0) {
-        Flex()
-          .size({ width: 1, height: 1 })
-          .backgroundColor(Color.Transparent)
-          .visualEffect(
-            new hdsEffect.HdsEffectBuilder()
-              .pointLight({
-                options: {
-                  color: Color.White,
-                  intensity: this.lightIntensity,
-                  height: 100
-                }
-              })
-              .buildEffect()
-          )
-          .position({ x: this.lightFingerX, y: this.lightFingerY })
-      }
+      })
+      .backgroundColor(Color.Transparent)
+      .border({ width: 0 })
+      .shadow({ radius: 0 })
     }
     .width('100%')
-    .height(48)
-    .borderRadius(24)
-    .clip(true)
-    .clipShape(new RectShape({
-      width: '100%',
-      height: '100%',
-      radius: 24
-    }))
-    .backgroundColor('#08FFFFFF')
-    .backdropBlur(24)
-    .border({ width: 0.5, color: '#30FFFFFF' })
-    .visualEffect(
-      new hdsEffect.HdsEffectBuilder()
-        .pointLight({
-          illuminatedType: hdsEffect.PointLightIlluminatedType.BORDER_CONTENT,
-        })
-        .buildEffect()
-    )
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        animateTo({ duration: 100, curve: Curve.EaseIn }, () => {
-          this.lightIntensity = 2.5
-        })
-        this.lightFingerX = event.touches[0].x
-        this.lightFingerY = event.touches[0].y
-      } else if (event.type === TouchType.Move) {
-        animateTo({
-          curve: curves.responsiveSpringMotion(0.5, 0.5)
-        }, () => {
-          this.lightFingerX = event.touches[0].x
-          this.lightFingerY = event.touches[0].y
-        })
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
-          this.lightIntensity = 0
-        })
-      }
+    .height(this.containerHeight)
+    .alignContent(Alignment.Center)
+    .clip(false)
+    .onAreaChange((_oldArea: Area, newArea: Area) => {
+      this.searchBarWidth = newArea.width as number
     })
   }
 }
