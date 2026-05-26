@@ -494,7 +494,7 @@ struct PreviewPage {
         [Theme.BackgroundGradientEnd, 1.0]
       ]
     })
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .bindSheet($$this.showCommitSheet, this.CommitSheet(), {
       height: 320,
       backgroundColor: Theme.BackgroundPrimary,
@@ -551,7 +551,7 @@ struct PreviewPage {
       Row().width(36).height(36)
     }
     .width('100%')
-    .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+    .padding({ left: 16, right: 16, top: 56, bottom: 8 })
   }
 
   @Builder

@@ -1227,18 +1227,26 @@ struct ChatDetailPage {
 
   private getBottomSpacerHeight(): number {
     const inputAreaHeight = 120
+    // 吉祥物气泡高度（需要额外留白）
+    const indicatorHeight = this.shouldShowStreamingIndicator() ? 30 : 0
     const tasks = this.taskItems
     if (tasks.length === 0 || sessionStore.taskBarDismissed) {
-      return inputAreaHeight
+      return inputAreaHeight + indicatorHeight
     }
     // 折叠状态：分隔线 + 标题行(~44) + 间距 + 输入框
     const collapsedHeight = 57
     if (!sessionStore.taskBarExpanded) {
-      return inputAreaHeight + collapsedHeight
+      return inputAreaHeight + collapsedHeight + indicatorHeight
     }
     // 展开状态：折叠高度 + 任务列表行数
     const expandedHeight = Math.min(tasks.length * 50, 200)
-    return inputAreaHeight + collapsedHeight + expandedHeight
+    return inputAreaHeight + collapsedHeight + expandedHeight + indicatorHeight
+  }
+
+  private shouldShowStreamingIndicator(): boolean {
+    return this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
+      this.chatStatus === 'tool_executing' || this.chatStatus === 'completed' ||
+      this.chatStatus === 'permission_pending' || this.chatStatus === 'question_pending'
   }
 
   @Builder
@@ -2071,7 +2079,7 @@ struct ChatDetailPage {
       }
     }
     .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-    .translate({ x: -5 })
+    .translate({ x: -10 })
   }
 
   @Builder
@@ -2111,7 +2119,7 @@ struct ChatDetailPage {
         .shadow({ radius: 0 })
       }
       .clip(false)
-      .translate({ x: -35, y: 35 })
+      .translate({ x: -35, y: 30 })
 
       Blank()
     }
