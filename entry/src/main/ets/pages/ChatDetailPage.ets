@@ -170,8 +170,14 @@ struct ChatDetailPage {
   @State isUserTouchingList: boolean = false
   private touchTimer: number = -1
 
+  // 键盘状态
+  @State isKeyboardVisible: boolean = false
+
   // 输入栏收缩动画
   @State animationProgress: number = 0
+  private inputCollapseAccumulatedOffset: number = 0
+  private readonly inputCollapseThreshold: number = 100 // 收缩阈值（像素）
+  private readonly buttonFadeThreshold: number = 0.5 // 按钮消失阈值（进度百分比）
 
   // Token 使用量
   @State tokenUsage: number = 0
@@ -240,9 +246,14 @@ struct ChatDetailPage {
   }
 
   private getInputGlassHostWidth(): number {
+    // 键盘弹出时，输入框扩展（加号按钮隐藏，宽度增加）
+    const addButtonWidth = this.isKeyboardVisible
+      ? 0
+      : this.inputActionGlassSize + this.inputModuleGap
     const width = this.getInputAreaContentWidth() -
-      this.inputActionGlassSize * 2 -
-      this.inputModuleGap * 2
+      addButtonWidth -
+      this.inputActionGlassSize -
+      this.inputModuleGap
     return width > 1 ? width : 1
   }
 
@@ -270,6 +281,80 @@ struct ChatDetailPage {
 
   private getInputTextAreaMaxHeight(): number {
     return Math.max(32, this.getInputGlassHeight() - 20)
+  }
+
+  // 更新输入栏收缩进度
+  private updateInputCollapseProgress(yOffset: number): void {
+    // 键盘弹出时不执行收缩动画
+    if (this.isKeyboardVisible) {
+      return
+    }
+
+    // 如果不在查看历史模式，不更新收缩进度
+    if (!this.userIsViewingHistory) {
+      return
+    }
+
+    // 累积滚动距离
+    this.inputCollapseAccumulatedOffset += yOffset
+
+    // 限制累积值范围
+    if (this.inputCollapseAccumulatedOffset < 0) {
+      this.inputCollapseAccumulatedOffset = 0
+    } else if (this.inputCollapseAccumulatedOffset > this.inputCollapseThreshold) {
+      this.inputCollapseAccumulatedOffset = this.inputCollapseThreshold
+    }
+
+    // 计算进度 0-1
+    const newProgress = this.inputCollapseAccumulatedOffset / this.inputCollapseThreshold
+    if (newProgress !== this.animationProgress) {
+      this.animationProgress = newProgress
+    }
+  }
+
+  // 重置输入栏收缩进度（回到底部时调用）
+  private resetInputCollapseProgress(): void {
+    this.inputCollapseAccumulatedOffset = 0
+    this.animationProgress = 0
+  }
+
+  // 获取收缩时的整体缩放比例
+  private getCollapseScale(): number {
+    // 键盘弹出时保持正常大小
+    if (this.isKeyboardVisible) {
+      return 1.0
+    }
+    // 阶段1 (0-0.5): scale 从 1.0 降到 0.85
+    // 阶段2 (0.5-1): scale 从 0.85 降到 0.7
+    if (this.animationProgress <= this.buttonFadeThreshold) {
+      return 1.0 - (this.animationProgress / this.buttonFadeThreshold) * 0.15
+    } else {
+      return 0.85 - ((this.animationProgress - this.buttonFadeThreshold) / this.buttonFadeThreshold) * 0.15
+    }
+  }
+
+  // 获取按钮透明度
+  private getButtonOpacity(): number {
+    // 键盘弹出时发送按钮保持可见
+    if (this.isKeyboardVisible) {
+      return 1.0
+    }
+    // 阶段1: 完全显示
+    // 阶段2: 逐渐淡出
+    if (this.animationProgress <= this.buttonFadeThreshold) {
+      return 1.0
+    } else {
+      return 1.0 - ((this.animationProgress - this.buttonFadeThreshold) / this.buttonFadeThreshold)
+    }
+  }
+
+  // 判断按钮是否应该显示
+  private shouldShowButtons(): boolean {
+    // 键盘弹出时发送按钮要显示
+    if (this.isKeyboardVisible) {
+      return true
+    }
+    return this.animationProgress < 0.95
   }
 
   // 斜杠命令列表
@@ -753,6 +838,8 @@ struct ChatDetailPage {
   private scrollToBottom(): void {
     // 倒序列表：最新消息在顶部（视觉底部），scrollEdge(Top) 就是回到最新消息
     this.scroller.scrollEdge(Edge.Top)
+    // 重置输入栏收缩进度
+    this.resetInputCollapseProgress()
   }
 
   // 标题栏动态模糊：根据滚动位置计算背景透明度
@@ -1799,13 +1886,20 @@ struct ChatDetailPage {
             if (this.showNewMessageButton) {
               this.showNewMessageButton = false
               this.userIsViewingHistory = false
-              this.animationProgress = 0
             }
+            // 重置输入栏收缩进度
+            this.resetInputCollapseProgress()
+          } else if (start > 0 && start <= 2) {
+            // 接近底部时也重置
+            this.resetInputCollapseProgress()
           } else {
             // 向上滚动查看历史
-            if (!this.showNewMessageButton && start > 2) {
+            if (!this.showNewMessageButton) {
               this.showNewMessageButton = true
               this.userIsViewingHistory = true
+              // 开始查看历史时，初始化收缩进度
+              this.inputCollapseAccumulatedOffset = 0
+              this.animationProgress = 0
             }
           }
         })
@@ -1814,6 +1908,8 @@ struct ChatDetailPage {
           if (-yOffset !== this.scrollOffset) {
             this.scrollOffset = -yOffset
           }
+          // 更新输入栏收缩进度
+          this.updateInputCollapseProgress(yOffset)
         })
         .onTouch((event: TouchEvent) => {
           if (event.type === TouchType.Down) {
@@ -1917,7 +2013,7 @@ struct ChatDetailPage {
               onButtonClick: () => {
                 this.showNewMessageButton = false
                 this.userIsViewingHistory = false
-                this.animationProgress = 0
+                this.resetInputCollapseProgress()
                 this.scrollToBottom()
               }
             }) {
@@ -1938,7 +2034,7 @@ struct ChatDetailPage {
         this.InputAreaContent()
       }
       .width('100%')
-      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, bottom: 20 })
+      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, bottom: 25 })
       .backgroundColor('transparent')
       .position({ x: 0, y: '100%' })
       .translate({ y: '-100%' })
@@ -4726,9 +4822,15 @@ struct ChatDetailPage {
   InputAreaContent() {
     Stack() {
       Row({ space: this.inputModuleGap }) {
-        this.InputActionGlassButton($r('sys.symbol.plus'), '#E3E3E3', 1, () => {
-          this.showMenu = !this.showMenu
-        })
+        // 加号按钮：键盘弹出时或收缩后隐藏
+        if (!this.isKeyboardVisible && this.shouldShowButtons()) {
+          this.InputActionGlassButton($r('sys.symbol.plus'), '#E3E3E3', this.getButtonOpacity(), () => {
+            this.showMenu = !this.showMenu
+          })
+        } else if (!this.isKeyboardVisible && !this.shouldShowButtons()) {
+          // 收缩后占位，保持布局稳定
+          Row().width(this.inputActionGlassSize).height(this.inputActionGlassSize)
+        }
 
         HdsTabs() {
           TabContent()
@@ -4762,17 +4864,31 @@ struct ChatDetailPage {
         .border({ width: 0 })
         .shadow({ radius: 0 })
 
-        this.InputActionGlassButton($r('sys.symbol.arrow_up'),
-          this.inputText.trim() || this.pendingAttachments.length > 0 ? Color.White : '#8E8E8E',
-          1, () => {
-            if (this.inputText.trim() || this.pendingAttachments.length > 0) {
-              this.sendMessage()
-            }
-          })
+        // 发送按钮：收缩后隐藏
+        if (this.shouldShowButtons()) {
+          this.InputActionGlassButton($r('sys.symbol.arrow_up'),
+            this.inputText.trim() || this.pendingAttachments.length > 0 ? Color.White : '#8E8E8E',
+            this.getButtonOpacity(), () => {
+              if (this.inputText.trim() || this.pendingAttachments.length > 0) {
+                this.sendMessage()
+              }
+            })
+        } else {
+          // 收缩后占位，保持布局稳定
+          Row().width(this.inputActionGlassSize).height(this.inputActionGlassSize)
+        }
       }
       .width(this.getInputAreaContentWidth())
       .height(this.getInputAreaHostHeight())
       .alignItems(VerticalAlign.Center)
+      .scale({
+        x: this.getCollapseScale(),
+        y: this.getCollapseScale()
+      })
+      .animation({
+        duration: 200,
+        curve: Curve.EaseOut
+      })
     }
     .width('100%')
     .height(this.getInputAreaHostHeight())
@@ -4881,6 +4997,14 @@ struct ChatDetailPage {
           if (this.inputText.trim() || this.pendingAttachments.length > 0) {
             this.sendMessage()
           }
+        })
+        .onFocus(() => {
+          this.isKeyboardVisible = true
+          // 键盘弹出时重置收缩进度
+          this.resetInputCollapseProgress()
+        })
+        .onBlur(() => {
+          this.isKeyboardVisible = false
         })
     }
     .width(this.getInputGlassWidth())
