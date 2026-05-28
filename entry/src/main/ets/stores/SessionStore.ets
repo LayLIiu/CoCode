@@ -1558,47 +1558,98 @@ export class SessionStore {
 
     return new Promise((resolve) => {
       setTimeout(() => {
-      apiService.getCodexRemoteThreadTurns(threadId)
-        .then((response: Record<string, Object>) => {
-          const result = response['result'] as Record<string, Object>
-          const data = (result && result['data']) as Array<Record<string, Object>>
-          const targetTurn = this.findOfficialCodexTurn(data, turnId)
-          const status = (targetTurn && targetTurn['status'] as string) || ''
-          const text = this.extractOfficialCodexAssistantText(targetTurn)
+        apiService.getCodexRemoteThreadTurns(threadId)
+          .then((response: Record<string, Object>) => {
+            const result = response['result'] as Record<string, Object>
+            const data = (result && result['data']) as Array<Record<string, Object>>
+            const targetTurn = this.findOfficialCodexTurn(data, turnId)
+            const status = (targetTurn && targetTurn['status'] as string) || ''
+            const text = this.extractOfficialCodexAssistantText(targetTurn)
+            const done = status === 'completed' || status === 'failed' || status === 'cancelled'
 
-          if (text.length > 0 && (status === 'completed' || status === 'failed' || status === 'cancelled')) {
-            const assistantMessage: Message = {
-              id: 'official-codex-assistant-' + (turnId || Date.now().toString()),
-              type: status === 'failed' ? 'error' : 'assistant',
-              content: text,
+            if (text.length > 0) {
+              this.upsertOfficialCodexAssistantMessage(sessionId, turnId, text, status === 'failed', !done)
+            }
+
+            if (done) {
+              this.updateSessionStatus(sessionId, status === 'completed' ? 'completed' : 'idle')
+              resolve()
+              return
+            }
+
+            this.updateSessionStatus(sessionId, this.getOfficialCodexPollingStatus(targetTurn, status))
+            this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
+          })
+          .catch((e: Error) => {
+            if (attempt < 5) {
+              this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
+              return
+            }
+            const errMsg: Message = {
+              id: 'official-codex-poll-error-' + Date.now(),
+              type: 'error',
+              content: e.message || String(e),
               timestamp: new Date().toISOString()
             }
-            this.addMessage(sessionId, assistantMessage)
-            this.updateSessionStatus(sessionId, status === 'completed' ? 'completed' : 'idle')
+            this.addMessage(sessionId, errMsg)
+            this.updateSessionStatus(sessionId, 'idle')
             resolve()
-            return
-          }
-
-          this.updateSessionStatus(sessionId, status === 'inProgress' || status === 'pending' ? 'streaming' : 'thinking')
-          this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
-        })
-        .catch((e: Error) => {
-          if (attempt < 5) {
-            this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
-            return
-          }
-          const errMsg: Message = {
-            id: 'official-codex-poll-error-' + Date.now(),
-            type: 'error',
-            content: e.message || String(e),
-            timestamp: new Date().toISOString()
-          }
-          this.addMessage(sessionId, errMsg)
-          this.updateSessionStatus(sessionId, 'idle')
-          resolve()
-        })
-      }, 1500)
+          })
+      }, this.getOfficialCodexPollDelayMs(attempt))
     })
+  }
+
+  private getOfficialCodexPollDelayMs(attempt: number): number {
+    if (attempt < 20) return 500
+    if (attempt < 60) return 1000
+    return 2000
+  }
+
+  private getOfficialCodexPollingStatus(turn: Record<string, Object> | null, status: string): SessionStatus {
+    if (status !== 'inProgress' && status !== 'pending') return 'thinking'
+    const items = turn && turn['items'] as Array<Record<string, Object>>
+    if (items) {
+      for (let i = 0; i < items.length; i++) {
+        const type = ((items[i]['type'] as string) || '').toLowerCase()
+        if (type.includes('tool') || type.includes('command') || type.includes('exec')) {
+          return 'tool_executing'
+        }
+      }
+    }
+    return status === 'inProgress' ? 'streaming' : 'thinking'
+  }
+
+  private upsertOfficialCodexAssistantMessage(
+    sessionId: string,
+    turnId: string,
+    content: string,
+    isError: boolean,
+    isStreaming: boolean
+  ): void {
+    const id = 'official-codex-assistant-' + (turnId || 'latest')
+    let sessionMessages = this.messages.get(sessionId) || []
+    for (let i = sessionMessages.length - 1; i >= 0; i--) {
+      if (sessionMessages[i].id === id) {
+        if (sessionMessages[i].content !== content || sessionMessages[i].isStreaming !== isStreaming) {
+          sessionMessages[i].content = content
+          sessionMessages[i].type = isError ? 'error' : 'assistant'
+          sessionMessages[i].isStreaming = isStreaming
+          this.messages.set(sessionId, sessionMessages)
+          this.persistMessages(sessionId, sessionMessages)
+          this.notifyMessagesChanged(sessionId)
+        }
+        return
+      }
+    }
+
+    const assistantMessage: Message = {
+      id,
+      type: isError ? 'error' : 'assistant',
+      content,
+      timestamp: new Date().toISOString(),
+      isStreaming
+    }
+    this.addMessage(sessionId, assistantMessage)
   }
 
   private async saveOfficialCodexThreadId(sessionId: string, threadId: string): Promise<void> {
@@ -1624,19 +1675,19 @@ export class SessionStore {
     const items = turn['items'] as Array<Record<string, Object>>
     if (!items || items.length === 0) return ''
 
-    const parts: string[] = []
-    for (let i = 0; i < items.length; i++) {
+    let latest = ''
+    for (let i = items.length - 1; i >= 0; i--) {
       const item = items[i]
       const type = item['type'] as string
       if (type === 'agentMessage' || type === 'assistantMessage') {
         const text = (item['text'] as string) || ''
-        if (text.length > 0) parts.push(text)
+        if (text.length > 0) return text.trim()
       } else if (type === 'error') {
         const message = (item['message'] as string) || ''
-        if (message.length > 0) parts.push(message)
+        if (message.length > 0) latest = message
       }
     }
-    return parts.join('\n\n').trim()
+    return latest.trim()
   }
 
   sendPermissionResponse(requestId: string, allowed: boolean, always: boolean = false): void {
