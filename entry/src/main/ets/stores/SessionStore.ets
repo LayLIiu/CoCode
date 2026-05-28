@@ -51,6 +51,7 @@ export class SessionStore {
 
   // WebSocket 状态
   private wsSubscribed: boolean = false
+  private officialCodexThreadIds: Map<string, string> = new Map()
 
   // 本地删除的会话ID集合（不从服务器重新加载）
   private locallyDeletedSessionIds: Set<string> = new Set()
@@ -1468,6 +1469,7 @@ export class SessionStore {
     if (!this.currentSessionId) return false
 
     const sessionId = this.currentSessionId
+    const session = this.sessions.find(s => s.id === sessionId)
 
     // 添加用户消息
     const userMessage: Message = {
@@ -1478,12 +1480,123 @@ export class SessionStore {
     }
     this.addMessage(sessionId, userMessage)
 
+    if (this.shouldUseOfficialCodexRemote(session, attachments)) {
+      this.sendOfficialCodexRemoteMessage(sessionId, content, session)
+      this.updateSessionStatus(sessionId, 'thinking')
+      return true
+    }
+
     // 发送到服务器
     wsService.sendUserMessage(sessionId, content, attachments)
 
     // 更新状态
     this.updateSessionStatus(sessionId, 'thinking')
     return true
+  }
+
+  private shouldUseOfficialCodexRemote(session: Session | undefined, attachments?: AttachmentRef[]): boolean {
+    const aiTool = (session?.aiTool || '').toLowerCase()
+    return aiTool.includes('codex') && (!attachments || attachments.length === 0)
+  }
+
+  private sendOfficialCodexRemoteMessage(sessionId: string, content: string, session: Session | undefined): void {
+    const cwd = session?.workDir || session?.projectPath || ''
+    const threadId = this.officialCodexThreadIds.get(sessionId) || ''
+    apiService.sendCodexRemotePrompt(content, cwd, threadId)
+      .then((result: Record<string, Object>) => {
+        const nextThreadId = (result['threadId'] as string) || ''
+        const turnId = (result['turnId'] as string) || ''
+        if (nextThreadId.length > 0) {
+          this.officialCodexThreadIds.set(sessionId, nextThreadId)
+          this.pollOfficialCodexRemoteTurn(sessionId, nextThreadId, turnId)
+        }
+      })
+      .catch((e: Error) => {
+        const errMsg: Message = {
+          id: 'official-codex-error-' + Date.now(),
+          type: 'error',
+          content: e.message || String(e),
+          timestamp: new Date().toISOString()
+        }
+        this.addMessage(sessionId, errMsg)
+        this.updateSessionStatus(sessionId, 'idle')
+      })
+  }
+
+  private pollOfficialCodexRemoteTurn(sessionId: string, threadId: string, turnId: string, attempt: number = 0): void {
+    if (attempt > 120) {
+      this.updateSessionStatus(sessionId, 'idle')
+      return
+    }
+
+    setTimeout(() => {
+      apiService.getCodexRemoteThreadTurns(threadId)
+        .then((response: Record<string, Object>) => {
+          const result = response['result'] as Record<string, Object>
+          const data = (result && result['data']) as Array<Record<string, Object>>
+          const targetTurn = this.findOfficialCodexTurn(data, turnId)
+          const status = (targetTurn && targetTurn['status'] as string) || ''
+          const text = this.extractOfficialCodexAssistantText(targetTurn)
+
+          if (text.length > 0 && (status === 'completed' || status === 'failed' || status === 'cancelled')) {
+            const assistantMessage: Message = {
+              id: 'official-codex-assistant-' + (turnId || Date.now().toString()),
+              type: status === 'failed' ? 'error' : 'assistant',
+              content: text,
+              timestamp: new Date().toISOString()
+            }
+            this.addMessage(sessionId, assistantMessage)
+            this.updateSessionStatus(sessionId, status === 'completed' ? 'completed' : 'idle')
+            return
+          }
+
+          this.updateSessionStatus(sessionId, status === 'inProgress' || status === 'pending' ? 'streaming' : 'thinking')
+          this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1)
+        })
+        .catch((e: Error) => {
+          if (attempt < 5) {
+            this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1)
+            return
+          }
+          const errMsg: Message = {
+            id: 'official-codex-poll-error-' + Date.now(),
+            type: 'error',
+            content: e.message || String(e),
+            timestamp: new Date().toISOString()
+          }
+          this.addMessage(sessionId, errMsg)
+          this.updateSessionStatus(sessionId, 'idle')
+        })
+    }, 1500)
+  }
+
+  private findOfficialCodexTurn(data: Array<Record<string, Object>> | undefined, turnId: string): Record<string, Object> | null {
+    if (!data || data.length === 0) return null
+    for (let i = 0; i < data.length; i++) {
+      const item = data[i]
+      if (!turnId || item['id'] === turnId) return item
+    }
+    return data[data.length - 1]
+  }
+
+  private extractOfficialCodexAssistantText(turn: Record<string, Object> | null): string {
+    if (!turn) return ''
+    const items = turn['items'] as Array<Record<string, Object>>
+    if (!items || items.length === 0) return ''
+
+    const parts: string[] = []
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      const type = item['type'] as string
+      if (type === 'agentMessage' || type === 'assistantMessage') {
+        const text = (item['text'] as string) || ''
+        if (text.length > 0) parts.push(text)
+      } else if (type === 'error') {
+        const message = (item['message'] as string) || ''
+        if (message.length > 0) parts.push(message)
+      }
+    }
+    return parts.join('\n\n').trim()
   }
 
   sendPermissionResponse(requestId: string, allowed: boolean, always: boolean = false): void {

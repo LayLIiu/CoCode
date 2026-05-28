@@ -59,6 +59,12 @@ export struct SettingsPage {
   @State capabilityCheckedAt: number = 0
   @State capabilityOk: boolean = false
 
+  // Official Codex 远程控制
+  @State codexControllerStatus: string = '未知'
+  @State codexControllerClientId: string = ''
+  @State codexControllerWsConnected: boolean = false
+  @State codexControllerLoading: boolean = false
+
   // 模型选择
   @State showModelSheet: boolean = false
   @State isLoadingModels: boolean = false
@@ -70,6 +76,7 @@ export struct SettingsPage {
   aboutToAppear(): void {
     this.loadSettings()
     this.updateConnectionStatus()
+    this.refreshCodexControllerStatus()
   }
 
   aboutToDisappear(): void {
@@ -166,6 +173,15 @@ export struct SettingsPage {
 
           ListItem() {
             this.DesktopCapabilityPanel()
+          }
+
+          // Official Codex 远程控制
+          ListItem() {
+            this.SettingSection('Official Codex 远程控制')
+          }
+
+          ListItem() {
+            this.OfficialCodexControllerPanel()
           }
 
           // 模型与权限
@@ -691,6 +707,93 @@ export struct SettingsPage {
           .fontColor(Theme.TextTertiary)
           .lineHeight(19)
       }
+    }
+    .width('100%')
+    .padding(Theme.SpacingLG)
+    .backgroundColor('rgba(255, 255, 255, 0.055)')
+    .borderRadius(Theme.RadiusLarge)
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.09)' })
+  }
+
+  @Builder
+  OfficialCodexControllerPanel() {
+    Column({ space: Theme.SpacingMD }) {
+      Row() {
+        Column({ space: 5 }) {
+          Text('Codex 控制器')
+            .fontSize(Theme.FontHeading)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextPrimary)
+
+          Text(this.getCodexControllerSummaryText())
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+      }
+      .width('100%')
+
+      // 状态指标
+      Row({ space: 8 }) {
+        this.ConnectionMetric('状态', this.codexControllerStatus, this.getCodexControllerStatusColor(), this.getCodexControllerStatusBackground())
+        this.ConnectionMetric('WS', this.codexControllerWsConnected ? '已连接' : '未连接',
+          this.codexControllerWsConnected ? Theme.SuccessColor : Theme.TextTertiary,
+          this.codexControllerWsConnected ? 'rgba(48, 209, 88, 0.14)' : 'rgba(255, 255, 255, 0.045)')
+        if (this.codexControllerClientId) {
+          Text(this.codexControllerClientId.substring(0, 8) + '...')
+            .fontSize(Theme.FontTiny)
+            .fontColor(Theme.TextTertiary)
+            .maxLines(1)
+        }
+      }
+      .width('100%')
+
+      // 操作按钮
+      Row({ space: Theme.SpacingMD }) {
+        Button() {
+          if (this.codexControllerLoading) {
+            LoadingProgress().width(16).height(16).color(Theme.TextOnPrimary)
+          } else {
+            Text(this.codexControllerWsConnected ? '断开' : '恢复 & 连接')
+              .fontSize(Theme.FontTiny)
+              .fontColor(Theme.TextOnPrimary)
+          }
+        }
+        .layoutWeight(1)
+        .height(36)
+        .backgroundColor(this.codexControllerWsConnected ? Theme.ErrorColor : Theme.PrimaryColor)
+        .borderRadius(9)
+        .enabled(!this.codexControllerLoading)
+        .onClick(() => {
+          if (this.codexControllerWsConnected) {
+            this.disconnectCodexController()
+          } else {
+            this.restoreAndConnectCodexController()
+          }
+        })
+
+        Button() {
+          if (this.codexControllerLoading) {
+            LoadingProgress().width(16).height(16).color(Theme.TextOnPrimary)
+          } else {
+            Text('刷新')
+              .fontSize(Theme.FontTiny)
+              .fontColor(Theme.TextOnPrimary)
+          }
+        }
+        .height(36)
+        .width(80)
+        .backgroundColor('rgba(255, 255, 255, 0.1)')
+        .borderRadius(9)
+        .enabled(!this.codexControllerLoading)
+        .onClick(() => {
+          this.refreshCodexControllerStatus()
+        })
+      }
+      .width('100%')
     }
     .width('100%')
     .padding(Theme.SpacingLG)
@@ -1981,5 +2084,105 @@ export struct SettingsPage {
     if (item.available) return 'rgba(48, 209, 88, 0.14)'
     if (item.required) return 'rgba(255, 59, 48, 0.12)'
     return 'rgba(255, 159, 10, 0.12)'
+  }
+
+  // MARK: - Official Codex Controller 操作方法
+
+  private getCodexControllerSummaryText(): string {
+    if (this.codexControllerLoading) return '正在查询状态...'
+    if (this.codexControllerStatus === '未知') return '点击刷新查询 Official Codex 控制器状态'
+    if (this.codexControllerWsConnected) return '控制器 WebSocket 已连接，可远程管理桌面端'
+    if (this.codexControllerStatus === '已就绪') return '已授权，点击"恢复 & 连接"建立远程连接'
+    return `状态: ${this.codexControllerStatus}`
+  }
+
+  private getCodexControllerStatusColor(): ResourceColor {
+    switch (this.codexControllerStatus) {
+      case '已连接': return Theme.SuccessColor
+      case '已就绪': return Theme.AccentBlue
+      case '未授权': return Theme.AccentOrange
+      case '未知': return Theme.TextTertiary
+      default: return Theme.TextSecondary
+    }
+  }
+
+  private getCodexControllerStatusBackground(): string {
+    switch (this.codexControllerStatus) {
+      case '已连接': return 'rgba(48, 209, 88, 0.14)'
+      case '已就绪': return 'rgba(10, 132, 255, 0.14)'
+      case '未授权': return 'rgba(255, 159, 10, 0.14)'
+      default: return 'rgba(255, 255, 255, 0.045)'
+    }
+  }
+
+  private async refreshCodexControllerStatus(): Promise<void> {
+    if (!apiService.getBaseUrl()) return
+    this.codexControllerLoading = true
+    try {
+      // 先查 WS 状态
+      let wsConnected = false
+      try {
+        const wsStatus = await apiService.getCodexControllerWsStatus()
+        wsConnected = (wsStatus['connected'] as boolean) || false
+      } catch (_e) { /* WS status endpoint may fail if not enrolled */ }
+
+      // 再查整体状态
+      let statusText = '未知'
+      let clientId = ''
+      try {
+        const status = await apiService.getCodexRemoteStatus()
+        const controllerSession = status['controllerSession'] as Record<string, Object> | null
+        if (controllerSession) {
+          statusText = wsConnected ? '已连接' : '已就绪'
+          clientId = (controllerSession['clientId'] as string) || ''
+        } else {
+          statusText = '未授权'
+        }
+      } catch (_e) {
+        statusText = '未授权'
+      }
+
+      this.codexControllerStatus = statusText
+      this.codexControllerClientId = clientId
+      this.codexControllerWsConnected = wsConnected
+    } catch (e) {
+      console.error(`[Settings] Codex controller status error: ${e}`)
+      this.codexControllerStatus = '未授权'
+    }
+    this.codexControllerLoading = false
+  }
+
+  private async restoreAndConnectCodexController(): Promise<void> {
+    this.codexControllerLoading = true
+    try {
+      const result = await apiService.restoreCodexControllerSession(true)
+      if ((result['ok'] as boolean)) {
+        this.codexControllerStatus = '已连接'
+        this.codexControllerWsConnected = true
+        // 获取 clientId
+        const session = result['session'] as Record<string, Object> | null
+        if (session) {
+          this.codexControllerClientId = (session['clientId'] as string) || ''
+        }
+      } else {
+        this.codexControllerStatus = '未授权'
+      }
+    } catch (e) {
+      console.error(`[Settings] Restore controller error: ${e}`)
+      this.codexControllerStatus = '未授权'
+    }
+    this.codexControllerLoading = false
+  }
+
+  private async disconnectCodexController(): Promise<void> {
+    this.codexControllerLoading = true
+    try {
+      await apiService.disconnectCodexController()
+      this.codexControllerWsConnected = false
+      this.codexControllerStatus = '已就绪'
+    } catch (e) {
+      console.error(`[Settings] Disconnect controller error: ${e}`)
+    }
+    this.codexControllerLoading = false
   }
 }

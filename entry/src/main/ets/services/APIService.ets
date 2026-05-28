@@ -1418,6 +1418,82 @@ export class APIService {
     }
   }
 
+  // MARK: - Official Codex Remote Control API
+
+  /**
+   * 获取 Official Codex Remote Control 状态
+   */
+  async getCodexRemoteStatus(): Promise<Record<string, Object>> {
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/status', 'GET', '')
+  }
+
+  /**
+   * 获取 controller session 信息
+   */
+  async getCodexControllerSession(): Promise<Record<string, Object>> {
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/controller-session', 'GET', '')
+  }
+
+  /**
+   * 恢复持久化的 controller session
+   */
+  async restoreCodexControllerSession(autoConnect: boolean = false): Promise<Record<string, Object>> {
+    const body = JSON.stringify({ autoConnect })
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/restore', 'POST', body)
+  }
+
+  /**
+   * 刷新 controller token
+   */
+  async refreshCodexControllerToken(): Promise<Record<string, Object>> {
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/refresh', 'POST', '')
+  }
+
+  /**
+   * 连接 controller WebSocket
+   */
+  async connectCodexController(): Promise<Record<string, Object>> {
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/connect', 'POST', '')
+  }
+
+  /**
+   * 获取 controller WebSocket 状态
+   */
+  async getCodexControllerWsStatus(): Promise<Record<string, Object>> {
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/ws-status', 'GET', '')
+  }
+
+  /**
+   * 断开 controller WebSocket
+   */
+  async disconnectCodexController(): Promise<Record<string, Object>> {
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/ws-disconnect', 'POST', '')
+  }
+
+  /**
+   * 通过官方 Codex Remote Control 向 Codex Desktop 发送消息
+   */
+  async sendCodexRemotePrompt(prompt: string, cwd?: string, threadId?: string): Promise<Record<string, Object>> {
+    const body = JSON.stringify({
+      prompt,
+      cwd: cwd || null,
+      threadId: threadId || null
+    })
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/send', 'POST', body)
+  }
+
+  /**
+   * 拉取官方 Codex Desktop 线程 turns，用于手机端同步 AI 回复
+   */
+  async getCodexRemoteThreadTurns(threadId: string): Promise<Record<string, Object>> {
+    const encoded = encodeURIComponent(threadId)
+    return await this.request<Record<string, Object>>(
+      `/api/official-codex-remote/thread/${encoded}/turns?itemsView=full&sortDirection=asc&limit=20`,
+      'GET',
+      ''
+    )
+  }
+
   // MARK: - Push Token 上报
 
   async uploadPushToken(token: string): Promise<void> {
