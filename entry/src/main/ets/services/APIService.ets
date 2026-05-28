@@ -1495,6 +1495,25 @@ export class APIService {
     )
   }
 
+  /**
+   * 拉取官方 Codex Desktop 线程列表
+   */
+  async listCodexRemoteThreads(limit: number = 50, cursor?: string): Promise<Record<string, Object>> {
+    let path = `/api/official-codex-remote/threads?limit=${limit}&sortDirection=desc`
+    if (cursor && cursor.length > 0) {
+      path += `&cursor=${encodeURIComponent(cursor)}`
+    }
+    return await this.request<Record<string, Object>>(path, 'GET', '')
+  }
+
+  /**
+   * 读取官方 Codex Desktop 单个线程元信息
+   */
+  async readCodexRemoteThread(threadId: string): Promise<Record<string, Object>> {
+    const encoded = encodeURIComponent(threadId)
+    return await this.request<Record<string, Object>>(`/api/official-codex-remote/thread/${encoded}`, 'GET', '')
+  }
+
   // MARK: - Push Token 上报
 
   async uploadPushToken(token: string): Promise<void> {
