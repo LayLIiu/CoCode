@@ -41,6 +41,7 @@ export interface Session {
   modifiedAt: string
   messageCount: number
   aiTool?: string  // 'claude' | 'codex' | 'opencode'
+  officialCodexThreadId?: string
 }
 
 // MARK: - 消息

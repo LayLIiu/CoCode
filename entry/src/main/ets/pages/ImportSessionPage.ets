@@ -45,7 +45,12 @@ struct ImportSessionPage {
     try {
       const allSessions = await apiService.getSessions()
       // 根据Tab类型过滤
-      this.sessions = allSessions.filter((s: Session) => this.isSessionForTab(s))
+      let importableSessions = allSessions.filter((s: Session) => this.isSessionForTab(s))
+      if (this.tabType === TabType.CODEX) {
+        const officialSessions = await this.loadOfficialCodexSessions()
+        importableSessions = [...officialSessions, ...importableSessions]
+      }
+      this.sessions = importableSessions
     } catch (e) {
       console.error(`[ImportSessionPage] Load error: ${e}`)
     }
@@ -75,12 +80,63 @@ struct ImportSessionPage {
     return false
   }
 
+  private async loadOfficialCodexSessions(): Promise<Session[]> {
+    try {
+      const response = await apiService.listCodexRemoteThreads(50)
+      const result = response['result'] as Record<string, Object>
+      const data = (result && result['data']) as Array<Record<string, Object>>
+      if (!data || data.length === 0) return []
+
+      const sessions: Session[] = []
+      for (let i = 0; i < data.length; i++) {
+        const thread = data[i]
+        const threadId = (thread['id'] as string) || ''
+        if (threadId.length === 0) continue
+
+        const preview = ((thread['preview'] as string) || '').trim()
+        const cwd = ((thread['cwd'] as string) || '').trim()
+        const createdAt = this.formatOfficialCodexTime(thread['createdAt'])
+        const updatedAt = this.formatOfficialCodexTime(thread['updatedAt'])
+        sessions.push({
+          id: 'official-codex-' + threadId,
+          title: preview.length > 0 ? preview : 'Codex Desktop 对话',
+          projectPath: cwd.length > 0 ? cwd : 'Codex Desktop',
+          workDir: cwd,
+          workDirExists: true,
+          createdAt,
+          modifiedAt: updatedAt,
+          messageCount: 0,
+          aiTool: 'codex',
+          officialCodexThreadId: threadId
+        })
+      }
+      return sessions
+    } catch (e) {
+      console.error(`[ImportSessionPage] Load Official Codex threads error: ${e}`)
+      return []
+    }
+  }
+
+  private formatOfficialCodexTime(value: Object): string {
+    const raw = Number(value || Date.now())
+    const ms = raw > 1000000000000 ? raw : raw * 1000
+    return new Date(ms).toISOString()
+  }
+
   // 过滤掉已存在的会话（已删除/归档的会话可以重新导入恢复）
   private getNotImportedSessions(): Session[] {
     const existingIds = new Set<string>()
     sessionStore.sessions.forEach((s: Session) => existingIds.add(s.id))
+    const existingOfficialThreadIds = new Set<string>()
+    sessionStore.sessions.forEach((s: Session) => {
+      if (s.officialCodexThreadId) existingOfficialThreadIds.add(s.officialCodexThreadId)
+    })
 
-    return this.sessions.filter((s: Session) => !existingIds.has(s.id))
+    return this.sessions.filter((s: Session) => {
+      if (existingIds.has(s.id)) return false
+      if (s.officialCodexThreadId && existingOfficialThreadIds.has(s.officialCodexThreadId)) return false
+      return true
+    })
   }
 
   private toggleSelection(sessionId: string): void {
@@ -113,6 +169,10 @@ struct ImportSessionPage {
     // 合并到本地
     for (let i = 0; i < selectedSessions.length; i++) {
       const session = selectedSessions[i]
+      if (session.officialCodexThreadId) {
+        await sessionStore.importOfficialCodexThread(session)
+        continue
+      }
       // 检查是否已存在
       let exists = false
       for (let j = 0; j < sessionStore.sessions.length; j++) {
@@ -277,9 +337,9 @@ struct ImportSessionPage {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-        Text(`${session.messageCount} 条消息`)
+        Text(session.officialCodexThreadId ? 'Codex Desktop' : `${session.messageCount} 条消息`)
           .fontSize(Theme.FontTiny)
-          .fontColor(Theme.TextTertiary)
+          .fontColor(session.officialCodexThreadId ? Theme.PrimaryColor : Theme.TextTertiary)
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)

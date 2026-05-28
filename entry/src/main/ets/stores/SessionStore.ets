@@ -262,8 +262,12 @@ export class SessionStore {
 
       // 合并本地修改时间（避免被服务器旧数据覆盖）
       const localModifiedMap: Map<string, string> = new Map()
+      const localOfficialCodexSessions: Session[] = []
       for (let i = 0; i < this.sessions.length; i++) {
         localModifiedMap.set(this.sessions[i].id, this.sessions[i].modifiedAt)
+        if (this.sessions[i].officialCodexThreadId && !this.locallyDeletedSessionIds.has(this.sessions[i].id)) {
+          localOfficialCodexSessions.push(this.sessions[i])
+        }
       }
 
       this.sessions = filteredServerSessions.map(serverSession => {
@@ -281,13 +285,28 @@ export class SessionStore {
               createdAt: serverSession.createdAt,
               modifiedAt: localTime,
               messageCount: serverSession.messageCount,
-              aiTool: serverSession.aiTool
+              aiTool: serverSession.aiTool,
+              officialCodexThreadId: serverSession.officialCodexThreadId
             }
             return updatedSession
           }
         }
         return serverSession
       })
+
+      const mergedIds = new Set<string>()
+      const mergedOfficialThreadIds = new Set<string>()
+      this.sessions.forEach((session: Session) => {
+        mergedIds.add(session.id)
+        if (session.officialCodexThreadId) mergedOfficialThreadIds.add(session.officialCodexThreadId)
+      })
+      for (let i = 0; i < localOfficialCodexSessions.length; i++) {
+        const session = localOfficialCodexSessions[i]
+        const threadId = session.officialCodexThreadId || ''
+        if (!mergedIds.has(session.id) && (threadId.length === 0 || !mergedOfficialThreadIds.has(threadId))) {
+          this.sessions.push(session)
+        }
+      }
 
       // 保存到本地
       await storageService.saveSessions(this.sessions)
@@ -756,6 +775,26 @@ export class SessionStore {
   async saveSessionsToStorage(): Promise<void> {
     await storageService.saveSessions(this.sessions)
     this.notifySessionsChanged()
+  }
+
+  async importOfficialCodexThread(session: Session): Promise<void> {
+    const threadId = session.officialCodexThreadId || ''
+    if (!threadId) return
+
+    let exists = false
+    for (let i = 0; i < this.sessions.length; i++) {
+      if (this.sessions[i].id === session.id || this.sessions[i].officialCodexThreadId === threadId) {
+        exists = true
+        break
+      }
+    }
+
+    if (!exists) {
+      this.sessions.push(session)
+    }
+    await this.saveOfficialCodexThreadId(session.id, threadId)
+    await this.restoreSessionFromDeleted(session.id)
+    await this.saveSessionsToStorage()
   }
 
   // MARK: - 消息操作
@@ -1522,7 +1561,7 @@ export class SessionStore {
       .catch(() => {})
       .then(async () => {
         const cwd = session?.workDir || session?.projectPath || ''
-        const threadId = this.officialCodexThreadIds.get(sessionId) || ''
+        const threadId = this.officialCodexThreadIds.get(sessionId) || session?.officialCodexThreadId || ''
         const result = await apiService.sendCodexRemotePrompt(content, cwd, threadId, sessionId)
         const nextThreadId = (result['threadId'] as string) || ''
         const turnId = (result['turnId'] as string) || ''
@@ -2466,7 +2505,8 @@ export class SessionStore {
         createdAt: old.createdAt,
         modifiedAt: old.modifiedAt,
         messageCount: old.messageCount,
-        aiTool: old.aiTool
+        aiTool: old.aiTool,
+        officialCodexThreadId: old.officialCodexThreadId
       }
       this.sessions[index] = updated
       this.notifySessionsChanged()
