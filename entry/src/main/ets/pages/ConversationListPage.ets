@@ -368,6 +368,7 @@ export struct ConversationListPage {
         providerId === 'anthropic' ||
         providerId.toLowerCase().includes('claude')
     } else if (this.tabType === TabType.CODEX) {
+      if (session.officialCodexThreadId) return true
       return providerId === 'codex' ||
         providerId === 'openai' ||
         providerId.toLowerCase().includes('codex') ||

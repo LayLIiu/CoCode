@@ -197,6 +197,7 @@ export class SessionStore {
 
         // 过滤掉本地已删除的会话（防止本地存储写入失败导致旧数据残留）
         this.sessions = this.sessions.filter(s => !this.locallyDeletedSessionIds.has(s.id))
+        this.hydrateOfficialCodexThreadIds()
 
         // 并发加载所有会话的本地消息（每批 5 个，避免一次性过多）
         const batchSize = 5
@@ -778,25 +779,43 @@ export class SessionStore {
     this.notifySessionsChanged()
   }
 
-  async importOfficialCodexThread(session: Session): Promise<void> {
-    const threadId = session.officialCodexThreadId || ''
-    if (!threadId) return
+  async importOfficialCodexThreads(sessions: Session[]): Promise<void> {
+    const imported: Session[] = []
+    for (let i = 0; i < sessions.length; i++) {
+      const session = sessions[i]
+      const threadId = session.officialCodexThreadId || ''
+      if (!threadId) continue
 
-    let exists = false
-    for (let i = 0; i < this.sessions.length; i++) {
-      if (this.sessions[i].id === session.id || this.sessions[i].officialCodexThreadId === threadId) {
-        exists = true
-        break
+      let exists = false
+      for (let j = 0; j < this.sessions.length; j++) {
+        if (this.sessions[j].id === session.id || this.sessions[j].officialCodexThreadId === threadId) {
+          exists = true
+          break
+        }
       }
+
+      if (!exists) {
+        this.sessions.push(session)
+        imported.push(session)
+      }
+      this.officialCodexThreadIds.set(session.id, threadId)
+      await this.restoreSessionFromDeleted(session.id)
     }
 
-    if (!exists) {
-      this.sessions.push(session)
-    }
-    await this.saveOfficialCodexThreadId(session.id, threadId)
-    await this.restoreSessionFromDeleted(session.id)
-    await this.syncOfficialCodexThreadMessages(session.id, threadId)
+    await this.saveOfficialCodexThreadIds()
     await this.saveSessionsToStorage()
+
+    for (let i = 0; i < imported.length; i++) {
+      const session = imported[i]
+      const threadId = session.officialCodexThreadId || ''
+      void this.syncOfficialCodexThreadMessages(session.id, threadId)
+        .then(() => this.saveSessionsToStorage())
+        .catch((e: Error) => console.error(`[SessionStore] Background Official Codex sync error: ${e.message}`))
+    }
+  }
+
+  async importOfficialCodexThread(session: Session): Promise<void> {
+    await this.importOfficialCodexThreads([session])
   }
 
   // MARK: - 消息操作
@@ -1695,11 +1714,39 @@ export class SessionStore {
 
   private async saveOfficialCodexThreadId(sessionId: string, threadId: string): Promise<void> {
     this.officialCodexThreadIds.set(sessionId, threadId)
+    await this.saveOfficialCodexThreadIds()
+  }
+
+  private async saveOfficialCodexThreadIds(): Promise<void> {
     const raw: Record<string, string> = {}
     this.officialCodexThreadIds.forEach((value: string, key: string) => {
       raw[key] = value
     })
     await storageService.saveString('official_codex_thread_ids', JSON.stringify(raw))
+  }
+
+  private hydrateOfficialCodexThreadIds(): void {
+    if (this.officialCodexThreadIds.size === 0) return
+    for (let i = 0; i < this.sessions.length; i++) {
+      const session = this.sessions[i]
+      if (!session.officialCodexThreadId) {
+        const threadId = this.officialCodexThreadIds.get(session.id)
+        if (threadId) {
+          this.sessions[i] = {
+            id: session.id,
+            title: session.title,
+            projectPath: session.projectPath,
+            workDir: session.workDir,
+            workDirExists: session.workDirExists,
+            createdAt: session.createdAt,
+            modifiedAt: session.modifiedAt,
+            messageCount: session.messageCount,
+            aiTool: session.aiTool || 'codex',
+            officialCodexThreadId: threadId
+          }
+        }
+      }
+    }
   }
 
   private async syncOfficialCodexThreadMessages(sessionId: string, threadId: string): Promise<void> {

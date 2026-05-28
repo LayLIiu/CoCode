@@ -165,12 +165,15 @@ struct ImportSessionPage {
 
     // 将选中的会话添加到本地列表
     const selectedSessions = this.sessions.filter((s: Session) => this.selectedIds.includes(s.id))
+    const officialCodexSessions = selectedSessions.filter((s: Session) => !!s.officialCodexThreadId)
+    if (officialCodexSessions.length > 0) {
+      await sessionStore.importOfficialCodexThreads(officialCodexSessions)
+    }
 
     // 合并到本地
     for (let i = 0; i < selectedSessions.length; i++) {
       const session = selectedSessions[i]
       if (session.officialCodexThreadId) {
-        await sessionStore.importOfficialCodexThread(session)
         continue
       }
       // 检查是否已存在
