@@ -52,6 +52,7 @@ export class SessionStore {
   // WebSocket 状态
   private wsSubscribed: boolean = false
   private officialCodexThreadIds: Map<string, string> = new Map()
+  private officialCodexSendQueues: Map<string, Promise<void>> = new Map()
 
   // 本地删除的会话ID集合（不从服务器重新加载）
   private locallyDeletedSessionIds: Set<string> = new Set()
@@ -170,6 +171,22 @@ export class SessionStore {
           console.info(`[SessionStore] Loaded ${this.locallyDeletedSessionIds.size} locally deleted session IDs`)
         } catch (e) {
           console.error(`[SessionStore] Parse deleted session IDs error: ${e}`)
+        }
+      }
+
+      const savedOfficialCodexThreadIds = await storageService.loadString('official_codex_thread_ids')
+      if (savedOfficialCodexThreadIds) {
+        try {
+          const parsed = JSON.parse(savedOfficialCodexThreadIds) as Record<string, string>
+          Object.keys(parsed).forEach((sessionId: string) => {
+            const threadId = parsed[sessionId]
+            if (threadId && threadId.length > 0) {
+              this.officialCodexThreadIds.set(sessionId, threadId)
+            }
+          })
+          console.info(`[SessionStore] Loaded ${this.officialCodexThreadIds.size} Official Codex thread bindings`)
+        } catch (e) {
+          console.error(`[SessionStore] Parse Official Codex thread bindings error: ${e}`)
         }
       }
 
@@ -1500,16 +1517,19 @@ export class SessionStore {
   }
 
   private sendOfficialCodexRemoteMessage(sessionId: string, content: string, session: Session | undefined): void {
-    const cwd = session?.workDir || session?.projectPath || ''
-    const threadId = this.officialCodexThreadIds.get(sessionId) || ''
-    apiService.sendCodexRemotePrompt(content, cwd, threadId)
-      .then((result: Record<string, Object>) => {
+    const previous = this.officialCodexSendQueues.get(sessionId) || Promise.resolve()
+    const next = previous
+      .catch(() => {})
+      .then(async () => {
+        const cwd = session?.workDir || session?.projectPath || ''
+        const threadId = this.officialCodexThreadIds.get(sessionId) || ''
+        const result = await apiService.sendCodexRemotePrompt(content, cwd, threadId)
         const nextThreadId = (result['threadId'] as string) || ''
         const turnId = (result['turnId'] as string) || ''
-        if (nextThreadId.length > 0) {
-          this.officialCodexThreadIds.set(sessionId, nextThreadId)
-          this.pollOfficialCodexRemoteTurn(sessionId, nextThreadId, turnId)
-        }
+        if (nextThreadId.length <= 0) return
+
+        await this.saveOfficialCodexThreadId(sessionId, nextThreadId)
+        await this.pollOfficialCodexRemoteTurn(sessionId, nextThreadId, turnId)
       })
       .catch((e: Error) => {
         const errMsg: Message = {
@@ -1521,15 +1541,23 @@ export class SessionStore {
         this.addMessage(sessionId, errMsg)
         this.updateSessionStatus(sessionId, 'idle')
       })
+      .then(() => {
+        if (this.officialCodexSendQueues.get(sessionId) === next) {
+          this.officialCodexSendQueues.delete(sessionId)
+        }
+      })
+
+    this.officialCodexSendQueues.set(sessionId, next)
   }
 
-  private pollOfficialCodexRemoteTurn(sessionId: string, threadId: string, turnId: string, attempt: number = 0): void {
+  private pollOfficialCodexRemoteTurn(sessionId: string, threadId: string, turnId: string, attempt: number = 0): Promise<void> {
     if (attempt > 120) {
       this.updateSessionStatus(sessionId, 'idle')
-      return
+      return Promise.resolve()
     }
 
-    setTimeout(() => {
+    return new Promise((resolve) => {
+      setTimeout(() => {
       apiService.getCodexRemoteThreadTurns(threadId)
         .then((response: Record<string, Object>) => {
           const result = response['result'] as Record<string, Object>
@@ -1547,15 +1575,16 @@ export class SessionStore {
             }
             this.addMessage(sessionId, assistantMessage)
             this.updateSessionStatus(sessionId, status === 'completed' ? 'completed' : 'idle')
+            resolve()
             return
           }
 
           this.updateSessionStatus(sessionId, status === 'inProgress' || status === 'pending' ? 'streaming' : 'thinking')
-          this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1)
+          this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
         })
         .catch((e: Error) => {
           if (attempt < 5) {
-            this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1)
+            this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
             return
           }
           const errMsg: Message = {
@@ -1566,8 +1595,19 @@ export class SessionStore {
           }
           this.addMessage(sessionId, errMsg)
           this.updateSessionStatus(sessionId, 'idle')
+          resolve()
         })
-    }, 1500)
+      }, 1500)
+    })
+  }
+
+  private async saveOfficialCodexThreadId(sessionId: string, threadId: string): Promise<void> {
+    this.officialCodexThreadIds.set(sessionId, threadId)
+    const raw: Record<string, string> = {}
+    this.officialCodexThreadIds.forEach((value: string, key: string) => {
+      raw[key] = value
+    })
+    await storageService.saveString('official_codex_thread_ids', JSON.stringify(raw))
   }
 
   private findOfficialCodexTurn(data: Array<Record<string, Object>> | undefined, turnId: string): Record<string, Object> | null {
