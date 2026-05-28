@@ -795,6 +795,7 @@ export class SessionStore {
     }
     await this.saveOfficialCodexThreadId(session.id, threadId)
     await this.restoreSessionFromDeleted(session.id)
+    await this.syncOfficialCodexThreadMessages(session.id, threadId)
     await this.saveSessionsToStorage()
   }
 
@@ -1699,6 +1700,102 @@ export class SessionStore {
       raw[key] = value
     })
     await storageService.saveString('official_codex_thread_ids', JSON.stringify(raw))
+  }
+
+  private async syncOfficialCodexThreadMessages(sessionId: string, threadId: string): Promise<void> {
+    try {
+      const response = await apiService.getCodexRemoteThreadTurns(threadId)
+      const result = response['result'] as Record<string, Object>
+      const data = (result && result['data']) as Array<Record<string, Object>>
+      const importedMessages = this.buildOfficialCodexMessagesFromTurns(data)
+      if (importedMessages.length === 0) return
+
+      this.messages.set(sessionId, this.deduplicateMessages(importedMessages))
+      await this.persistMessages(sessionId)
+      this.updateOfficialCodexImportedMessageCount(sessionId, importedMessages.length)
+      this.notifyMessagesChanged(sessionId)
+    } catch (e) {
+      console.error(`[SessionStore] Sync Official Codex thread messages error: ${e}`)
+    }
+  }
+
+  private buildOfficialCodexMessagesFromTurns(data: Array<Record<string, Object>> | undefined): Message[] {
+    if (!data || data.length === 0) return []
+
+    const messages: Message[] = []
+    for (let i = 0; i < data.length; i++) {
+      const turn = data[i]
+      const turnId = (turn['id'] as string) || i.toString()
+      const items = turn['items'] as Array<Record<string, Object>>
+      if (!items || items.length === 0) continue
+
+      for (let j = 0; j < items.length; j++) {
+        const item = items[j]
+        const type = item['type'] as string
+        if (type === 'userMessage') {
+          const text = this.extractOfficialCodexUserText(item)
+          if (text.length > 0) {
+            messages.push({
+              id: 'official-codex-user-' + turnId + '-' + j,
+              type: 'user',
+              content: text,
+              timestamp: new Date().toISOString()
+            })
+          }
+        } else if (type === 'agentMessage' || type === 'assistantMessage') {
+          const text = ((item['text'] as string) || '').trim()
+          if (text.length > 0) {
+            messages.push({
+              id: 'official-codex-assistant-' + turnId + '-' + j,
+              type: 'assistant',
+              content: text,
+              timestamp: new Date().toISOString()
+            })
+          }
+        } else if (type === 'error') {
+          const message = ((item['message'] as string) || '').trim()
+          if (message.length > 0) {
+            messages.push({
+              id: 'official-codex-error-' + turnId + '-' + j,
+              type: 'error',
+              content: message,
+              timestamp: new Date().toISOString()
+            })
+          }
+        }
+      }
+    }
+    return messages
+  }
+
+  private extractOfficialCodexUserText(item: Record<string, Object>): string {
+    const content = item['content'] as Array<Record<string, Object>>
+    if (!content || content.length === 0) return ''
+
+    const parts: string[] = []
+    for (let i = 0; i < content.length; i++) {
+      const text = ((content[i]['text'] as string) || '').trim()
+      if (text.length > 0) parts.push(text)
+    }
+    return parts.join('\n\n').trim()
+  }
+
+  private updateOfficialCodexImportedMessageCount(sessionId: string, count: number): void {
+    const index = this.sessions.findIndex(s => s.id === sessionId)
+    if (index < 0) return
+    const old = this.sessions[index]
+    this.sessions[index] = {
+      id: old.id,
+      title: old.title,
+      projectPath: old.projectPath,
+      workDir: old.workDir,
+      workDirExists: old.workDirExists,
+      createdAt: old.createdAt,
+      modifiedAt: old.modifiedAt,
+      messageCount: count,
+      aiTool: old.aiTool,
+      officialCodexThreadId: old.officialCodexThreadId
+    }
   }
 
   private findOfficialCodexTurn(data: Array<Record<string, Object>> | undefined, turnId: string): Record<string, Object> | null {
