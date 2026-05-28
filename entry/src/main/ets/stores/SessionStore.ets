@@ -1523,7 +1523,7 @@ export class SessionStore {
       .then(async () => {
         const cwd = session?.workDir || session?.projectPath || ''
         const threadId = this.officialCodexThreadIds.get(sessionId) || ''
-        const result = await apiService.sendCodexRemotePrompt(content, cwd, threadId)
+        const result = await apiService.sendCodexRemotePrompt(content, cwd, threadId, sessionId)
         const nextThreadId = (result['threadId'] as string) || ''
         const turnId = (result['turnId'] as string) || ''
         if (nextThreadId.length <= 0) return

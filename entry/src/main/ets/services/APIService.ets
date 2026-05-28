@@ -1473,11 +1473,12 @@ export class APIService {
   /**
    * 通过官方 Codex Remote Control 向 Codex Desktop 发送消息
    */
-  async sendCodexRemotePrompt(prompt: string, cwd?: string, threadId?: string): Promise<Record<string, Object>> {
+  async sendCodexRemotePrompt(prompt: string, cwd?: string, threadId?: string, clientSessionId?: string): Promise<Record<string, Object>> {
     const body = JSON.stringify({
       prompt,
       cwd: cwd || null,
-      threadId: threadId || null
+      threadId: threadId || null,
+      clientSessionId: clientSessionId || null
     })
     return await this.request<Record<string, Object>>('/api/official-codex-remote/send', 'POST', body)
   }
