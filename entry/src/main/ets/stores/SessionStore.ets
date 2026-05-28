@@ -484,7 +484,8 @@ export class SessionStore {
           createdAt: old.createdAt,
           modifiedAt: new Date().toISOString(),
           messageCount: old.messageCount,
-          aiTool: old.aiTool
+          aiTool: old.aiTool,
+          officialCodexThreadId: old.officialCodexThreadId
         }
         this.sessions[index] = updated
 

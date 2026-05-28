@@ -277,7 +277,7 @@ export struct ConversationListPage {
     sessionStore.addStatusChangedListener(this.statusChangedListener)
 
     if (sessionStore.sessions && sessionStore.sessions.length > 0) {
-      this.sessions = sessionStore.sessions
+      this.refreshSessionsFromStore()
       this.isLoading = false
       // 每次出现时同步 stale 状态（WS 断开的工作状态重置为 idle）
       sessionStore.syncSessionStatuses()
@@ -286,6 +286,16 @@ export struct ConversationListPage {
     }
 
     this.loadRecentDirs()
+  }
+
+  onPageShow(): void {
+    this.refreshSessionsFromStore()
+  }
+
+  private refreshSessionsFromStore(): void {
+    this.sessions = [...(sessionStore.sessions || [])]
+    this.isLoading = sessionStore.isLoading
+    this.refreshTrigger = Date.now()
   }
 
   aboutToDisappear(): void {
