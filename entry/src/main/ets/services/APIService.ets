@@ -1496,6 +1496,18 @@ export class APIService {
   }
 
   /**
+   * 拉取官方 Codex Desktop 最新 turns，用于正在进行的回复轮询
+   */
+  async getCodexRemoteLatestThreadTurns(threadId: string, limit: number = 50): Promise<Record<string, Object>> {
+    const encoded = encodeURIComponent(threadId)
+    return await this.request<Record<string, Object>>(
+      `/api/official-codex-remote/thread/${encoded}/turns?itemsView=full&sortDirection=desc&limit=${limit}`,
+      'GET',
+      ''
+    )
+  }
+
+  /**
    * 拉取官方 Codex Desktop 线程列表
    */
   async listCodexRemoteThreads(limit: number = 50, cursor?: string): Promise<Record<string, Object>> {

@@ -1599,7 +1599,7 @@ export class SessionStore {
 
     return new Promise((resolve) => {
       setTimeout(() => {
-        apiService.getCodexRemoteThreadTurns(threadId)
+        apiService.getCodexRemoteLatestThreadTurns(threadId)
           .then((response: Record<string, Object>) => {
             const result = response['result'] as Record<string, Object>
             const data = (result && result['data']) as Array<Record<string, Object>>
