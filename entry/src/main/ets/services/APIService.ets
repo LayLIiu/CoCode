@@ -499,10 +499,12 @@ export class OkResponse {
 
 export class APIError extends Error {
   code: number = 0
+  serverCode: string = ''
 
-  constructor(message: string, code: number = 0) {
+  constructor(message: string, code: number = 0, serverCode: string = '') {
     super(message)
     this.code = code
+    this.serverCode = serverCode
   }
 }
 
@@ -1389,13 +1391,20 @@ export class APIService {
       if (response.responseCode >= 200 && response.responseCode < 300) {
         const result = response.result as string
         return JSON.parse(result) as T
-      } else if (response.responseCode === 401) {
-        throw new APIError('未授权，请检查配对码', 401)
-      } else if (response.responseCode === 404) {
-        throw new APIError('接口不存在，请检查服务器地址', 404)
-      } else if (response.responseCode === 500) {
-        throw new APIError('服务器内部错误', 500)
       } else {
+        const errorBody = this.parseErrorBody(response.result as string)
+        const serverMessage = errorBody['userMessage'] || errorBody['message'] || errorBody['error']
+        const serverCode = errorBody['error'] || ''
+        if (serverMessage && String(serverMessage).length > 0) {
+          throw new APIError(String(serverMessage), response.responseCode, String(serverCode))
+        }
+        if (response.responseCode === 401) {
+          throw new APIError('未授权，请检查配对码', 401)
+        } else if (response.responseCode === 404) {
+          throw new APIError('接口不存在，请检查服务器地址', 404)
+        } else if (response.responseCode === 500) {
+          throw new APIError('服务器内部错误', 500)
+        }
         throw new APIError(`请求失败 (${response.responseCode})`, response.responseCode)
       }
     } catch (e) {
@@ -1418,6 +1427,43 @@ export class APIService {
     }
   }
 
+  private parseErrorBody(raw: string): Record<string, string> {
+    if (!raw || raw.length === 0) return {}
+    try {
+      const parsed = JSON.parse(raw) as Record<string, Object>
+      const result: Record<string, string> = {}
+      if (parsed['userMessage']) result['userMessage'] = String(parsed['userMessage'])
+      if (parsed['message']) result['message'] = String(parsed['message'])
+      if (parsed['error']) result['error'] = String(parsed['error'])
+      return result
+    } catch (e) {
+      return {}
+    }
+  }
+
+  /**
+   * 通过官方 Codex Remote Control 向 Codex Desktop 发送消息
+   */
+  async sendCodexRemotePrompt(
+    prompt: string,
+    cwd?: string,
+    threadId?: string,
+    clientSessionId?: string,
+    model?: string,
+    reasoningEffort?: string,
+    serviceTier?: string
+  ): Promise<Record<string, Object>> {
+    const body = JSON.stringify({
+      prompt,
+      cwd: cwd || null,
+      threadId: threadId || null,
+      clientSessionId: clientSessionId || null,
+      model: model || null,
+      reasoningEffort: reasoningEffort || null,
+      serviceTier: serviceTier || null
+    })
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/send', 'POST', body)
+  }
   // MARK: - Official Codex Remote Control API
 
   /**
@@ -1471,25 +1517,12 @@ export class APIService {
   }
 
   /**
-   * 通过官方 Codex Remote Control 向 Codex Desktop 发送消息
-   */
-  async sendCodexRemotePrompt(prompt: string, cwd?: string, threadId?: string, clientSessionId?: string): Promise<Record<string, Object>> {
-    const body = JSON.stringify({
-      prompt,
-      cwd: cwd || null,
-      threadId: threadId || null,
-      clientSessionId: clientSessionId || null
-    })
-    return await this.request<Record<string, Object>>('/api/official-codex-remote/send', 'POST', body)
-  }
-
-  /**
    * 拉取官方 Codex Desktop 线程 turns，用于手机端同步 AI 回复
    */
   async getCodexRemoteThreadTurns(threadId: string): Promise<Record<string, Object>> {
     const encoded = encodeURIComponent(threadId)
     return await this.request<Record<string, Object>>(
-      `/api/official-codex-remote/thread/${encoded}/turns?itemsView=full&sortDirection=asc&limit=20`,
+      `/api/official-codex-remote/thread/${encoded}/turns?itemsView=full&sortDirection=desc&limit=20`,
       'GET',
       ''
     )
@@ -1524,6 +1557,26 @@ export class APIService {
   async readCodexRemoteThread(threadId: string): Promise<Record<string, Object>> {
     const encoded = encodeURIComponent(threadId)
     return await this.request<Record<string, Object>>(`/api/official-codex-remote/thread/${encoded}`, 'GET', '')
+  }
+
+  /**
+   * 回复官方 Codex Desktop Remote Control 权限审批
+   */
+  async sendCodexRemotePermissionResponse(requestId: string, allowed: boolean): Promise<Record<string, Object>> {
+    const body = JSON.stringify({
+      requestId,
+      allowed
+    })
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/permission-response', 'POST', body)
+  }
+
+  async getCodexRemotePendingPermissions(clientSessionId: string, threadId: string): Promise<Record<string, Object>> {
+    let path = '/api/official-codex-remote/pending-permissions'
+    const params: string[] = []
+    if (clientSessionId.length > 0) params.push('clientSessionId=' + encodeURIComponent(clientSessionId))
+    if (threadId.length > 0) params.push('threadId=' + encodeURIComponent(threadId))
+    if (params.length > 0) path += '?' + params.join('&')
+    return await this.request<Record<string, Object>>(path, 'GET', '')
   }
 
   // MARK: - Push Token 上报

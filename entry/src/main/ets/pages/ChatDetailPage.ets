@@ -14,6 +14,7 @@ import { abilityAccessCtrl, common } from '@kit.AbilityKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { sessionStore } from '../stores/SessionStore'
 import { authStore } from '../stores/AuthStore'
+import { appState } from '../stores/AppState'
 import { apiService } from '../services/APIService'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { FileAttachmentBubble } from '../components/FileAttachmentBubble'
@@ -187,6 +188,8 @@ struct ChatDetailPage {
   @State contextTotal: number = 0
   @State contextMax: number = 0
   private contextPollTimer: number = -1
+  private officialCodexSyncTimer: number = -1
+  private officialCodexSyncInFlight: boolean = false
   private isDestroyed: boolean = false
 
   // 工作中计时（与 iOS StreamingStatusView 一致）
@@ -401,6 +404,7 @@ struct ChatDetailPage {
     // 定时拉取上下文使用率
     setTimeout(() => { if (!this.isDestroyed) this.fetchContextUsage() }, 1000)
     this.contextPollTimer = setInterval(() => { if (!this.isDestroyed) this.fetchContextUsage() }, 15000)
+    this.startOfficialCodexAutoSync()
 
     const draft = sessionStore.inputDrafts.get(this.sessionId)
     if (draft) {
@@ -420,6 +424,7 @@ struct ChatDetailPage {
     // 清理流式缓冲，防止页面重新进入时残留 Head 被刷入 Tail 导致重复
     sessionStore.streamHeads.delete(this.sessionId)
     this.stopWorkTimer()
+    this.stopOfficialCodexAutoSync()
     if (this.touchTimer >= 0) {
       clearTimeout(this.touchTimer)
       this.touchTimer = -1
@@ -429,6 +434,7 @@ struct ChatDetailPage {
       this.thinkingScrollTimer = -1
     }
     if (this.contextPollTimer >= 0) { clearInterval(this.contextPollTimer); this.contextPollTimer = -1 }
+    this.stopOfficialCodexAutoSync()
     // 停止音频采集
     if (this.audioFeedTimer !== -1) {
       clearInterval(this.audioFeedTimer)
@@ -459,17 +465,29 @@ struct ChatDetailPage {
       this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
       // 取消该会话的旧通知（后台时可能收到了通知）
       notificationHelper.cancelNotification(this.sessionId)
-      // 消息同步由 onForeground → messagesChangedListener 处理，此处不做避免重复
+      void sessionStore.syncCurrentOfficialCodexSession()
+        .then(() => {
+          this.refreshMessagesFromStore()
+        })
+        .catch((e: Error) => {
+          console.error(`[ChatDetailPage] Sync Official Codex session on show error: ${e.message}`)
+        })
+      this.startOfficialCodexAutoSync()
     }
   }
 
   onPageHide(): void {
     this.isPageActive = false
+    this.stopOfficialCodexAutoSync()
   }
 
   private async fetchContextUsage(): Promise<void> {
     if (!this.sessionId) return
     try {
+      if (this.isOfficialCodexSession()) {
+        await this.fetchOfficialCodexContextUsage()
+        return
+      }
       const res = await apiService.getInspection(this.sessionId)
       if (res) {
         if (res.percentage > 0) this.contextUsage = res.percentage
@@ -478,6 +496,109 @@ struct ChatDetailPage {
         this.contextMax = res.maxTokens
       }
     } catch (e) { /* ignore */ }
+  }
+
+  private async fetchOfficialCodexContextUsage(): Promise<void> {
+    const threadId = this.getCurrentOfficialCodexThreadId()
+    if (threadId.length <= 0) {
+      this.clearOfficialCodexContextUsage()
+      return
+    }
+
+    const response = await apiService.getCodexRemoteLatestThreadTurns(threadId, 5)
+    const result = response['result'] as Record<string, Object>
+    const data = (result && result['data']) as Array<Record<string, Object>>
+    if (!data || data.length === 0) {
+      this.clearOfficialCodexContextUsage()
+      return
+    }
+
+    for (let i = 0; i < data.length; i++) {
+      if (this.applyOfficialCodexContextFromRecord(data[i])) return
+      const items = data[i]['items'] as Array<Record<string, Object>>
+      if (!items || items.length === 0) continue
+      for (let j = 0; j < items.length; j++) {
+        if (this.applyOfficialCodexContextFromRecord(items[j])) return
+      }
+    }
+
+    this.clearOfficialCodexContextUsage()
+  }
+
+  private clearOfficialCodexContextUsage(): void {
+    this.contextUsage = 0
+    this.contextTotal = 0
+    this.contextMax = 0
+    this.contextModel = this.currentModel.length > 0 ? this.currentModel : 'Codex Desktop'
+  }
+
+  private getCurrentOfficialCodexThreadId(): string {
+    const session = sessionStore.sessions.find((s: Session) => s.id === this.sessionId)
+    return session?.officialCodexThreadId || ''
+  }
+
+  private applyOfficialCodexContextFromRecord(record: Record<string, Object>): boolean {
+    const model = this.getStringFromRecord(record, ['model', 'modelId', 'model_id'])
+    const context = record['context']
+    if (typeof context === 'object' && context !== null && this.applyOfficialCodexContextNumbers(context as Record<string, Object>, model)) {
+      return true
+    }
+    const contextUsage = record['contextUsage']
+    if (typeof contextUsage === 'object' && contextUsage !== null && this.applyOfficialCodexContextNumbers(contextUsage as Record<string, Object>, model)) {
+      return true
+    }
+    const usage = record['usage']
+    if (typeof usage === 'object' && usage !== null && this.applyOfficialCodexContextNumbers(usage as Record<string, Object>, model)) {
+      return true
+    }
+    return this.applyOfficialCodexContextNumbers(record, model)
+  }
+
+  private applyOfficialCodexContextNumbers(record: Record<string, Object>, modelHint: string): boolean {
+    const total = this.getNumberFromRecord(record, [
+      'totalTokens', 'total_tokens', 'total',
+      'inputTokens', 'input_tokens',
+      'promptTokens', 'prompt_tokens'
+    ])
+    const max = this.getNumberFromRecord(record, [
+      'maxTokens', 'max_tokens',
+      'contextWindow', 'context_window',
+      'contextLimit', 'context_limit',
+      'window'
+    ])
+    let percentage = this.getNumberFromRecord(record, ['percentage', 'percent'])
+    if (percentage <= 0 && total > 0 && max > 0) {
+      percentage = Math.round(total * 100 / max)
+    }
+
+    if (max <= 0 || percentage <= 0) return false
+
+    const model = modelHint || this.getStringFromRecord(record, ['model', 'modelId', 'model_id'])
+    this.contextUsage = Math.max(0, Math.min(100, Math.round(percentage)))
+    this.contextTotal = Math.max(0, Math.round(total))
+    this.contextMax = Math.max(0, Math.round(max))
+    this.contextModel = model.length > 0 ? model : (this.currentModel.length > 0 ? this.currentModel : 'Codex Desktop')
+    return true
+  }
+
+  private getNumberFromRecord(record: Record<string, Object>, keys: string[]): number {
+    for (let i = 0; i < keys.length; i++) {
+      const value = record[keys[i]]
+      if (typeof value === 'number' && Number.isFinite(value)) return value
+      if (typeof value === 'string') {
+        const parsed = Number(value)
+        if (Number.isFinite(parsed)) return parsed
+      }
+    }
+    return 0
+  }
+
+  private getStringFromRecord(record: Record<string, Object>, keys: string[]): string {
+    for (let i = 0; i < keys.length; i++) {
+      const value = record[keys[i]]
+      if (typeof value === 'string' && value.trim().length > 0) return value.trim()
+    }
+    return ''
   }
 
   private getRouterParams(): void {
@@ -735,6 +856,7 @@ struct ChatDetailPage {
       // 使用 getDedupedMessages 获取去重后的消息，防止 Store 中的重复消息传递到 UI
       const msgs = sessionStore.getDedupedMessages(this.sessionId)
       if (msgs && msgs.length > 0) {
+        const previousLatestMessageId = this.latestMessageId
         // 检查消息是否真的变化了（避免重复触发导致 UI 闪烁）
         if (msgs.length === oldCount && this.messages.length > 0) {
           // 数量相同，检查最后一条消息是否相同
@@ -752,6 +874,14 @@ struct ChatDetailPage {
         // 更新最新消息 ID（用于条件过渡动画）
         if (msgs.length > 0) {
           this.latestMessageId = msgs[msgs.length - 1].id
+        }
+        const newestMsg = msgs[msgs.length - 1]
+        if (newestMsg &&
+          newestMsg.type === 'permission_request' &&
+          !newestMsg.isPermissionHandled &&
+          newestMsg.id !== previousLatestMessageId) {
+          this.vibrateAlert()
+          toastManager.warning('Codex 等待你审批权限')
         }
         // 兜底检测：消息已包含 assistant 回复但状态仍卡在工作状态
         if (msgs.length > 0) {
@@ -771,6 +901,18 @@ struct ChatDetailPage {
       if (!this.userIsViewingHistory && !this.isUserTouchingList) {
         this.scrollToBottom()
       }
+    }
+  }
+
+  private refreshMessagesFromStore(): void {
+    const msgs = sessionStore.getDedupedMessages(this.sessionId)
+    if (!msgs || msgs.length === 0) return
+    this.messages = [...msgs]
+    this.displayedMessageCount = Math.max(this.displayedMessageCount, msgs.length)
+    this.latestMessageId = msgs[msgs.length - 1].id
+    this.taskItems = sessionStore.getCurrentTasks()
+    if (!this.userIsViewingHistory && !this.isUserTouchingList) {
+      this.scrollToBottom()
     }
   }
 
@@ -877,6 +1019,7 @@ struct ChatDetailPage {
     try {
       await apiService.setCurrentModel(modelId)
       this.currentModel = modelId
+      void appState.getCurrentModel()
       this.showModelSheet = false
       this.showMenu = false
     } catch (e) {
@@ -896,7 +1039,7 @@ struct ChatDetailPage {
     if (toolName === 'Bash') {
       const cmd = input['command']
       if (typeof cmd === 'string') {
-        return cmd.length > 50 ? cmd.substring(0, 50) + '...' : cmd
+        return cmd.length > 72 ? cmd.substring(0, 72) + '...' : cmd
       }
     } else if (toolName === 'Read' || toolName === 'Write' || toolName === 'Edit') {
       const filePath = input['file_path']
@@ -914,6 +1057,62 @@ struct ChatDetailPage {
       }
     }
     return ''
+  }
+
+  private getToolDisplayName(toolName?: string): string {
+    switch (toolName) {
+      case 'Bash': return '命令'
+      case 'Read': return '读取'
+      case 'Write': return '写入'
+      case 'Edit': return '编辑'
+      case 'Grep': return '搜索'
+      case 'Glob': return '查找'
+      case 'WebFetch': return '网页'
+      case 'Agent': return '代理'
+      default: return toolName || '工具'
+    }
+  }
+
+  private getToolActivityLabel(message: Message): string {
+    const summary = this.getToolInputSummary(message.toolName || '', message.toolInput || {})
+    const verb = this.getToolVerb(message.toolName || '工具', 1)
+    return summary ? verb + '：' + summary : verb
+  }
+
+  private getLatestToolActivity(): Message | null {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const message = this.messages[i]
+      if (message.type === 'tool_use') return message
+    }
+    return null
+  }
+
+  private getCodexActivityText(): string {
+    if (this.chatStatus === 'permission_pending') return '等待你审批权限'
+    if (this.chatStatus === 'question_pending') return '等待你回答问题'
+    const tool = this.getLatestToolActivity()
+    if (tool && (this.chatStatus === 'streaming' || this.chatStatus === 'tool_executing' || tool.toolStatus === 'running')) {
+      return 'Codex 正在' + this.getToolActivityLabel(tool)
+    }
+    if (this.streamingThinking || this.chatStatus === 'thinking') return 'Codex 正在分析上下文'
+    if (this.chatStatus === 'completed') return 'Codex 已完成本轮工作'
+    return 'Codex 已就绪'
+  }
+
+  private getCodexActivityDetailText(): string {
+    const tool = this.getLatestToolActivity()
+    if (tool && tool.toolInput) {
+      const cwd = tool.toolInput['cwd']
+      if (typeof cwd === 'string' && cwd.length > 0) return cwd
+    }
+    return this.getSessionProjectText()
+  }
+
+  private shouldShowCodexActivityRail(): boolean {
+    const session = sessionStore.sessions.find((s: Session) => s.id === this.sessionId)
+    const aiTool = (session?.aiTool || '').toLowerCase()
+    const isCodex = aiTool.indexOf('codex') >= 0 || !!session?.officialCodexThreadId
+    return isCodex && this.shouldShowStreamingIndicator()
   }
 
   /**
@@ -1316,24 +1515,88 @@ struct ChatDetailPage {
     const inputAreaHeight = 120
     // 吉祥物气泡高度（需要额外留白）
     const indicatorHeight = this.shouldShowStreamingIndicator() ? 30 : 0
+    const codexRailHeight = this.shouldShowCodexActivityRail() ? 58 : 0
+    const permissionBannerHeight = this.hasPendingPermission() ? 128 : 0
     const tasks = this.taskItems
     if (tasks.length === 0 || sessionStore.taskBarDismissed) {
-      return inputAreaHeight + indicatorHeight
+      return inputAreaHeight + indicatorHeight + codexRailHeight + permissionBannerHeight
     }
     // 折叠状态：分隔线 + 标题行(~44) + 间距 + 输入框
     const collapsedHeight = 57
     if (!sessionStore.taskBarExpanded) {
-      return inputAreaHeight + collapsedHeight + indicatorHeight
+      return inputAreaHeight + collapsedHeight + indicatorHeight + codexRailHeight + permissionBannerHeight
     }
     // 展开状态：折叠高度 + 任务列表行数
     const expandedHeight = Math.min(tasks.length * 50, 200)
-    return inputAreaHeight + collapsedHeight + expandedHeight + indicatorHeight
+    return inputAreaHeight + collapsedHeight + expandedHeight + indicatorHeight + codexRailHeight + permissionBannerHeight
   }
 
   private shouldShowStreamingIndicator(): boolean {
     return this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
       this.chatStatus === 'tool_executing' || this.chatStatus === 'completed' ||
       this.chatStatus === 'permission_pending' || this.chatStatus === 'question_pending'
+  }
+
+  @Builder
+  CodexActivityRail() {
+    if (this.shouldShowCodexActivityRail()) {
+      Row({ space: 10 }) {
+        Column() {
+          if (this.chatStatus === 'completed') {
+            SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
+              .fontSize(15)
+              .fontColor([Theme.SuccessColor])
+          } else if (this.chatStatus === 'permission_pending' || this.chatStatus === 'question_pending') {
+            SymbolGlyph($r('sys.symbol.exclamationmark_triangle_fill'))
+              .fontSize(15)
+              .fontColor([Theme.WarningColor])
+          } else {
+            LoadingProgress()
+              .width(16)
+              .height(16)
+              .color(Theme.AccentBlue)
+          }
+        }
+        .width(30)
+        .height(30)
+        .backgroundColor(this.getStatusBackgroundColor())
+        .borderRadius(8)
+        .justifyContent(FlexAlign.Center)
+
+        Column({ space: 3 }) {
+          Text(this.getCodexActivityText())
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Theme.TextPrimary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+          Text(this.getCodexActivityDetailText())
+            .fontSize(10)
+            .fontColor(Theme.TextTertiary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        if (this.elapsedSeconds > 0 && this.chatStatus !== 'completed') {
+          Text(this.formatElapsed(this.elapsedSeconds))
+            .fontSize(10)
+            .fontFamily('monospace')
+            .fontColor(Theme.TextSecondary)
+            .padding({ left: 7, right: 7, top: 3, bottom: 3 })
+            .backgroundColor('rgba(255,255,255,0.07)')
+            .borderRadius(6)
+        }
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 9, bottom: 9 })
+      .backgroundColor('rgba(28, 28, 30, 0.82)')
+      .borderRadius(12)
+      .border({ width: 0.5, color: 'rgba(255,255,255,0.12)' })
+      .margin({ bottom: 8 })
+    }
   }
 
   @Builder
@@ -1998,6 +2261,12 @@ struct ChatDetailPage {
           .padding({ left: 0 })
         }
 
+        this.CodexActivityRail()
+
+        if (this.hasPendingPermission()) {
+          this.PendingPermissionBanner(this.getPendingPermissionMessageForBanner())
+        }
+
         // 任务面板
         this.TaskBarView()
 
@@ -2278,6 +2547,145 @@ struct ChatDetailPage {
   private getSessionProviderId(): string {
     const session = sessionStore.sessions.find((s: Session) => s.id === this.sessionId)
     return session?.aiTool || ''
+  }
+
+  private isOfficialCodexSession(): boolean {
+    const session = sessionStore.sessions.find((s: Session) => s.id === this.sessionId)
+    const aiTool = (session?.aiTool || '').toLowerCase()
+    return aiTool.indexOf('codex') >= 0 || !!session?.officialCodexThreadId
+  }
+
+  private startOfficialCodexAutoSync(): void {
+    if (!this.isOfficialCodexSession()) {
+      this.stopOfficialCodexAutoSync()
+      return
+    }
+    if (this.officialCodexSyncTimer >= 0) return
+    this.syncOfficialCodexNow()
+    this.officialCodexSyncTimer = setInterval(() => {
+      this.syncOfficialCodexNow()
+    }, 3500)
+  }
+
+  private stopOfficialCodexAutoSync(): void {
+    if (this.officialCodexSyncTimer >= 0) {
+      clearInterval(this.officialCodexSyncTimer)
+      this.officialCodexSyncTimer = -1
+    }
+    this.officialCodexSyncInFlight = false
+  }
+
+  private syncOfficialCodexNow(): void {
+    if (this.isDestroyed || !this.isPageActive || !this.sessionId || !this.isOfficialCodexSession()) return
+    if (this.officialCodexSyncInFlight) return
+    this.officialCodexSyncInFlight = true
+    void sessionStore.syncCurrentOfficialCodexSession()
+      .catch((e: Error) => {
+        console.error(`[ChatDetailPage] Official Codex auto sync error: ${e.message}`)
+      })
+      .then(() => {
+        this.refreshMessagesFromStore()
+        this.officialCodexSyncInFlight = false
+      })
+  }
+
+  private hasPendingPermission(): boolean {
+    const allMessages = sessionStore.messages.get(this.sessionId) || []
+    for (let i = allMessages.length - 1; i >= 0; i--) {
+      const message = allMessages[i]
+      if (message.type === 'permission_request' && !message.isPermissionHandled) return true
+    }
+    return false
+  }
+
+  private getPendingPermissionMessageForBanner(): Message {
+    const allMessages = sessionStore.messages.get(this.sessionId) || []
+    for (let i = allMessages.length - 1; i >= 0; i--) {
+      const message = allMessages[i]
+      if (message.type === 'permission_request' && !message.isPermissionHandled) return message
+    }
+    return {
+      id: 'permission-empty',
+      type: 'permission_request',
+      content: 'Codex Desktop 等待权限审批',
+      timestamp: new Date().toISOString(),
+      toolName: 'unknown'
+    }
+  }
+
+  @Builder
+  PendingPermissionBanner(message: Message) {
+    Column({ space: 10 }) {
+      Row({ space: 8 }) {
+        SymbolGlyph(this.getPermissionToolIcon(message.toolName || '').symbol)
+          .fontSize(18)
+          .fontColor([Theme.AccentOrange])
+        Column({ space: 2 }) {
+          Text('Codex Desktop 等待审批')
+            .fontSize(Theme.FontCaption)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextPrimary)
+          Text(this.getPermissionTitle(message.toolName || '', message.toolInput))
+            .fontSize(Theme.FontTiny)
+            .fontColor(Theme.TextSecondary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+      }
+      .width('100%')
+
+      if (message.toolName === 'Bash' && message.toolInput && ((message.toolInput as Record<string, Object>)['command'] as string)) {
+        Text('$ ' + ((message.toolInput as Record<string, Object>)['command'] as string))
+          .fontSize(Theme.FontTiny)
+          .fontColor(Theme.TextPrimary)
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+          .backgroundColor('rgba(255,255,255,0.06)')
+          .borderRadius(8)
+      }
+
+      Row({ space: 8 }) {
+        Button('允许')
+          .fontSize(Theme.FontCaption)
+          .fontColor(Theme.TextOnPrimary)
+          .backgroundColor(Theme.PrimaryColor)
+          .borderRadius(8)
+          .layoutWeight(1)
+          .onClick(() => {
+            if (message.permissionId) {
+              sessionStore.sendPermissionResponse(message.permissionId, true)
+              message.isPermissionHandled = true
+              message.permissionResult = true
+              this.messageUpdateCounter++
+            }
+          })
+
+        Button('拒绝')
+          .fontSize(Theme.FontCaption)
+          .fontColor(Theme.TextSecondary)
+          .backgroundColor(Theme.BackgroundTertiary)
+          .borderRadius(8)
+          .layoutWeight(1)
+          .onClick(() => {
+            if (message.permissionId) {
+              sessionStore.sendPermissionResponse(message.permissionId, false)
+              message.isPermissionHandled = true
+              message.permissionResult = false
+              this.messageUpdateCounter++
+            }
+          })
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(12)
+    .margin({ bottom: 8 })
+    .backgroundColor('rgba(255,149,0,0.14)')
+    .border({ width: 1, color: 'rgba(255,149,0,0.45)' })
+    .borderRadius(12)
   }
 
   // 获取可见消息（分页 + 展示层内容去重），过滤掉 Agent 子工具（由 AgentToolUseBubble 嵌套渲染）
@@ -2816,38 +3224,128 @@ struct ChatDetailPage {
       : message.toolResult
   }
 
+  private getDiffStatText(message: Message): string {
+    const diff = message.toolResult || ''
+    if (diff.length === 0) return ''
+    const lines = diff.split('\n')
+    let added = 0
+    let removed = 0
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (line.startsWith('+++') || line.startsWith('---')) continue
+      if (line.startsWith('+')) added++
+      if (line.startsWith('-')) removed++
+    }
+    if (added === 0 && removed === 0) return ''
+    return '+' + added + ' / -' + removed
+  }
+
+  private getToolStatusText(status?: string): string {
+    switch (status) {
+      case 'running': return '运行中'
+      case 'completed': return '完成'
+      case 'failed': return '失败'
+      case 'pending': return '等待'
+      default: return '等待'
+    }
+  }
+
+  private getToolStatusColor(status?: string): string {
+    switch (status) {
+      case 'running': return Theme.AccentBlue
+      case 'completed': return Theme.SuccessColor
+      case 'failed': return Theme.ErrorColor
+      default: return Theme.TextTertiary
+    }
+  }
+
+  private getToolStatusBgColor(status?: string): string {
+    switch (status) {
+      case 'running': return 'rgba(10, 132, 255, 0.14)'
+      case 'completed': return 'rgba(48, 209, 88, 0.12)'
+      case 'failed': return 'rgba(255, 59, 48, 0.13)'
+      default: return 'rgba(255, 255, 255, 0.06)'
+    }
+  }
+
+  private getToolCardBackground(status?: string): string {
+    switch (status) {
+      case 'running': return 'rgba(24, 32, 44, 0.94)'
+      case 'completed': return 'rgba(25, 34, 28, 0.92)'
+      case 'failed': return 'rgba(45, 24, 24, 0.92)'
+      default: return 'rgba(32, 33, 36, 0.92)'
+    }
+  }
+
+  private getToolCardBorderColor(status?: string): string {
+    switch (status) {
+      case 'running': return 'rgba(10, 132, 255, 0.32)'
+      case 'completed': return 'rgba(48, 209, 88, 0.26)'
+      case 'failed': return 'rgba(255, 59, 48, 0.34)'
+      default: return 'rgba(255,255,255,0.12)'
+    }
+  }
+
   @Builder
   ToolUseBubble(message: Message) {
     Column({ space: 0 }) {
+      Row()
+        .width('100%')
+        .height(2)
+        .backgroundColor(this.getToolStatusColor(message.toolStatus))
+
       // Header
       Row({ space: 8 }) {
         // 图标
-        SymbolGlyph(getToolIcon(message.toolName || 'Tool').symbol)
-          .fontSize(14)
-          .fontColor([getToolIcon(message.toolName || 'Tool').color])
-
-        // 工具名
-        Text(getToolIcon(message.toolName || 'Tool').label.toUpperCase())
-          .fontSize(10)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TextSecondary)
-
-        // 文件名/命令摘要
-        if (this.getToolInputSummary(message.toolName || '', message.toolInput || {})) {
-          Text(this.getToolInputSummary(message.toolName || '', message.toolInput || {}))
-            .fontSize(11)
-            .fontColor(Theme.TextTertiary)
-            .maxLines(1)
-            .layoutWeight(1)
-        } else {
-          Blank().layoutWeight(1)
+        Column() {
+          SymbolGlyph(getToolIcon(message.toolName || 'Tool').symbol)
+            .fontSize(14)
+            .fontColor([getToolIcon(message.toolName || 'Tool').color])
         }
+        .width(28)
+        .height(28)
+        .backgroundColor(this.getToolStatusBgColor(message.toolStatus))
+        .borderRadius(7)
+        .justifyContent(FlexAlign.Center)
+
+        Column({ space: 2 }) {
+          Row({ space: 6 }) {
+            Text(this.getToolDisplayName(message.toolName))
+              .fontSize(12)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Theme.TextPrimary)
+
+            Text(this.getToolStatusText(message.toolStatus))
+              .fontSize(9)
+              .fontColor(this.getToolStatusColor(message.toolStatus))
+              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+              .backgroundColor(this.getToolStatusBgColor(message.toolStatus))
+              .borderRadius(5)
+          }
+
+          if (this.getToolInputSummary(message.toolName || '', message.toolInput || {})) {
+            Text(this.getToolInputSummary(message.toolName || '', message.toolInput || {}))
+              .fontSize(11)
+              .fontColor(Theme.TextTertiary)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
 
         // 结果行数
         if (this.getToolResultLineCount(message)) {
           Text(this.getToolResultLineCount(message))
             .fontSize(10)
             .fontColor(Theme.TextTertiary)
+        }
+
+        if (this.getDiffStatText(message)) {
+          Text(this.getDiffStatText(message))
+            .fontSize(10)
+            .fontFamily('monospace')
+            .fontColor(Theme.AccentGreen)
         }
 
         // 状态图标
@@ -2876,16 +3374,23 @@ struct ChatDetailPage {
           .width('100%')
 
         Column({ space: 8 }) {
-          // Bash 工具：显示命令
           if (message.toolName === 'Bash' && this.getBashCommand(message)) {
-            Text('$ ' + this.getBashCommand(message))
-              .fontSize(11)
-              .fontColor(Theme.TextPrimary)
-              .fontFamily('monospace')
-              .width('100%')
-              .padding(10)
-              .borderRadius(6)
-              .backgroundColor('#1C1C1E')
+            Column({ space: 4 }) {
+              Text('COMMAND')
+                .fontSize(9)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Theme.TextSecondary)
+              Text('$ ' + this.getBashCommand(message))
+                .fontSize(11)
+                .fontColor(Theme.TextPrimary)
+                .fontFamily('monospace')
+                .width('100%')
+                .padding(10)
+                .borderRadius(6)
+                .backgroundColor('#1C1C1E')
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
           }
 
           // 文件内容预览（Write/Edit）
@@ -2902,7 +3407,7 @@ struct ChatDetailPage {
           // 输出结果
           if (message.toolResult) {
             Column({ space: 4 }) {
-              Text('OUTPUT')
+              Text(message.toolName === 'Edit' || message.toolName === 'Write' ? 'DIFF / OUTPUT' : 'OUTPUT')
                 .fontSize(9)
                 .fontWeight(FontWeight.Bold)
                 .fontColor(Theme.TextSecondary)
@@ -2930,11 +3435,11 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
-    .backgroundColor('#2C2C2E')
+    .backgroundColor(this.getToolCardBackground(message.toolStatus))
     .borderRadius(10)
     .border({
       width: 0.5,
-      color: 'rgba(255,255,255,0.12)'
+      color: this.getToolCardBorderColor(message.toolStatus)
     })
     .onClick(() => {
       if (this.isToolExpandableWithResult(message)) {
@@ -2953,29 +3458,39 @@ struct ChatDetailPage {
     Column({ space: 0 }) {
       // Header: 图标 + 动词摘要 + 进度状态 + 箭头
       Row({ space: 8 }) {
-        SymbolGlyph($r('sys.symbol.hammer_fill'))
-          .fontSize(12)
-          .fontColor([Theme.AccentBlue])
+        Column() {
+          SymbolGlyph($r('sys.symbol.hammer_fill'))
+            .fontSize(13)
+            .fontColor([this.getToolGroupStateColor(messages)])
+        }
+        .width(28)
+        .height(28)
+        .backgroundColor(this.getToolGroupStateBgColor(messages))
+        .borderRadius(7)
+        .justifyContent(FlexAlign.Center)
 
-        Text(this.getToolGroupSummary(messages))
-          .fontSize(12)
-          .fontColor(Theme.TextPrimary)
-          .layoutWeight(1)
+        Column({ space: 2 }) {
+          Text(this.getToolGroupSummary(messages))
+            .fontSize(12)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Theme.TextPrimary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-        // 状态指示
-        if (this.toolGroupExpanded) {
-          // 已完成统计
           Text(this.getToolGroupCountText(messages))
             .fontSize(10)
             .fontColor(Theme.TextTertiary)
             .maxLines(1)
-        } else {
-          // 折叠时显示完整度标记
-          Text('已完成')
-            .fontSize(10)
-            .fontColor(Theme.SuccessColor)
-            .opacity(this.isToolGroupComplete(messages) ? 1 : 0)
         }
+        .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+
+        Text(this.getToolGroupStateText(messages))
+          .fontSize(10)
+          .fontColor(this.getToolGroupStateColor(messages))
+          .padding({ left: 7, right: 7, top: 3, bottom: 3 })
+          .backgroundColor(this.getToolGroupStateBgColor(messages))
+          .borderRadius(6)
 
         SymbolGlyph(this.toolGroupExpanded
           ? $r('sys.symbol.chevron_up')
@@ -3003,7 +3518,7 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
-    .backgroundColor('#2C2C2E')
+    .backgroundColor('rgba(44, 44, 46, 0.92)')
     .borderRadius(10)
     .border({ width: 0.5, color: 'rgba(255,255,255,0.12)' })
     .margin({ bottom: Theme.SpacingMD })
@@ -3048,6 +3563,32 @@ struct ChatDetailPage {
       parts.push(this.getToolVerb(name, count))
     }
     return parts.join('，')
+  }
+
+  private getToolGroupStateText(messages: Message[]): string {
+    for (let i = 0; i < messages.length; i++) {
+      if (messages[i].type === 'tool_use' && messages[i].toolStatus === 'running') return '运行中'
+    }
+    for (let i = 0; i < messages.length; i++) {
+      if (messages[i].type === 'tool_use' && messages[i].toolStatus === 'failed') return '有失败'
+    }
+    return this.isToolGroupComplete(messages) ? '已完成' : this.getToolGroupCountText(messages)
+  }
+
+  private getToolGroupStateColor(messages: Message[]): string {
+    for (let i = 0; i < messages.length; i++) {
+      if (messages[i].type === 'tool_use' && messages[i].toolStatus === 'running') return Theme.AccentBlue
+      if (messages[i].type === 'tool_use' && messages[i].toolStatus === 'failed') return Theme.ErrorColor
+    }
+    return this.isToolGroupComplete(messages) ? Theme.SuccessColor : Theme.TextSecondary
+  }
+
+  private getToolGroupStateBgColor(messages: Message[]): string {
+    for (let i = 0; i < messages.length; i++) {
+      if (messages[i].type === 'tool_use' && messages[i].toolStatus === 'running') return 'rgba(10, 132, 255, 0.14)'
+      if (messages[i].type === 'tool_use' && messages[i].toolStatus === 'failed') return 'rgba(255, 59, 48, 0.13)'
+    }
+    return this.isToolGroupComplete(messages) ? 'rgba(48, 209, 88, 0.12)' : 'rgba(255,255,255,0.06)'
   }
 
   private isToolGroupComplete(messages: Message[]): boolean {
@@ -4091,10 +4632,10 @@ struct ChatDetailPage {
           .layoutWeight(1)
 
         if (message.isPermissionHandled) {
-          Text(message.permissionResult ? '已允许' : '已拒绝')
+          Text(this.getPermissionHandledText(message))
             .fontSize(Theme.FontTiny)
-            .fontColor(message.permissionResult ? Theme.SuccessColor : Theme.ErrorColor)
-            .backgroundColor(message.permissionResult ? 'rgba(52,199,89,0.15)' : 'rgba(255,69,58,0.15)')
+            .fontColor(this.getPermissionHandledColor(message))
+            .backgroundColor(this.getPermissionHandledBgColor(message))
             .borderRadius(4)
             .padding({ left: 6, right: 6, top: 2, bottom: 2 })
         }
@@ -4217,6 +4758,22 @@ struct ChatDetailPage {
       case 'Read': return fileName ? `读取 ${fileName}` : '读取文件'
       default: return `权限请求: ${toolName}`
     }
+  }
+
+  private getPermissionHandledText(message: Message): string {
+    if (message.permissionResult === true) return '已允许'
+    if (message.permissionResult === false) return '已拒绝'
+    return '已处理'
+  }
+
+  private getPermissionHandledColor(message: Message): string {
+    if (message.permissionResult === false) return Theme.ErrorColor
+    return Theme.SuccessColor
+  }
+
+  private getPermissionHandledBgColor(message: Message): string {
+    if (message.permissionResult === false) return 'rgba(255,69,58,0.15)'
+    return 'rgba(52,199,89,0.15)'
   }
 
   // Diff 预览
@@ -4507,9 +5064,15 @@ struct ChatDetailPage {
   }
 
   private getRingColor(): ResourceColor {
+    if (this.contextMax <= 0) return Theme.TextTertiary
     if (this.contextUsage > 80) return Theme.ErrorColor
     if (this.contextUsage > 50) return Theme.WarningColor
     return Theme.PrimaryColor
+  }
+
+  private getContextRingText(): string {
+    if (this.isOfficialCodexSession() && this.contextMax <= 0) return '--'
+    return `${this.contextUsage}%`
   }
 
   @Builder
@@ -4521,7 +5084,7 @@ struct ChatDetailPage {
           .color(this.getRingColor())
           .backgroundColor('#333333')
           .style({ strokeWidth: 4 })
-        Text(`${this.contextUsage}%`)
+        Text(this.getContextRingText())
           .fontSize(6).fontColor(Theme.TextPrimary).lineHeight(7)
       }
       .width(22).height(22)
@@ -4549,34 +5112,43 @@ struct ChatDetailPage {
           .fontSize(13).fontColor(Theme.TextSecondary).width('100%')
       }
 
-      // 用量
-      Row({ space: 12 }) {
-        Column({ space: 2 }) {
-          Text(this.formatTokens(this.contextTotal))
-            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Theme.TextPrimary)
-          Text('已用').fontSize(10).fontColor(Theme.TextTertiary)
-        }.alignItems(HorizontalAlign.Center)
+      if (this.isOfficialCodexSession() && this.contextMax <= 0) {
+        Text('官方 Codex Desktop 暂未返回该线程的上下文容量。这里不会再显示 CChaha 本地估算，避免误导。')
+          .fontSize(13)
+          .fontColor(Theme.TextSecondary)
+          .lineHeight(20)
+          .width('100%')
+          .padding({ top: 10, bottom: 10 })
+      } else {
+        // 用量
+        Row({ space: 12 }) {
+          Column({ space: 2 }) {
+            Text(this.formatTokens(this.contextTotal))
+              .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Theme.TextPrimary)
+            Text('已用').fontSize(10).fontColor(Theme.TextTertiary)
+          }.alignItems(HorizontalAlign.Center)
 
-        Column({ space: 2 }) {
-          Text(this.formatTokens(this.contextMax - this.contextTotal))
-            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Theme.SuccessColor)
-          Text('剩余').fontSize(10).fontColor(Theme.TextTertiary)
-        }.alignItems(HorizontalAlign.Center)
+          Column({ space: 2 }) {
+            Text(this.formatTokens(Math.max(0, this.contextMax - this.contextTotal)))
+              .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Theme.SuccessColor)
+            Text('剩余').fontSize(10).fontColor(Theme.TextTertiary)
+          }.alignItems(HorizontalAlign.Center)
 
-        Column({ space: 2 }) {
-          Text(this.formatTokens(this.contextMax))
-            .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Theme.TextSecondary)
-          Text('上限').fontSize(10).fontColor(Theme.TextTertiary)
-        }.alignItems(HorizontalAlign.Center)
+          Column({ space: 2 }) {
+            Text(this.formatTokens(this.contextMax))
+              .fontSize(16).fontWeight(FontWeight.Bold).fontColor(Theme.TextSecondary)
+            Text('上限').fontSize(10).fontColor(Theme.TextTertiary)
+          }.alignItems(HorizontalAlign.Center)
+        }
+        .width('100%').justifyContent(FlexAlign.SpaceAround).padding({ top: 8, bottom: 8 })
+
+        // 圆环
+        Row({ space: 12 }) {
+          Progress({ value: this.contextUsage, total: 100, type: ProgressType.Ring })
+            .width(60).height(60).color(this.getRingColor()).backgroundColor('#333333')
+            .style({ strokeWidth: 8 })
+        }.width('100%').justifyContent(FlexAlign.Center)
       }
-      .width('100%').justifyContent(FlexAlign.SpaceAround).padding({ top: 8, bottom: 8 })
-
-      // 圆环
-      Row({ space: 12 }) {
-        Progress({ value: this.contextUsage, total: 100, type: ProgressType.Ring })
-          .width(60).height(60).color(this.getRingColor()).backgroundColor('#333333')
-          .style({ strokeWidth: 8 })
-      }.width('100%').justifyContent(FlexAlign.Center)
     }
     .width('100%').padding(Theme.SpacingLG)
   }

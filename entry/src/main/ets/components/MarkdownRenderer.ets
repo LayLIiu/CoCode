@@ -769,9 +769,9 @@ export struct MarkdownRenderer {
 
 @Component
 struct AsyncImage {
-  private url: string = ''
-  private resolver: (url: string) => Promise<string> = async (u) => u
-  private alt: string = ''
+  url: string = ''
+  resolver: (url: string) => Promise<string> = async (u) => u
+  alt: string = ''
   @State private resolvedSrc: string = ''
   @State private isLoading: boolean = true
   @State private hasError: boolean = false

@@ -12,7 +12,9 @@ import { sessionStore } from '../stores/SessionStore'
 import { storageService } from '../services/StorageService'
 import { SearchBar } from '../components/SearchBar'
 import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
+import { toastManager } from '../services/ToastManager'
 import router from '@ohos.router'
+import pasteboard from '@ohos.pasteboard'
 
 // 分组数据结构
 class SessionGroup {
@@ -286,16 +288,30 @@ export struct ConversationListPage {
     }
 
     this.loadRecentDirs()
+    this.syncOfficialCodexThreadsIfNeeded()
   }
 
   onPageShow(): void {
     this.refreshSessionsFromStore()
+    this.syncOfficialCodexThreadsIfNeeded()
   }
 
   private refreshSessionsFromStore(): void {
     this.sessions = [...(sessionStore.sessions || [])]
     this.isLoading = sessionStore.isLoading
     this.refreshTrigger = Date.now()
+  }
+
+  private syncOfficialCodexThreadsIfNeeded(): void {
+    if (this.tabType !== TabType.CODEX) return
+    this.isLoading = true
+    void sessionStore.syncOfficialCodexThreadsToLocal(50).then(() => {
+      this.refreshSessionsFromStore()
+      this.isLoading = false
+    }).catch((e: Error) => {
+      console.error(`[ConversationListPage] Sync Official Codex threads error: ${e.message}`)
+      this.isLoading = false
+    })
   }
 
   aboutToDisappear(): void {
@@ -368,11 +384,7 @@ export struct ConversationListPage {
         providerId === 'anthropic' ||
         providerId.toLowerCase().includes('claude')
     } else if (this.tabType === TabType.CODEX) {
-      if (session.officialCodexThreadId) return true
-      return providerId === 'codex' ||
-        providerId === 'openai' ||
-        providerId.toLowerCase().includes('codex') ||
-        providerId.toLowerCase().includes('openai')
+      return !!session.officialCodexThreadId
     } else if (this.tabType === TabType.OPEN_CODE) {
       return providerId === 'opencode' ||
         providerId === 'local' ||
@@ -423,6 +435,10 @@ export struct ConversationListPage {
       }
     }
     return result
+  }
+
+  private hasFilteredSessions(): boolean {
+    return this.getFilteredSessions().length > 0
   }
 
   private getDateGroup(timestamp: string): DateGroup {
@@ -508,23 +524,55 @@ export struct ConversationListPage {
     return result
   }
 
-  // 侧滑删除按钮
-  @Builder
-  SwipeDeleteButton(sessionId: string) {
-    Button() {
-      SymbolGlyph($r('sys.symbol.trash'))
-        .fontSize(20)
-        .fontColor([Color.White])
+  private getCopyableConversationId(session: Session): string {
+    return session.officialCodexThreadId || session.id
+  }
+
+  private copyConversationId(session: Session): void {
+    const id = this.getCopyableConversationId(session)
+    try {
+      const systemPasteboard = pasteboard.getSystemPasteboard()
+      const pasteData = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, id)
+      systemPasteboard.setData(pasteData)
+      toastManager.success('已复制对话 ID')
+    } catch (e) {
+      console.error(`[ConversationListPage] copy conversation id error: ${e}`)
+      toastManager.error('复制失败')
     }
-    .width(50)
-    .height(50)
-    .borderRadius(25)
-    .backgroundColor('#FF3B30')
+  }
+
+  // 侧滑操作按钮
+  @Builder
+  SwipeActions(session: Session) {
+    Row({ space: 8 }) {
+      Button() {
+        SymbolGlyph($r('sys.symbol.doc_text'))
+          .fontSize(19)
+          .fontColor([Color.White])
+      }
+      .width(50)
+      .height(50)
+      .borderRadius(25)
+      .backgroundColor(Theme.AccentBlue)
+      .onClick(() => {
+        this.copyConversationId(session)
+      })
+
+      Button() {
+        SymbolGlyph($r('sys.symbol.trash'))
+          .fontSize(20)
+          .fontColor([Color.White])
+      }
+      .width(50)
+      .height(50)
+      .borderRadius(25)
+      .backgroundColor('#FF3B30')
+      .onClick(async () => {
+        // 本地隐藏，服务端保留，可通过导入恢复
+        await sessionStore.deleteLocalSession(session.id)
+      })
+    }
     .margin({ right: 8 })
-    .onClick(async () => {
-      // 本地隐藏，服务端保留，可通过导入恢复
-      await sessionStore.deleteLocalSession(sessionId)
-    })
   }
 
   build() {
@@ -537,11 +585,11 @@ export struct ConversationListPage {
             Column().width('100%').height(146)
           }
 
-          if (this.isLoading && (!this.sessions || this.sessions.length === 0)) {
+          if (this.isLoading && !this.hasFilteredSessions()) {
             ListItem() {
               this.LoadingState()
             }
-          } else if (this.sessions && this.sessions.length > 0) {
+          } else if (this.hasFilteredSessions()) {
             ForEach(this.getGroupedSessionArray(), (group: SessionGroup) => {
               ListItemGroup({
                 header: this.GroupHeader(group.groupName)
@@ -554,7 +602,7 @@ export struct ConversationListPage {
                     })
                   }
                   .swipeAction({
-                    end: this.SwipeDeleteButton(session.id),
+                    end: this.SwipeActions(session),
                     edgeEffect: SwipeEdgeEffect.Spring
                   })
                 }, (session: Session) => session.id)
@@ -663,12 +711,12 @@ export struct ConversationListPage {
         .fontColor([Theme.PrimaryColor])
         .margin({ bottom: Theme.SpacingLG })
 
-      Text('暂无会话')
+      Text(this.getEmptyTitle())
         .fontSize(Theme.FontHeading)
         .fontColor(Theme.TextPrimary)
         .margin({ bottom: Theme.SpacingSM })
 
-      Text('点击右上角 + 开始新对话')
+      Text(this.getEmptySubtitle())
         .fontSize(Theme.FontCaption)
         .fontColor(Theme.TextSecondary)
     }
@@ -676,6 +724,16 @@ export struct ConversationListPage {
     .height(300)
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
+  }
+
+  private getEmptyTitle(): string {
+    if (this.tabType === TabType.CODEX) return '暂无 Codex Desktop 对话'
+    return '暂无会话'
+  }
+
+  private getEmptySubtitle(): string {
+    if (this.tabType === TabType.CODEX) return '请先确认官方 Codex 授权与 Desktop 已连接'
+    return '点击右上角 + 开始新对话'
   }
 
   @Builder

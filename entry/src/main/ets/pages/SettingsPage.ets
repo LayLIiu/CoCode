@@ -64,6 +64,8 @@ export struct SettingsPage {
   @State codexControllerClientId: string = ''
   @State codexControllerWsConnected: boolean = false
   @State codexControllerLoading: boolean = false
+  @State officialCodexThreadCount: number = 0
+  @State officialCodexSyncLoading: boolean = false
 
   // 模型选择
   @State showModelSheet: boolean = false
@@ -77,6 +79,7 @@ export struct SettingsPage {
     this.loadSettings()
     this.updateConnectionStatus()
     this.refreshCodexControllerStatus()
+    this.refreshOfficialCodexThreadCount()
   }
 
   aboutToDisappear(): void {
@@ -742,6 +745,9 @@ export struct SettingsPage {
         this.ConnectionMetric('WS', this.codexControllerWsConnected ? '已连接' : '未连接',
           this.codexControllerWsConnected ? Theme.SuccessColor : Theme.TextTertiary,
           this.codexControllerWsConnected ? 'rgba(48, 209, 88, 0.14)' : 'rgba(255, 255, 255, 0.045)')
+        this.ConnectionMetric('对话', `${this.officialCodexThreadCount}`,
+          this.officialCodexThreadCount > 0 ? Theme.SuccessColor : Theme.TextTertiary,
+          this.officialCodexThreadCount > 0 ? 'rgba(48, 209, 88, 0.14)' : 'rgba(255, 255, 255, 0.045)')
         if (this.codexControllerClientId) {
           Text(this.codexControllerClientId.substring(0, 8) + '...')
             .fontSize(Theme.FontTiny)
@@ -794,6 +800,24 @@ export struct SettingsPage {
         })
       }
       .width('100%')
+
+      Button() {
+        if (this.officialCodexSyncLoading) {
+          LoadingProgress().width(16).height(16).color(Theme.TextOnPrimary)
+        } else {
+          Text('同步 Codex Desktop 对话')
+            .fontSize(Theme.FontTiny)
+            .fontColor(Theme.TextOnPrimary)
+        }
+      }
+      .height(36)
+      .width('100%')
+      .backgroundColor('rgba(10, 132, 255, 0.18)')
+      .borderRadius(9)
+      .enabled(!this.officialCodexSyncLoading && !this.codexControllerLoading)
+      .onClick(() => {
+        this.syncOfficialCodexThreadsFromSettings()
+      })
     }
     .width('100%')
     .padding(Theme.SpacingLG)
@@ -2091,9 +2115,33 @@ export struct SettingsPage {
   private getCodexControllerSummaryText(): string {
     if (this.codexControllerLoading) return '正在查询状态...'
     if (this.codexControllerStatus === '未知') return '点击刷新查询 Official Codex 控制器状态'
-    if (this.codexControllerWsConnected) return '控制器 WebSocket 已连接，可远程管理桌面端'
+    if (this.codexControllerWsConnected) return `控制器已连接，已同步 ${this.officialCodexThreadCount} 个官方对话`
     if (this.codexControllerStatus === '已就绪') return '已授权，点击"恢复 & 连接"建立远程连接'
     return `状态: ${this.codexControllerStatus}`
+  }
+
+  private refreshOfficialCodexThreadCount(): void {
+    let count = 0
+    const sessions = sessionStore.sessions || []
+    for (let i = 0; i < sessions.length; i++) {
+      if (sessions[i].officialCodexThreadId) count++
+    }
+    this.officialCodexThreadCount = count
+  }
+
+  private async syncOfficialCodexThreadsFromSettings(): Promise<void> {
+    this.officialCodexSyncLoading = true
+    try {
+      if (!this.codexControllerWsConnected && this.codexControllerStatus === '已就绪') {
+        await apiService.restoreCodexControllerSession(true)
+      }
+      await sessionStore.syncOfficialCodexThreadsToLocal(50)
+      this.refreshOfficialCodexThreadCount()
+      await this.refreshCodexControllerStatus()
+    } catch (e) {
+      console.error(`[Settings] Sync Official Codex threads error: ${e}`)
+    }
+    this.officialCodexSyncLoading = false
   }
 
   private getCodexControllerStatusColor(): ResourceColor {

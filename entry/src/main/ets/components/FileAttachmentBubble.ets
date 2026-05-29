@@ -57,7 +57,7 @@ export struct FileAttachmentBubble {
   @State isDownloading: boolean = false
   @State downloadResult: string = ''
 
-  private onImageTap?: (src: string, alt: string, name: string) => void
+  onImageTap?: (src: string, alt: string, name: string) => void
 
   aboutToAppear(): void {
     this.analyzeFile()

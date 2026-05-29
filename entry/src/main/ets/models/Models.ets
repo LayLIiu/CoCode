@@ -85,6 +85,9 @@ export interface Message {
 
   // 工具结果中的图片内容（Claude 通过 image_generation 等工具生成的图片）
   images?: MessageImage[]
+
+  // 工具结果是否为错误
+  isError?: boolean
 }
 
 // MARK: - 图片内容
@@ -169,6 +172,8 @@ export type WSMessageType =
   | 'session_broadcast'
   | 'unknown'
   | 'pong'
+  | "official_codex_update"
+
 
 export interface WSMessage {
   type?: WSMessageType
@@ -193,6 +198,8 @@ export interface WSMessage {
   percentage?: number
   used?: number
   total?: number
+  threadId?: string
+
   title?: string
   questions?: QuestionItem[]
   tasks?: TaskItem[]

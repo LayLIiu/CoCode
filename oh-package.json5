@@ -2,11 +2,6 @@
   "modelVersion": "6.1.1",
   "description": "Please describe the basic information.",
   "dependencies": {
-    "@kit.UIDesignKit": "^6.1.0",
-    "@kit.CameraKit": "^6.1.0",
-    "@kit.ImageKit": "^6.1.0",
-    "@kit.NetworkKit": "^6.1.0",
-    "@kit.ScanKit": "^6.1.0"
   },
   "devDependencies": {
     "@ohos/hypium": "1.0.25",
