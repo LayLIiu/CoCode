@@ -110,9 +110,13 @@ export struct PixelMascot {
   private animationTimer: number = -1
   private isCanvasReady: boolean = false
   private lastFrameTime: number = 0
+  // 跳帧计数器：IDLE 状态只每 3 帧重绘一次
+  private frameSkipCounter: number = 0
+  private readonly FRAME_SKIP_IDLE: number = 3
+  private readonly FRAME_SKIP_ACTIVE: number = 2
 
   aboutToAppear(): void {
-    this.startAnimationTimer()
+    this.startAnimationLoop()
   }
 
   aboutToDisappear(): void {
@@ -121,14 +125,14 @@ export struct PixelMascot {
 
   private pauseAnimation(): void {
     if (this.animationTimer !== -1) {
-      clearInterval(this.animationTimer)
+      clearTimeout(this.animationTimer)
       this.animationTimer = -1
     }
   }
 
   private resumeAnimation(): void {
     if (this.animationTimer !== -1) return
-    this.startAnimationTimer()
+    this.startAnimationLoop()
   }
 
   onStatusChange(): void {
@@ -145,17 +149,29 @@ export struct PixelMascot {
     this.redrawCanvas()
   }
 
-  private startAnimationTimer(): void {
+  private startAnimationLoop(): void {
     this.lastFrameTime = Date.now()
-    this.animationTimer = setInterval(() => {
-      const now = Date.now()
-      const delta = now - this.lastFrameTime
-      this.lastFrameTime = now
-      this.animationTime += delta
+    this.frameSkipCounter = 0
+    this.animationLoop()
+  }
 
-      this.updateAnimationValues()
+  private animationLoop(): void {
+    const now = Date.now()
+    const delta = now - this.lastFrameTime
+    this.lastFrameTime = now
+    this.animationTime += delta
+
+    this.updateAnimationValues()
+
+    // 跳帧：前 2 帧始终绘制，之后 IDLE 每 3 帧绘一次，其他状态每 2 帧绘一次
+    this.frameSkipCounter++
+    const skipMod = this.frameSkipCounter < 3 ? 1 :
+      (this.status === MascotStatus.IDLE ? this.FRAME_SKIP_IDLE : this.FRAME_SKIP_ACTIVE)
+    if (this.frameSkipCounter % skipMod === 0) {
       this.redrawCanvas()
-    }, 16)
+    }
+
+    this.animationTimer = setTimeout(() => { this.animationLoop() }, 16)
   }
 
   private updateAnimationValues(): void {

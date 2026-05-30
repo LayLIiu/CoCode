@@ -978,8 +978,7 @@ struct ChatDetailPage {
   }
 
   private scrollToBottom(): void {
-    // 倒序列表：最新消息在顶部（视觉底部），scrollEdge(Top) 就是回到最新消息
-    this.scroller.scrollEdge(Edge.Top)
+    this.scroller.scrollEdge(Edge.Bottom)
     // 重置输入栏收缩进度
     this.resetInputCollapseProgress()
   }
@@ -2044,38 +2043,35 @@ struct ChatDetailPage {
       DotMatrixBackground({ active: this.isPageActive })
 
       HdsNavigation() {
-        // 消息列表 — 倒序+翻转：默认就在"底部"（最新消息），无需scrollTo
+        // 消息列表
         List({ scroller: this.scroller }) {
-          // 顶部留白（翻转后视觉在底部，给悬浮输入框留空间）
+          // 顶部占位
           ListItem() {
             Row().width('100%').height(this.getBottomSpacerHeight())
           }
-          .rotate({ angle: 180 })
 
           // 流式思考实时渲染（回复内容不流式显示，生成完后直接弹完整气泡）
           if (this.streamingThinking) {
             ListItem() {
               this.StreamingThinkingBubble()
             }
-            .rotate({ angle: 180 })
           }
 
-          // 消息倒序排列（最新在前=视觉底部），工具消息合组
-          ForEach([...this.getVisibleMessages()].reverse(), (message: Message) => {
+          // 消息正序排列（最旧在前=视觉顶部，最新在后=视觉底部），工具消息合组
+          ForEach(this.getVisibleMessages(), (message: Message) => {
             ListItem() {
               if (message.type === 'tool_use' && (message.toolName === 'Agent' || message.toolName === 'AskUserQuestion')) {
                 // Agent / AskUserQuestion 有特殊渲染，不参与合组
                 this.MessageBubble(message)
               } else if ((message.type === 'tool_use' || message.type === 'tool_result') && !message.parentToolUseId) {
                 // 工具组：仅在组内第一条渲染 ToolGroupBubble，其余跳过
-                if (this.isFirstToolInReverseGroup(message)) {
+                if (this.isFirstToolInGroup(message)) {
                   this.ToolGroupBubble(this.collectToolGroup(message))
                 }
               } else {
                 this.MessageBubble(message)
               }
             }
-            .rotate({ angle: 180 })
             .transition(this.getMessageTransition(message))
           }, (message: Message) => {
             // 生成稳定且唯一的 key，防止重复渲染
@@ -2097,7 +2093,7 @@ struct ChatDetailPage {
             return message.type + '_' + (message.content || message.toolResult || '').substring(0, 30)
           })
 
-          // 加载更多历史提示（翻转后视觉在顶部）
+          // 加载更多历史提示
           if (this.hasMoreMessages()) {
             ListItem() {
               Column({ space: 2 }) {
@@ -2106,7 +2102,7 @@ struct ChatDetailPage {
                     .width(14)
                     .height(14)
                     .color(Theme.TextSecondary)
-                  Text('下滑加载更早消息')
+                  Text('上滑加载更早消息')
                     .fontSize(12)
                     .fontColor(Theme.TextSecondary)
                 }
@@ -2122,37 +2118,33 @@ struct ChatDetailPage {
                   .padding({ top: 2, bottom: 8 })
               }
             }
-            .rotate({ angle: 180 })
           }
 
-          // 底部占位（翻转后视觉在顶部）
+          // 底部占位
           ListItem() {
             Row().width('100%').height(150)
           }
-          .rotate({ angle: 180 })
         }
         .width('100%')
         .height('100%')
         .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
-        .rotate({ angle: 180 })  // 整体翻转，使列表默认在最新消息位置
         .onScrollIndex((start: number, end: number) => {
-          // 翻转后：滚到底部=视觉顶部=加载更多历史
           const totalItems = this.getListItemCount()
-          if (end >= totalItems - 1 && this.hasMoreMessages() && !this.isLoadingMore) {
+          // 滚到顶部 → 加载更多历史
+          if (start <= 2 && this.hasMoreMessages() && !this.isLoadingMore) {
             this.loadMoreMessages()
           }
-          // 翻转后：start=0 表示在列表顶部=视觉底部=最新消息
-          if (start === 0) {
-            // 在最新消息位置
+          // end 接近末尾 = 在最新消息位置（视觉底部）
+          if (end >= totalItems - 2) {
             if (this.showNewMessageButton) {
               this.showNewMessageButton = false
               this.userIsViewingHistory = false
             }
             // 重置输入栏收缩进度
             this.resetInputCollapseProgress()
-          } else if (start > 0 && start <= 2) {
+          } else if (end >= totalItems - 4) {
             // 接近底部时也重置
             this.resetInputCollapseProgress()
           } else {
@@ -2167,12 +2159,11 @@ struct ChatDetailPage {
           }
         })
         .onDidScroll((xOffset: number, yOffset: number) => {
-          // 翻转后滚动方向反转
-          if (-yOffset !== this.scrollOffset) {
-            this.scrollOffset = -yOffset
+          if (yOffset !== this.scrollOffset) {
+            this.scrollOffset = yOffset
           }
           // 更新输入栏收缩进度
-          this.updateInputCollapseProgress(yOffset)
+          this.updateInputCollapseProgress(-yOffset)
         })
         .onTouch((event: TouchEvent) => {
           if (event.type === TouchType.Down) {
@@ -2515,8 +2506,8 @@ struct ChatDetailPage {
     if (this.isNewestMessage(message)) {
       return TransitionEffect.asymmetric(
         TransitionEffect.OPACITY
-          .combine(TransitionEffect.translate({ y: -50 }))
-          .animation({ duration: 600, curve: curves.springCurve(0.3, 1, 200, 25) }),
+          .combine(TransitionEffect.translate({ y: 50 }))
+          .animation({ duration: 250 }),
         TransitionEffect.OPACITY.animation({ duration: 150 })
       )
     }
@@ -2691,7 +2682,28 @@ struct ChatDetailPage {
   // 获取可见消息（分页 + 展示层内容去重），过滤掉 Agent 子工具（由 AgentToolUseBubble 嵌套渲染）
   private getVisibleMessages(): Message[] {
     // 用 getDedupedMessages 作为展示层安全网，过滤内容重复的消息
-    const allMessages = sessionStore.getDedupedMessages(this.sessionId)
+    let allMessages = sessionStore.getDedupedMessages(this.sessionId)
+    // 最终安全网：按规整化原始内容逐对去重（捕获 messageSemanticKey 截断差异等极端情况）
+    if (allMessages.length > 1) {
+      const finalSeen = new Set<string>()
+      const finalMessages: Message[] = []
+      for (let mi = 0; mi < allMessages.length; mi++) {
+        const m = allMessages[mi]
+        // 构建纯内容键（不截断，用于最终去重兜底）
+        const rawContent = (m.content || m.toolResult || '').trim()
+        const contentKey = m.type + ':' + rawContent.substring(0, 8000)
+        if (finalSeen.has(contentKey)) {
+          console.warn(`[ChatDetailPage] getVisibleMessages FINAL dedup: removing ${m.type} id=${m.id} (content matches previous)`)
+          continue
+        }
+        finalSeen.add(contentKey)
+        finalMessages.push(m)
+      }
+      if (finalMessages.length < allMessages.length) {
+        console.warn(`[ChatDetailPage] getVisibleMessages: final dedup removed ${allMessages.length - finalMessages.length} dups`)
+        allMessages = finalMessages
+      }
+    }
     // 过滤：排除有 parentToolUseId 的子工具，它们在 Agent 卡片内嵌套渲染
     const filtered = allMessages.filter(m => !(m.type === 'tool_use' && m.parentToolUseId))
     // DEBUG: 统计 tool_use 消息
@@ -2712,30 +2724,30 @@ struct ChatDetailPage {
    * 其余工具消息跳过（渲染空 Column）。
    * Agent / AskUserQuestion 有特殊渲染，不参与合组。
    */
-  private isFirstToolInReverseGroup(message: Message): boolean {
+  private isFirstToolInGroup(message: Message): boolean {
     if (message.type !== 'tool_use' && message.type !== 'tool_result') return false
     if (message.parentToolUseId) return false
     if (message.toolName === 'Agent' || message.toolName === 'AskUserQuestion') return false
-    const reversed = [...this.getVisibleMessages()].reverse()
-    let idx = reversed.indexOf(message)
+    const allMessages = this.getVisibleMessages()
+    let idx = allMessages.indexOf(message)
     // 引用不匹配时用 ID 回退（组件重建后引用会变）
     if (idx < 0) {
-      for (let i = 0; i < reversed.length; i++) {
-        if (reversed[i].id === message.id) { idx = i; break }
+      for (let i = 0; i < allMessages.length; i++) {
+        if (allMessages[i].id === message.id) { idx = i; break }
       }
     }
     if (idx <= 0) {
-      console.info(`[ChatDetailPage] isFirstToolInReverseGroup=true id=${message.id} toolName=${message.toolName} idx=${idx}`)
+      console.info(`[ChatDetailPage] isFirstToolInGroup=true id=${message.id} toolName=${message.toolName} idx=${idx}`)
       return true
     }
-    const prev = reversed[idx - 1]
+    const prev = allMessages[idx - 1]
     // Agent / AskUserQuestion 会打断连续的工具组
     if (prev.toolName === 'Agent' || prev.toolName === 'AskUserQuestion') {
-      console.info(`[ChatDetailPage] isFirstToolInReverseGroup=true(id=${message.id}) prev is Agent`)
+      console.info(`[ChatDetailPage] isFirstToolInGroup=true(id=${message.id}) prev is Agent`)
       return true
     }
     const result = prev.type !== 'tool_use' && prev.type !== 'tool_result'
-    console.info(`[ChatDetailPage] isFirstToolInReverseGroup=${result} id=${message.id} idx=${idx} prevType=${prev.type}`)
+    console.info(`[ChatDetailPage] isFirstToolInGroup=${result} id=${message.id} idx=${idx} prevType=${prev.type}`)
     return result
   }
 
@@ -2983,7 +2995,7 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
-    .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
     .backgroundColor('#2C2C2E')
     .borderRadius(18)
     .gesture(
@@ -3268,45 +3280,23 @@ struct ChatDetailPage {
     }
   }
 
-  private getToolCardBackground(status?: string): string {
-    switch (status) {
-      case 'running': return 'rgba(24, 32, 44, 0.94)'
-      case 'completed': return 'rgba(25, 34, 28, 0.92)'
-      case 'failed': return 'rgba(45, 24, 24, 0.92)'
-      default: return 'rgba(32, 33, 36, 0.92)'
-    }
+  private getToolCardBackground(): string {
+    return 'rgba(32, 33, 36, 0.92)'
   }
 
-  private getToolCardBorderColor(status?: string): string {
-    switch (status) {
-      case 'running': return 'rgba(10, 132, 255, 0.32)'
-      case 'completed': return 'rgba(48, 209, 88, 0.26)'
-      case 'failed': return 'rgba(255, 59, 48, 0.34)'
-      default: return 'rgba(255,255,255,0.12)'
-    }
+  private getToolCardBorderColor(): string {
+    return 'rgba(255,255,255,0.12)'
   }
 
   @Builder
   ToolUseBubble(message: Message) {
     Column({ space: 0 }) {
-      Row()
-        .width('100%')
-        .height(2)
-        .backgroundColor(this.getToolStatusColor(message.toolStatus))
-
       // Header
       Row({ space: 8 }) {
         // 图标
-        Column() {
-          SymbolGlyph(getToolIcon(message.toolName || 'Tool').symbol)
-            .fontSize(14)
-            .fontColor([getToolIcon(message.toolName || 'Tool').color])
-        }
-        .width(28)
-        .height(28)
-        .backgroundColor(this.getToolStatusBgColor(message.toolStatus))
-        .borderRadius(7)
-        .justifyContent(FlexAlign.Center)
+        SymbolGlyph(getToolIcon(message.toolName || 'Tool').symbol)
+          .fontSize(16)
+          .fontColor([getToolIcon(message.toolName || 'Tool').color])
 
         Column({ space: 2 }) {
           Row({ space: 6 }) {
@@ -3435,11 +3425,11 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
-    .backgroundColor(this.getToolCardBackground(message.toolStatus))
+    .backgroundColor(this.getToolCardBackground())
     .borderRadius(10)
     .border({
       width: 0.5,
-      color: this.getToolCardBorderColor(message.toolStatus)
+      color: this.getToolCardBorderColor()
     })
     .onClick(() => {
       if (this.isToolExpandableWithResult(message)) {
@@ -3458,16 +3448,10 @@ struct ChatDetailPage {
     Column({ space: 0 }) {
       // Header: 图标 + 动词摘要 + 进度状态 + 箭头
       Row({ space: 8 }) {
-        Column() {
-          SymbolGlyph($r('sys.symbol.hammer_fill'))
-            .fontSize(13)
-            .fontColor([this.getToolGroupStateColor(messages)])
-        }
-        .width(28)
-        .height(28)
-        .backgroundColor(this.getToolGroupStateBgColor(messages))
-        .borderRadius(7)
-        .justifyContent(FlexAlign.Center)
+        SymbolGlyph($r('sys.symbol.hammer_fill'))
+          .fontSize(15)
+          .fontColor([this.getToolGroupStateColor(messages)])
+          .margin({ left: 6 })
 
         Column({ space: 2 }) {
           Text(this.getToolGroupSummary(messages))
@@ -4310,7 +4294,7 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
-    .padding(12)
+    .padding({ left: 12, right: 12, top: 8, bottom: 8 })
     .backgroundColor('#2C2C2E')
     .borderRadius(12)
   }

@@ -438,7 +438,7 @@ export struct MarkdownRenderer {
         } else if (node.type === MDNodeType.HR) { this.HorizontalRuleView()
         } else if (node.type === MDNodeType.IMAGE) { this.ImageView(node)
         } else if (node.type === MDNodeType.PARAGRAPH) { this.ParagraphView(node)
-        } else if (node.type === MDNodeType.SPACER) { Row().height(2) }
+        } else if (node.type === MDNodeType.SPACER) { Row().height(1) }
       }, (node: MDNode, index: number) => `md-${index}`)
     }
     .width('100%')
@@ -449,18 +449,17 @@ export struct MarkdownRenderer {
   @Builder
   CodeBlockView(node: MDNode, idx: number) {
     Column({ space: 0 }) {
-      Row() {
-        Row({ space: 6 }) {
+      // 代码块头栏 — 紧凑展示
+      Row({ space: 4 }) {
+        Row({ space: 4 }) {
           Text(node.language ? node.language.toLowerCase() : 'code')
-            .fontSize(11).fontWeight(FontWeight.Medium).fontFamily('monospace').fontColor('#FFFFFF99')
-          if (this.shouldCollapseCode(node)) {
-            Text(this.getCodeLineCount(node) + ' lines').fontSize(10).fontColor('#FFFFFF66')
-          }
+            .fontSize(10).fontWeight(FontWeight.Medium).fontFamily('monospace').fontColor('#FFFFFF99')
         }
         Blank()
-        SymbolGlyph($r('sys.symbol.doc_text')).fontSize(11).fontColor(['#FFFFFF99'])
+        Text(this.getCodeLineCount(node) + ' 行').fontSize(10).fontColor('#FFFFFF66')
+        SymbolGlyph($r('sys.symbol.doc_text')).fontSize(10).fontColor(['#FFFFFF99'])
       }
-      .width('100%').padding({ left: 10, right: 10, top: 6, bottom: 6 })
+      .width('100%').padding({ left: 8, right: 8, top: 4, bottom: 4 })
       .borderRadius({ topLeft: 8, topRight: 8 })
       .onClick(() => { this.copyCode(node.code) })
 
@@ -468,22 +467,22 @@ export struct MarkdownRenderer {
         if (node.language && node.language !== 'plaintext' && node.language !== 'text') {
           Text() {
             ForEach(this.getCodeTokens(node.code, node.language), (token: CodeToken, ti: number) => {
-              Span(token.text).fontSize(13).fontFamily('monospace').fontColor(token.color)
+              Span(token.text).fontSize(12).fontFamily('monospace').fontColor(token.color)
             }, (token: CodeToken, ti: number) => `ct-${ti}`)
           }
         } else {
-          Text(node.code).fontSize(13).fontFamily('monospace').fontColor('#FFFFFFE6')
+          Text(node.code).fontSize(12).fontFamily('monospace').fontColor('#FFFFFFE6')
         }
       }
       .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Auto)
-      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-      .constraintSize({ maxHeight: this.shouldCollapseCode(node) && this.expandedCodeIdx !== idx ? 280 : 5000 })
+      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+      .constraintSize({ maxHeight: this.shouldCollapseCode(node) && this.expandedCodeIdx !== idx ? 200 : 5000 })
 
       if (this.shouldCollapseCode(node) && this.expandedCodeIdx !== idx) {
         Row({ space: 4 }) {
           Text('展开全部').fontSize(11).fontColor(Theme.AccentBlue)
         }
-        .width('100%').justifyContent(FlexAlign.Center).padding({ top: 2, bottom: 6 })
+        .width('100%').justifyContent(FlexAlign.Center).padding({ top: 2, bottom: 4 })
         .onClick(() => { this.expandedCodeIdx = idx })
       }
     }
@@ -491,7 +490,7 @@ export struct MarkdownRenderer {
   }
 
   private shouldCollapseCode(node: MDNode): boolean {
-    return node.code.split('\n').length > 20
+    return node.code.split('\n').length > 12
   }
 
   private getCodeLineCount(node: MDNode): number {
@@ -510,35 +509,38 @@ export struct MarkdownRenderer {
   @Builder
   HeadingView(node: MDNode) {
     Text(node.text)
-      .fontSize(22 - node.level * 2).fontWeight(FontWeight.Bold).fontColor(Theme.TextPrimary)
-      .width('100%').margin({ top: node.level === 1 ? 6 : 3, bottom: 1 })
+      .fontSize(20 - node.level * 2).fontWeight(FontWeight.Bold).fontColor(Theme.TextPrimary)
+      .width('100%').margin({ top: node.level === 1 ? 4 : 2, bottom: 1 })
   }
 
   // ── 表格 ──
 
   @Builder
   TableView(node: MDNode) {
-    Column({ space: 0 }) {
-      ForEach(node.tableRows, (row: TableRow, ri: number) => {
-        Row({ space: 1 }) {
-          ForEach(row.cells, (cell: TableCell, ci: number) => {
-            Text() {
-              ForEach(this.parseInline(cell.text), (frag: InlineFragment, fi: number) => {
-                this.renderInlineFragment(frag)
-              }, (frag: InlineFragment, fi: number) => `tc${ri}-${ci}-${fi}`)
-            }
-            .fontSize(13).fontWeight(row.isHeader ? FontWeight.Bold : FontWeight.Normal)
-            .fontColor(Theme.TextPrimary)
-            .textAlign(cell.alignment === 'center' ? TextAlign.Center :
-              cell.alignment === 'right' ? TextAlign.End : TextAlign.Start)
-            .layoutWeight(1).padding({ left: 6, right: 6, top: 4, bottom: 4 })
-          }, (cell: TableCell, ci: number) => `tc-${ri}-${ci}`)
-        }
-        .width('100%')
-      }, (row: TableRow, ri: number) => `tr-${ri}`)
+    Scroll() {
+      Column({ space: 0 }) {
+        ForEach(node.tableRows, (row: TableRow, ri: number) => {
+          Row({ space: 1 }) {
+            ForEach(row.cells, (cell: TableCell, ci: number) => {
+              Text() {
+                ForEach(this.parseInline(cell.text), (frag: InlineFragment, fi: number) => {
+                  this.renderInlineFragment(frag)
+                }, (frag: InlineFragment, fi: number) => `tc${ri}-${ci}-${fi}`)
+              }
+              .fontSize(12).fontWeight(row.isHeader ? FontWeight.Bold : FontWeight.Normal)
+              .fontColor(Theme.TextPrimary)
+              .textAlign(cell.alignment === 'center' ? TextAlign.Center :
+                cell.alignment === 'right' ? TextAlign.End : TextAlign.Start)
+              .layoutWeight(1).padding({ left: 4, right: 4, top: 3, bottom: 3 })
+            }, (cell: TableCell, ci: number) => `tc-${ri}-${ci}`)
+          }
+          .width('100%')
+        }, (row: TableRow, ri: number) => `tr-${ri}`)
+      }
+      .width('100%').border({ width: 0.5, color: '#FFFFFF1A' }).borderRadius(8)
+      .margin({ top: 3, bottom: 3 }).clip(true)
     }
-    .width('100%').border({ width: 0.5, color: '#FFFFFF1A' }).borderRadius(8)
-    .margin({ top: 3, bottom: 3 }).clip(true)
+    .scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Auto)
   }
 
   // ── 图片 ──
@@ -589,7 +591,7 @@ export struct MarkdownRenderer {
 
   @Builder
   HorizontalRuleView() {
-    Divider().color('#FFFFFF33').width('100%').margin({ top: 6, bottom: 6 })
+    Divider().color('#FFFFFF33').width('100%').margin({ top: 4, bottom: 4 })
   }
 
   // ── 段落 ──
@@ -680,7 +682,7 @@ export struct MarkdownRenderer {
       Span(frag.content).fontSize(15).fontColor(Theme.TextTertiary)
         .decoration({ type: TextDecorationType.LineThrough })
     } else if (frag.type === InlineFragmentType.INLINE_CODE) {
-      Span(' ' + frag.content + ' ').fontSize(14).fontFamily('monospace')
+      Span(' ' + frag.content + ' ').fontSize(13).fontFamily('monospace')
         .fontColor('#BF5AF2').fontWeight(FontWeight.Medium)
     } else if (frag.type === InlineFragmentType.LINK) {
       Span(frag.content).fontSize(15).fontColor(Theme.AccentBlue)
@@ -745,11 +747,11 @@ export struct MarkdownRenderer {
 
   @Builder
   BlockquoteView(node: MDNode) {
-    Row({ space: 6 }) {
-      Column().width(3).height('100%').backgroundColor(Theme.TextSecondary).borderRadius(2)
-      Text(node.text).fontSize(15).fontStyle(FontStyle.Italic).fontColor(Theme.TextSecondary).layoutWeight(1)
+    Row({ space: 4 }) {
+      Column().width(2).height('100%').backgroundColor(Theme.TextSecondary).borderRadius(2)
+      Text(node.text).fontSize(15).fontColor(Theme.TextSecondary).layoutWeight(1)
     }
-    .width('100%').padding({ left: 8, right: 8 }).margin({ top: 3, bottom: 3 })
+    .width('100%').padding({ left: 4, right: 4 }).margin({ top: 2, bottom: 2 })
   }
 
   // ── 列表行内格式 ──
@@ -837,7 +839,7 @@ struct AsyncImage {
           .width('100%')
           .objectFit(ImageFit.Contain)
           .borderRadius(8)
-          .constraintSize({ maxHeight: 240 })
+          .constraintSize({ maxHeight: 180 })
           .backgroundColor('rgba(0,0,0,0.1)')
       }
 

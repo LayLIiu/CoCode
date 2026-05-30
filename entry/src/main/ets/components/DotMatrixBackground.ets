@@ -33,8 +33,8 @@ export struct DotMatrixBackground {
   private h: number = 0
   private hasDrawnOnce: boolean = false
   private frameCount: number = 0
-  // 节能模式：每 3 帧才重新绘制
-  private skipFrameMod: number = 3
+  // 节能模式：每 5 帧才重新绘制（降 ~12fps 有效帧率，装饰背景足够）
+  private skipFrameMod: number = 5
   // 可见性状态
   private isVisible: boolean = false
 

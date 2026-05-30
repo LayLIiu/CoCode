@@ -89,6 +89,9 @@ export class SessionStore {
   // syncMessagesFromServer 并发保护 Set（防止重复调用导致竞态）
   private syncingSessions: Set<string> = new Set()
 
+  // syncOfficialCodexThreadMessages 并发保护 Set（防止 aboutToAppear + onPageShow 同时触发导致竞态）
+  private syncingOfficialCodexThreads: Set<string> = new Set()
+
   // MARK: - 监听者注册
 
   addSessionsChangedListener(listener: () => void): void {
@@ -767,9 +770,23 @@ export class SessionStore {
 
   private persistMessages(sessionId: string, messages?: Message[]): Promise<void> {
     const source = messages || this.messages.get(sessionId) || []
+    // 1. 先用 deduplicateMessages 做基础去重（按 ID、tool、内容）
     const deduped = this.deduplicateMessages(source)
-    const start = Math.max(0, deduped.length - SessionStore.LOCAL_MESSAGE_CACHE_LIMIT)
-    const cached = deduped.slice(start)
+    // 2. 再用 messageSemanticKey 做内容级兜底去重
+    //    清理"ID不同但内容相同"的伪重复（deduplicateMessages 对部分场景可能遗漏）
+    const seen = new Set<string>()
+    const finalList: Message[] = []
+    for (const msg of deduped) {
+      const key = this.messageSemanticKey(msg)
+      if (seen.has(key)) continue
+      seen.add(key)
+      finalList.push(msg)
+    }
+    if (finalList.length < deduped.length) {
+      console.warn(`[SessionStore] persistMessages: semantic dedup removed ${deduped.length - finalList.length} more dups for ${sessionId}`)
+    }
+    const start = Math.max(0, finalList.length - SessionStore.LOCAL_MESSAGE_CACHE_LIMIT)
+    const cached = finalList.slice(start)
     return this.enqueueSave(sessionId, () => storageService.saveMessages(sessionId, cached))
   }
 
@@ -922,13 +939,15 @@ export class SessionStore {
         console.info(`[SessionStore] loadMessages: ${sessionId} already has ${existing.length} messages in memory, skip local load`)
         // 始终进行去重清理（即使数量相同也可能有内容重复）
         const deduped = this.deduplicateMessages(existing)
+        // 强制更新内存引用，确保后续 syncMessagesFromServer 读取 currentLocal 时
+        // 拿到的是经过 deduplicateMessages 处理后的干净数组（而非可能含重复的原始引用）
         if (deduped.length !== existing.length) {
           console.warn(`[SessionStore] loadMessages: cleaned ${existing.length - deduped.length} duplicates from memory for ${sessionId}`)
-          this.messages.set(sessionId, deduped)
           // 立即保存去重后的消息到本地存储
           this.persistMessages(sessionId, deduped)
           this.notifyMessagesChanged(sessionId)
         }
+        this.messages.set(sessionId, deduped)
       } else {
         // 先加载本地缓存（快速展示）
         const localMessages = await storageService.loadMessages(sessionId)
@@ -946,6 +965,20 @@ export class SessionStore {
       }
     } catch (e) {
       console.error(`[SessionStore] loadMessages storage error: ${e}`)
+    }
+
+    // 最终兜底：用 getDedupedMessages 做内容级多维度去重
+    // 清理历史遗留的"ID不同但内容相同"的重复（旧版 persistMessages 未做语义去重）
+    {
+      const current = this.messages.get(sessionId)
+      if (current && current.length > 1) {
+        const cleaned = this.getDedupedMessages(sessionId)
+        if (cleaned.length < current.length) {
+          console.warn(`[SessionStore] loadMessages: final dedup removed ${current.length - cleaned.length} dups for ${sessionId}`)
+          this.messages.set(sessionId, cleaned)
+          this.notifyMessagesChanged(sessionId)
+        }
+      }
     }
 
     // 从现有消息中提取任务列表
@@ -1037,6 +1070,17 @@ export class SessionStore {
         merged = deduped  // 始终使用去重后的结果
       }
 
+      // ⚠️ 最终兜底去重：先用 getDedupedMessages 的多维度去重手段
+      // （normalizeMessageText + removeOverlappingTextMessages）清理
+      // mergeMessages 中可能遗漏的重复（流式临时 toolUseId vs 服务端正式 toolUseId、
+      // 格式化差异等），再将干净的最终结果写入 store
+      const finalMergeLen = merged.length
+      this.messages.set(sessionId, merged)
+      merged = this.getDedupedMessages(sessionId)
+      if (merged.length < finalMergeLen) {
+        console.warn(`[SessionStore] syncMessagesFromServer: final dedup caught ${finalMergeLen - merged.length} more dups for ${sessionId}`)
+      }
+
       this.messages.set(sessionId, merged)
       this.notifyMessagesChanged(sessionId)
 
@@ -1059,6 +1103,9 @@ export class SessionStore {
       } catch (e) {
         console.info(`[SessionStore] Tasks API error (non-fatal): ${e}`)
       }
+
+      // 诊断日志：输出合并前后数量变化
+      console.info(`[SessionStore] syncMessagesFromServer: local=${currentLocal.length} server=${serverMessages.length} merged=${merged.length}`)
 
       // 串行化保存到本地（通过队列确保顺序）
       this.persistMessages(sessionId, merged)
@@ -1176,6 +1223,23 @@ export class SessionStore {
       }
 
       if (!foundByContent) {
+        // 最终兜底：用 messageSemanticKey 比对（忽略 ID/toolUseId 差异，纯内容匹配）
+        // 适用于 toolUseId 不同但内容相同的 tool_result
+        // 以及 content 非空但 ID/type 不同的其他消息类型
+        const semanticKey = this.messageSemanticKey(msg)
+        for (let j = 0; j < serverMessages.length; j++) {
+          const sm = serverMessages[j]
+          if (this.messageSemanticKey(sm) === semanticKey) {
+            foundByContent = true
+            break
+          }
+        }
+      }
+
+      if (!foundByContent) {
+        // ⚠️ 诊断日志：本地消息未被任何方式去重，将被加入结果集
+        const msgContentPreview = (msg.content || msg.toolResult || '').substring(0, 120)
+        console.warn(`[SessionStore] mergeMessages: ADDING local msg (not found in server) type=${msg.type} id=${msg.id} toolUseId=${msg.toolUseId} toolName=${msg.toolName} content=${msgContentPreview.replace(/\n/g, '\\n')} semanticKey=${this.messageSemanticKey(msg).substring(0, 100)}`)
         result.push(msg)
       }
     }
@@ -2157,6 +2221,13 @@ export class SessionStore {
   }
 
   private async syncOfficialCodexThreadMessages(sessionId: string, threadId: string): Promise<void> {
+    // 并发保护：已有同步进行中则跳过（防止 aboutToAppear + onPageShow 同时触发导致竞态重复）
+    if (this.syncingOfficialCodexThreads.has(sessionId)) {
+      console.info(`[SessionStore] syncOfficialCodexThreadMessages: already syncing ${sessionId}, skip`)
+      return
+    }
+    this.syncingOfficialCodexThreads.add(sessionId)
+
     try {
       const response = await apiService.getCodexRemoteThreadTurns(threadId)
       const result = response['result'] as Record<string, Object>
@@ -2176,6 +2247,8 @@ export class SessionStore {
     } catch (e) {
       console.error(`[SessionStore] Sync Official Codex thread messages error: ${e}`)
       await this.syncOfficialCodexThreadPreviewMessage(sessionId, threadId)
+    } finally {
+      this.syncingOfficialCodexThreads.delete(sessionId)
     }
   }
 
