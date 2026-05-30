@@ -4,7 +4,6 @@
  */
 
 import { Theme } from '../common/Theme'
-import { appState } from '../stores/AppState'
 import { apiService, CronTask, TaskRunItem } from '../services/APIService'
 import { HdsNavigation, HdsNavigationTitleMode, ScrollEffectType } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial } from '@hms.hds.hdsMaterial'

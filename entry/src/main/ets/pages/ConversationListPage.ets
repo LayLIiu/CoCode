@@ -12,9 +12,11 @@ import { sessionStore } from '../stores/SessionStore'
 import { storageService } from '../services/StorageService'
 import { SearchBar } from '../components/SearchBar'
 import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
+import { ConversationListSkeleton } from '../components/SkeletonLoading'
 import { toastManager } from '../services/ToastManager'
 import router from '@ohos.router'
 import pasteboard from '@ohos.pasteboard'
+import { KeyboardAvoidMode } from '@kit.ArkUI'
 
 // 分组数据结构
 class SessionGroup {
@@ -266,6 +268,11 @@ export struct ConversationListPage {
       this.sessions = []
     }
 
+    // 键盘避让：使用 OFFSET 模式，让 Tab Bar 保持固定
+    try {
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET)
+    } catch (e) {}
+
     this.sessionsChangedListener = () => {
       // 创建新数组引用，确保 @State 响应式更新
       this.sessions = [...(sessionStore.sessions || [])]
@@ -296,6 +303,10 @@ export struct ConversationListPage {
   onPageShow(): void {
     this.refreshSessionsFromStore()
     this.syncOfficialCodexThreadsIfNeeded()
+    // 每次页面显示时重新设置键盘避让模式
+    try {
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET)
+    } catch (e) {}
   }
 
   private refreshSessionsFromStore(): void {
@@ -694,21 +705,7 @@ export struct ConversationListPage {
 
   @Builder
   LoadingState() {
-    Column() {
-      LoadingProgress()
-        .width(40)
-        .height(40)
-        .color(Theme.PrimaryColor)
-
-      Text('加载中...')
-        .fontSize(Theme.FontBody)
-        .fontColor(Theme.TextSecondary)
-        .margin({ top: Theme.SpacingMD })
-    }
-    .width('100%')
-    .height(300)
-    .justifyContent(FlexAlign.Center)
-    .alignItems(HorizontalAlign.Center)
+    ConversationListSkeleton()
   }
 
   @Builder

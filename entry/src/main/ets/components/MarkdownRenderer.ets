@@ -117,6 +117,50 @@ export struct MarkdownRenderer {
   aboutToAppear(): void { this.nodes = this.parseMarkdown(this.content) }
   onContentChange(): void { this.nodes = this.parseMarkdown(this.content) }
 
+  private fragmentKey(frag: InlineFragment, index: number): string {
+    return `${index}-${frag.type}-${frag.content.length}-${frag.url.length}`
+  }
+
+  private fragmentsSignature(fragments: InlineFragment[]): string {
+    let totalLength = 0
+    let typeSignature = ''
+    for (let i = 0; i < fragments.length; i++) {
+      totalLength += fragments[i].content.length + fragments[i].url.length
+      typeSignature += fragments[i].type + '.'
+    }
+    return `${fragments.length}-${totalLength}-${typeSignature}`
+  }
+
+  private nodeKey(node: MDNode, index: number): string {
+    if (node.type === MDNodeType.CODE_BLOCK) {
+      return `md-${index}-${node.type}-${node.language}-${node.code.length}`
+    }
+    if (node.type === MDNodeType.HEADING || node.type === MDNodeType.BLOCKQUOTE) {
+      return `md-${index}-${node.type}-${node.text.length}`
+    }
+    if (node.type === MDNodeType.PARAGRAPH) {
+      return `md-${index}-${node.type}-${this.fragmentsSignature(node.fragments)}`
+    }
+    if (node.type === MDNodeType.UNORDERED_LIST || node.type === MDNodeType.ORDERED_LIST) {
+      let totalLength = 0
+      for (let i = 0; i < node.items.length; i++) totalLength += node.items[i].length
+      return `md-${index}-${node.type}-${node.items.length}-${totalLength}`
+    }
+    if (node.type === MDNodeType.TABLE) {
+      let totalLength = 0
+      for (let r = 0; r < node.tableRows.length; r++) {
+        for (let c = 0; c < node.tableRows[r].cells.length; c++) {
+          totalLength += node.tableRows[r].cells[c].text.length
+        }
+      }
+      return `md-${index}-${node.type}-${node.tableRows.length}-${totalLength}`
+    }
+    if (node.type === MDNodeType.IMAGE) {
+      return `md-${index}-${node.type}-${node.imageUrl.length}-${node.imageAlt.length}`
+    }
+    return `md-${index}-${node.type}`
+  }
+
   // ═══════════════ 解析 ═══════════════
 
   private parseMarkdown(text: string): MDNode[] {
@@ -439,9 +483,11 @@ export struct MarkdownRenderer {
         } else if (node.type === MDNodeType.IMAGE) { this.ImageView(node)
         } else if (node.type === MDNodeType.PARAGRAPH) { this.ParagraphView(node)
         } else if (node.type === MDNodeType.SPACER) { Row().height(1) }
-      }, (node: MDNode, index: number) => `md-${index}`)
+      }, (node: MDNode, index: number) => this.nodeKey(node, index))
     }
     .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .clip(false)
   }
 
   // ── 代码块 ──
@@ -525,7 +571,7 @@ export struct MarkdownRenderer {
               Text() {
                 ForEach(this.parseInline(cell.text), (frag: InlineFragment, fi: number) => {
                   this.renderInlineFragment(frag)
-                }, (frag: InlineFragment, fi: number) => `tc${ri}-${ci}-${fi}`)
+                }, (frag: InlineFragment, fi: number) => `tc${ri}-${ci}-${this.fragmentKey(frag, fi)}`)
               }
               .fontSize(12).fontWeight(row.isHeader ? FontWeight.Bold : FontWeight.Normal)
               .fontColor(Theme.TextPrimary)
@@ -638,7 +684,7 @@ export struct MarkdownRenderer {
       Text() {
         ForEach(node.fragments, (frag: InlineFragment, fi: number) => {
           this.renderInlineFragment(frag)
-        }, (frag: InlineFragment, fi: number) => `frag-${fi}`)
+        }, (frag: InlineFragment, fi: number) => this.fragmentKey(frag, fi))
       }
       .lineHeight(20).width('100%')
     }
@@ -656,7 +702,7 @@ export struct MarkdownRenderer {
         } else {
           this.renderInlineFragment(frag)
         }
-      }, (frag: InlineFragment, fi: number) => `frag-${fi}`)
+      }, (frag: InlineFragment, fi: number) => this.fragmentKey(frag, fi))
     }
     .lineHeight(20)
     .width('100%')
@@ -709,7 +755,7 @@ export struct MarkdownRenderer {
           this.InlineFormattedText(item)
         }
         .width('100%').margin({ bottom: 1 }).alignItems(VerticalAlign.Top)
-      }, (item: string, itemIdx: number) => `ul-${itemIdx}`)
+      }, (item: string, itemIdx: number) => `ul-${itemIdx}-${item.length}`)
     }
     .width('100%').padding({ left: 4 }).margin({ top: 1, bottom: 1 })
   }
@@ -738,7 +784,7 @@ export struct MarkdownRenderer {
           this.InlineFormattedText(item)
         }
         .width('100%').margin({ bottom: 1 }).alignItems(VerticalAlign.Top)
-      }, (item: string, itemIdx: number) => `ol-${itemIdx}`)
+      }, (item: string, itemIdx: number) => `ol-${itemIdx}-${item.length}`)
     }
     .width('100%').padding({ left: 4 }).margin({ top: 1, bottom: 1 })
   }
@@ -761,7 +807,7 @@ export struct MarkdownRenderer {
     Text() {
       ForEach(this.parseInline(text), (frag: InlineFragment, fi: number) => {
         this.renderInlineFragment(frag)
-      }, (frag: InlineFragment, fi: number) => `ilf-${fi}`)
+      }, (frag: InlineFragment, fi: number) => this.fragmentKey(frag, fi))
     }
     .lineHeight(20).layoutWeight(1)
   }

@@ -24,6 +24,7 @@ import { notificationHelper } from '../services/NotificationHelper'
 import { fileService, FileInfo } from '../services/FileService'
 import { downloadService } from '../services/DownloadService'
 import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
+import { ChatDetailSkeleton } from '../components/SkeletonLoading'
 
 import { StatusIcon, WorkStatus } from '../components/StatusIcon'
 import { DotMatrixBackground } from '../components/DotMatrixBackground'
@@ -415,6 +416,10 @@ struct ChatDetailPage {
   aboutToDisappear(): void {
     this.isPageActive = false
     this.isDestroyed = true
+    // 恢复键盘避让模式，避免影响其他页面
+    try {
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET)
+    } catch (e) {}
     // 保存输入框草稿
     if (this.inputText) {
       sessionStore.inputDrafts.set(this.sessionId, this.inputText)
@@ -852,19 +857,28 @@ struct ChatDetailPage {
 
   private messagesChangedListener = (sid: string) => {
     if (sid === this.sessionId) {
-      const oldCount = this.messages.length
-      // 使用 getDedupedMessages 获取去重后的消息，防止 Store 中的重复消息传递到 UI
-      const msgs = sessionStore.getDedupedMessages(this.sessionId)
+      // 直接使用 getMessagesForDisplay，合并 tail + head
+      // SessionStore 已经做了去重，这里不需要重复去重
+      const msgs = sessionStore.getMessagesForDisplay(this.sessionId)
       if (msgs && msgs.length > 0) {
         const previousLatestMessageId = this.latestMessageId
-        // 检查消息是否真的变化了（避免重复触发导致 UI 闪烁）
-        if (msgs.length === oldCount && this.messages.length > 0) {
-          // 数量相同，检查最后一条消息是否相同
+        // 简化检查：只比较最后一条消息
+        if (this.messages.length > 0 && msgs.length === this.messages.length) {
           const lastOld = this.messages[this.messages.length - 1]
           const lastNew = msgs[msgs.length - 1]
-          if (lastOld.id === lastNew.id && lastOld.content === lastNew.content) {
-            // 消息没有实质变化，跳过更新
-            return
+          // 流式消息只比较 ID 和长度，避免内容变化时频繁比较
+          if (lastOld.id === lastNew.id) {
+            if (lastNew.isStreaming) {
+              // 流式消息：只检查长度变化超过阈值才更新
+              const oldLen = (lastOld.content || '').length
+              const newLen = (lastNew.content || '').length
+              if (newLen - oldLen < 50 && newLen > 100) {
+                return
+              }
+            } else if (lastOld.content === lastNew.content) {
+              // 非流式消息：内容完全相同才跳过
+              return
+            }
           }
         }
         // 展开为新数组，确保 ArkTS @State 能检测到引用变化并触发重绘
@@ -2054,27 +2068,24 @@ struct ChatDetailPage {
       // 点阵背景 - 最底层，穿透触控
       DotMatrixBackground({ active: this.isPageActive })
 
-      HdsNavigation() {
-        // 消息列表
-        List({ scroller: this.scroller }) {
-          // 顶部占位
-          ListItem() {
-            Row().width('100%').height(this.getBottomSpacerHeight())
-          }
-
-          // 流式思考实时渲染（回复内容不流式显示，生成完后直接弹完整气泡）
-          if (this.streamingThinking) {
+      // 消息未加载时显示骨架屏
+      if (!this.isMessagesLoaded) {
+        ChatDetailSkeleton()
+      } else {
+        HdsNavigation() {
+          // 消息列表
+          List({ scroller: this.scroller }) {
+            // 顶部占位
             ListItem() {
-              this.StreamingThinkingBubble()
+              Row().width('100%').height(this.getBottomSpacerHeight())
             }
-          }
 
-          // 消息正序排列（最旧在前=视觉顶部，最新在后=视觉底部），工具消息合组
-          ForEach(this.getVisibleMessages(), (message: Message) => {
-            ListItem() {
-              if (message.type === 'tool_use' && (message.toolName === 'Agent' || message.toolName === 'AskUserQuestion')) {
-                // Agent / AskUserQuestion 有特殊渲染，不参与合组
-                this.MessageBubble(message)
+            // 消息正序排列（最旧在前=视觉顶部，最新在后=视觉底部），工具消息合组
+            ForEach(this.getVisibleMessages(), (message: Message) => {
+              ListItem() {
+                if (message.type === 'tool_use' && (message.toolName === 'Agent' || message.toolName === 'AskUserQuestion')) {
+                  // Agent / AskUserQuestion 有特殊渲染，不参与合组
+                  this.MessageBubble(message)
               } else if ((message.type === 'tool_use' || message.type === 'tool_result') && !message.parentToolUseId) {
                 // 工具组：仅在组内第一条渲染 ToolGroupBubble，其余跳过
                 if (this.isFirstToolInGroup(message)) {
@@ -2129,6 +2140,14 @@ struct ChatDetailPage {
                   .textAlign(TextAlign.Center)
                   .padding({ top: 2, bottom: 8 })
               }
+            }
+          }
+
+          // 流式思考实时渲染（回复内容不流式显示，生成完后直接弹完整气泡）
+          // 放在消息列表最后，显示在最新消息下方
+          if (this.streamingThinking) {
+            ListItem() {
+              this.StreamingThinkingBubble()
             }
           }
 
@@ -2306,7 +2325,7 @@ struct ChatDetailPage {
         this.InputAreaContent()
       }
       .width('100%')
-      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, bottom: 25 })
+      .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG, bottom: this.isKeyboardVisible ? 0 : 25 })
       .backgroundColor('transparent')
       .position({ x: 0, y: '100%' })
       .translate({ y: '-100%' })
@@ -2330,8 +2349,8 @@ struct ChatDetailPage {
           isVisible: $showFilePreview
         })
       }
-
-      }
+      } // 关闭 else 块
+    }
     .width('100%')
     .height('100%')
     .backgroundColor('#101114')
@@ -2706,31 +2725,11 @@ struct ChatDetailPage {
     .borderRadius(12)
   }
 
-  // 获取可见消息（分页 + 展示层内容去重），过滤掉 Agent 子工具（由 AgentToolUseBubble 嵌套渲染）
+  // 获取可见消息（分页），过滤掉 Agent 子工具（由 AgentToolUseBubble 嵌套渲染）
   private getVisibleMessages(): Message[] {
-    // 用 getDedupedMessages 作为展示层安全网，过滤内容重复的消息
-    let allMessages = sessionStore.getDedupedMessages(this.sessionId)
-    // 最终安全网：按规整化原始内容逐对去重（捕获 messageSemanticKey 截断差异等极端情况）
-    if (allMessages.length > 1) {
-      const finalSeen = new Set<string>()
-      const finalMessages: Message[] = []
-      for (let mi = 0; mi < allMessages.length; mi++) {
-        const m = allMessages[mi]
-        // 构建纯内容键（不截断，用于最终去重兜底）
-        const rawContent = (m.content || m.toolResult || '').trim()
-        const contentKey = m.type + ':' + rawContent.substring(0, 8000)
-        if (finalSeen.has(contentKey)) {
-          console.warn(`[ChatDetailPage] getVisibleMessages FINAL dedup: removing ${m.type} id=${m.id} (content matches previous)`)
-          continue
-        }
-        finalSeen.add(contentKey)
-        finalMessages.push(m)
-      }
-      if (finalMessages.length < allMessages.length) {
-        console.warn(`[ChatDetailPage] getVisibleMessages: final dedup removed ${allMessages.length - finalMessages.length} dups`)
-        allMessages = finalMessages
-      }
-    }
+    // 直接使用已缓存的 messages，不再重复去重
+    // SessionStore 和 messagesChangedListener 已经做了去重
+    const allMessages = this.messages
     // 过滤：排除有 parentToolUseId 的子工具，它们在 Agent 卡片内嵌套渲染
     const filtered = allMessages.filter(m => !(m.type === 'tool_use' && m.parentToolUseId))
     // DEBUG: 统计 tool_use 消息
@@ -2869,9 +2868,125 @@ struct ChatDetailPage {
         }
 
         if (message.type === 'user') {
-          this.UserBubble(message)
+          // 使用导入的 UserBubble 组件
+          Column({ space: 4 }) {
+            Text(message.content)
+              .fontSize(15)
+              .fontColor(Theme.TextPrimary)
+              .lineHeight(22)
+
+            if (this.activeCopyMessageId === message.id) {
+              Row({ space: 4 }) {
+                Row({ space: 4 }) {
+                  SymbolGlyph($r('sys.symbol.doc_text'))
+                    .fontSize(11)
+                    .fontColor([Theme.TextPrimary])
+                  Text('复制')
+                    .fontSize(11)
+                    .fontColor(Theme.TextPrimary)
+                }
+                .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+                .backgroundColor(Theme.GlassBackground)
+                .borderRadius(10)
+                .border({ width: 0.5, color: Theme.GlassBorder })
+                .onClick(() => {
+                  this.copyToClipboard(message.content)
+                  this.activeCopyMessageId = ''
+                })
+
+                Row({ space: 4 }) {
+                  SymbolGlyph($r('sys.symbol.character'))
+                    .fontSize(11)
+                    .fontColor([Theme.AccentBlue])
+                  Text('翻译')
+                    .fontSize(11)
+                    .fontColor(Theme.AccentBlue)
+                }
+                .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+                .backgroundColor(Theme.GlassBackground)
+                .borderRadius(10)
+                .border({ width: 0.5, color: Theme.GlassBorder })
+                .onClick(() => {
+                  this.activeCopyMessageId = ''
+                  this.translateMessageContent(message.content)
+                })
+              }
+            }
+          }
+          .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+          .backgroundColor('#3A3A3C')
+          .borderRadius(18)
+          .gesture(
+            LongPressGesture()
+              .onAction(() => {
+                if (this.activeCopyMessageId === message.id) {
+                  this.activeCopyMessageId = ''
+                } else {
+                  this.activeCopyMessageId = message.id
+                }
+              })
+          )
         } else if (message.type === 'assistant') {
-          this.AssistantBubble(message)
+          // 使用导入的 AssistantBubble 组件
+          Column({ space: 4 }) {
+            if (this.shouldHideContent(message.content)) {
+              // 隐藏工具调用 JSON
+            } else {
+              MarkdownRenderer({ content: message.content, onLinkClick: (url: string) => { this.openExternalLink(url) } })
+            }
+
+            if (this.activeCopyMessageId === message.id) {
+              Row({ space: 4 }) {
+                Row({ space: 4 }) {
+                  SymbolGlyph($r('sys.symbol.doc_text'))
+                    .fontSize(11)
+                    .fontColor([Theme.TextPrimary])
+                  Text('复制')
+                    .fontSize(11)
+                    .fontColor(Theme.TextPrimary)
+                }
+                .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+                .backgroundColor(Theme.GlassBackground)
+                .borderRadius(10)
+                .border({ width: 0.5, color: Theme.GlassBorder })
+                .onClick(() => {
+                  this.copyToClipboard(message.content)
+                  this.activeCopyMessageId = ''
+                })
+
+                Row({ space: 4 }) {
+                  SymbolGlyph($r('sys.symbol.character'))
+                    .fontSize(11)
+                    .fontColor([Theme.AccentBlue])
+                  Text('翻译')
+                    .fontSize(11)
+                    .fontColor(Theme.AccentBlue)
+                }
+                .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+                .backgroundColor(Theme.GlassBackground)
+                .borderRadius(10)
+                .border({ width: 0.5, color: Theme.GlassBorder })
+                .onClick(() => {
+                  this.activeCopyMessageId = ''
+                  this.translateMessageContent(message.content)
+                })
+              }
+            }
+          }
+          .width('100%')
+          .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+          .backgroundColor('#2C2C2E')
+          .borderRadius(18)
+          .gesture(
+            LongPressGesture()
+              .onAction(() => {
+                if (this.activeCopyMessageId === message.id) {
+                  this.activeCopyMessageId = ''
+                } else {
+                  this.activeCopyMessageId = message.id
+                }
+              })
+          )
         } else if (message.type === 'thinking') {
           this.ThinkingBubble(message)
         } else if (message.type === 'tool_use') {
@@ -2885,7 +3000,6 @@ struct ChatDetailPage {
         } else if (message.type === 'tool_result') {
           this.ToolResultBubble(message)
         } else if (message.type === 'permission_request') {
-          // AskUserQuestion 的 permission_request 不单独渲染，已由 tool_use 渲染
           if (message.toolName !== 'AskUserQuestion') {
             this.PermissionBubble(message)
           }
@@ -2894,7 +3008,14 @@ struct ChatDetailPage {
         } else if (message.type === 'error') {
           this.ErrorBubble(message)
         } else if (message.type === 'system_notification' || message.type === 'system') {
-          this.SystemBubble(message)
+          Row() {
+            Text(message.content || '系统消息')
+              .fontSize(12)
+              .fontColor(Theme.TextTertiary)
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+          .padding({ top: 4, bottom: 4 })
         } else if (message.type === 'task_list') {
           this.TaskSummaryBubble(message)
         }
@@ -2977,6 +3098,14 @@ struct ChatDetailPage {
     Column({ space: 4 }) {
       if (this.shouldHideContent(message.content)) {
         // 隐藏工具调用 JSON
+      } else if (message.isStreaming) {
+        // 流式消息：使用简化的纯文本渲染，避免每次 delta 都解析 Markdown
+        // 完成后（isStreaming=false）会自动切换回 Markdown 渲染
+        Text(message.content)
+          .fontSize(15)
+          .fontColor(Theme.TextPrimary)
+          .lineHeight(22)
+          .width('100%')
       } else {
         MarkdownRenderer({ content: message.content, onLinkClick: (url: string) => { this.openExternalLink(url) } })
       }

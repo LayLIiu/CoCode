@@ -4,7 +4,6 @@
 
 import { Theme } from '../common/Theme'
 import { authStore } from '../stores/AuthStore'
-import { appState } from '../stores/AppState'
 import { ServerProfile } from '../models/Models'
 import { HdsNavigation, ScrollEffectType, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial } from '@hms.hds.hdsMaterial'

@@ -64,6 +64,7 @@ export struct SettingsPage {
   @State codexControllerClientId: string = ''
   @State codexControllerWsConnected: boolean = false
   @State codexControllerLoading: boolean = false
+  @State codexControllerError: string = ''
   @State officialCodexThreadCount: number = 0
   @State officialCodexSyncLoading: boolean = false
 
@@ -1933,6 +1934,7 @@ export struct SettingsPage {
     if (this.codexControllerStatus === '未知') return '点击刷新查询 Official Codex 控制器状态'
     if (this.codexControllerWsConnected) return `控制器已连接，已同步 ${this.officialCodexThreadCount} 个官方对话`
     if (this.codexControllerStatus === '已就绪') return '已授权，点击"恢复 & 连接"建立远程连接'
+    if (this.codexControllerStatus === '未授权' && this.codexControllerError) return this.codexControllerError
     return `状态: ${this.codexControllerStatus}`
   }
 
@@ -1993,6 +1995,7 @@ export struct SettingsPage {
       // 再查整体状态
       let statusText = '未知'
       let clientId = ''
+      let errorMsg = ''
       try {
         const status = await apiService.getCodexRemoteStatus()
         const controllerSession = status['controllerSession'] as Record<string, Object> | null
@@ -2001,6 +2004,8 @@ export struct SettingsPage {
           clientId = (controllerSession['clientId'] as string) || ''
         } else {
           statusText = '未授权'
+          // 捕获具体错误原因
+          errorMsg = (status['controllerError'] as string) || ''
         }
       } catch (_e) {
         statusText = '未授权'
@@ -2009,6 +2014,7 @@ export struct SettingsPage {
       this.codexControllerStatus = statusText
       this.codexControllerClientId = clientId
       this.codexControllerWsConnected = wsConnected
+      this.codexControllerError = errorMsg
     } catch (e) {
       console.error(`[Settings] Codex controller status error: ${e}`)
       this.codexControllerStatus = '未授权'
