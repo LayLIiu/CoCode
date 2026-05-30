@@ -1492,12 +1492,10 @@ export class SessionStore {
 
     const result: Message[] = []
     const seenById: Set<string> = new Set()
-    const seenByContent: Set<string> = new Set()
-    const seenByTool: Set<string> = new Set()
+    const seenBySemanticKey: Set<string> = new Set()
 
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i]
-      let isDuplicate = false
 
       // 1. 按 ID 去重（排除临时 ID）
       if (msg.id && !msg.id.startsWith('stream-') && !msg.id.startsWith('thinking-') &&
@@ -1511,26 +1509,13 @@ export class SessionStore {
         seenById.add(msg.id)
       }
 
-      // 2. tool_use 消息：按 toolName + toolInput 去重
-      if (msg.type === 'tool_use' && msg.toolName) {
-        const toolKey = this.messageSemanticKey(msg)
-        if (seenByTool.has(toolKey)) {
-          console.info(`[SessionStore] deduplicateMessages: skip tool_use ${msg.toolName}`)
-          continue
-        }
-        seenByTool.add(toolKey)
+      // 2. 按语义键去重（统一处理所有消息类型，包括 assistant）
+      const semanticKey = this.messageSemanticKey(msg)
+      if (seenBySemanticKey.has(semanticKey)) {
+        console.info(`[SessionStore] deduplicateMessages: skip ${msg.type} by semantic key, id=${msg.id}`)
+        continue
       }
-
-      // 3. 其他消息：按规整化内容去重
-      if (msg.type !== 'tool_use') {
-        const content = this.normalizeMessageText(msg.content || msg.toolResult || '')
-        const contentKey = this.messageSemanticKey(msg)
-        if (content.length > 0 && seenByContent.has(contentKey)) {
-          console.info(`[SessionStore] deduplicateMessages: skip ${msg.type} by content`)
-          continue
-        }
-        seenByContent.add(contentKey)
-      }
+      seenBySemanticKey.add(semanticKey)
 
       result.push(msg)
     }
@@ -1738,13 +1723,29 @@ export class SessionStore {
   }
 
   private async resolveOfficialCodexModelId(): Promise<string> {
-    if (appState.currentModel?.id) return appState.currentModel.id
+    const codexModelId = appState.getSelectedModelForProvider('codex')
+    if (this.isOfficialCodexModelId(codexModelId)) return codexModelId
+
+    const appModelId = appState.currentModel?.id || ''
+    if (this.isOfficialCodexModelId(appModelId)) return appModelId
+
     try {
       const current = await apiService.getCurrentModel()
-      return current.id || ''
+      const modelId = current.id || ''
+      return this.isOfficialCodexModelId(modelId) ? modelId : ''
     } catch (e) {
       return ''
     }
+  }
+
+  private isOfficialCodexModelId(modelId: string): boolean {
+    const normalized = modelId.trim().toLowerCase()
+    if (normalized.length <= 0) return false
+    return normalized.startsWith('gpt-') ||
+      normalized.startsWith('o1') ||
+      normalized.startsWith('o3') ||
+      normalized.startsWith('o4') ||
+      normalized.indexOf('codex') >= 0
   }
 
   private resolveOfficialCodexReasoningEffort(): string {
@@ -1808,14 +1809,13 @@ export class SessionStore {
             this.mergeOfficialCodexPolledMessages(sessionId, data)
             const status = (targetTurn && targetTurn['status'] as string) || ''
             const normalizedStatus = this.normalizeOfficialCodexTurnStatus(status)
-            const text = this.extractOfficialCodexAssistantText(targetTurn)
             const done = normalizedStatus === 'completed' || normalizedStatus === 'succeeded' ||
               normalizedStatus === 'success' || normalizedStatus === 'done' ||
               normalizedStatus === 'failed' || normalizedStatus === 'cancelled' || normalizedStatus === 'canceled'
 
-            if (text.length > 0) {
-              this.upsertOfficialCodexAssistantMessage(sessionId, turnId, text, normalizedStatus === 'failed', !done)
-            }
+            // 移除多余的 upsertOfficialCodexAssistantMessage 调用
+            // mergeOfficialCodexPolledMessages 已经通过 buildOfficialCodexMessagesFromTurns 创建了 assistant 消息
+            // 无需再创建另一条 ID 不同但内容相同的消息
 
             if (done) {
               await this.syncOfficialCodexThreadMessages(sessionId, threadId)
@@ -1909,6 +1909,7 @@ export class SessionStore {
   }
 
   private getOfficialCodexPollDelayMs(attempt: number): number {
+    if (attempt <= 0) return 0
     if (attempt < 20) return 500
     if (attempt < 60) return 1000
     return 2000
@@ -1984,6 +1985,7 @@ export class SessionStore {
   }
 
   private addOfficialCodexPermissionMessage(sessionId: string, pending: PendingPermission): void {
+    // 先检查是否已存在
     const existing = this.messages.get(sessionId) || []
     for (let i = 0; i < existing.length; i++) {
       if (existing[i].type === 'permission_request' && existing[i].permissionId === pending.requestId) {
@@ -1994,6 +1996,13 @@ export class SessionStore {
     this.flushHeadToTail(sessionId)
     this.updateSessionStatus(sessionId, 'permission_pending')
     this.pendingPermissions.set(sessionId, pending)
+
+    // AskUserQuestion 有专门的交互卡片（通过 tool_use 渲染），不需要额外的权限请求卡片
+    // 但仍然需要设置 pendingPermissions，以便提交答案时能获取 requestId
+    if (pending.toolName === 'AskUserQuestion') {
+      console.info(`[SessionStore] Skip permission_request card for AskUserQuestion: ${pending.requestId}, but still set pendingPermissions`)
+      return
+    }
 
     const permMessage: Message = {
       id: 'permission-' + pending.requestId,
@@ -3093,6 +3102,19 @@ export class SessionStore {
           }
           this.addMessage(sessionId, toolMessage)
 
+          // AskUserQuestion 需要设置 pendingPermissions，以便提交答案时能获取 requestId
+          if (msg.toolName === 'AskUserQuestion' && msg.requestId) {
+            console.info(`[SessionStore] Setting pendingPermissions for AskUserQuestion: ${msg.requestId}`)
+            this.updateSessionStatus(sessionId, 'permission_pending')
+            this.pendingPermissions.set(sessionId, {
+              requestId: msg.requestId,
+              toolName: msg.toolName,
+              toolUseId: toolId,
+              input: msg.input as Record<string, Object>,
+              description: msg.description
+            })
+          }
+
           // 跟踪 TaskCreate / TaskUpdate 工具调用（实时更新任务列表）
           if (msg.toolName === 'TaskCreate' || msg.toolName === 'TaskUpdate') {
             // DEBUG: 打印 task tool 的 input 格式
@@ -3180,7 +3202,7 @@ export class SessionStore {
         break
 
       case 'permission_request':
-        // 非流式事件：先将 Head 刷新到 Tail
+        // AskUserQuestion 需要 requestId 来提交答案，但不需要显示权限卡片
         if (msg.requestId) {
           this.addOfficialCodexPermissionMessage(sessionId, {
             requestId: msg.requestId,

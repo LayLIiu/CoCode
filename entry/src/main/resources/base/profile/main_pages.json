@@ -15,6 +15,7 @@
     "pages/ProfilePage",
     "pages/AgentsPage",
     "pages/ScheduledTasksPage",
-    "pages/PreviewPage"
+    "pages/PreviewPage",
+    "pages/ConnectionDetailPage"
   ]
 }

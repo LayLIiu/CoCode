@@ -33,6 +33,7 @@ export class AppState {
 
   // 按服务商存储的模型列表（用于 per-provider 模型过滤）
   sessionModels: Record<string, ModelInfo[]> = {}
+  selectedModelsByProvider: Record<string, string> = {}
 
   // 加载状态
   isLoadingModels: boolean = false
@@ -123,6 +124,19 @@ export class AppState {
     } catch (e) {
       console.error(`[AppState] Set current model error: ${e}`)
     }
+  }
+
+  getSelectedModelForProvider(providerId: string): string {
+    const key = providerId.trim().toLowerCase()
+    if (!key) return ''
+    return this.selectedModelsByProvider[key] || ''
+  }
+
+  setSelectedModelForProvider(providerId: string, modelId: string): void {
+    const key = providerId.trim().toLowerCase()
+    if (!key || !modelId.trim()) return
+    this.selectedModelsByProvider[key] = modelId
+    for (const l of this.modelsChangedListeners) { l() }
   }
 
   // 获取指定服务商的模型列表

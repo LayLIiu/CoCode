@@ -1005,8 +1005,12 @@ struct ChatDetailPage {
       const providerId = this.getSessionProviderId()
       const response = await apiService.getModels(providerId || undefined)
       this.models = response.models || []
-      const current = await apiService.getCurrentModel()
-      this.currentModel = current.id
+      if (this.isCodexProvider(providerId)) {
+        this.currentModel = this.resolveLocalProviderModel(providerId, this.models)
+      } else {
+        const current = await apiService.getCurrentModel()
+        this.currentModel = current.id
+      }
     } catch (e) {
       console.error(`[ChatDetailPage] Load models error: ${e}`)
     }
@@ -1016,6 +1020,14 @@ struct ChatDetailPage {
   // 选择模型
   private async selectModel(modelId: string): Promise<void> {
     try {
+      const providerId = this.getSessionProviderId()
+      if (this.isCodexProvider(providerId)) {
+        appState.setSelectedModelForProvider(providerId, modelId)
+        this.currentModel = modelId
+        this.showModelSheet = false
+        this.showMenu = false
+        return
+      }
       await apiService.setCurrentModel(modelId)
       this.currentModel = modelId
       void appState.getCurrentModel()
@@ -2538,6 +2550,21 @@ struct ChatDetailPage {
   private getSessionProviderId(): string {
     const session = sessionStore.sessions.find((s: Session) => s.id === this.sessionId)
     return session?.aiTool || ''
+  }
+
+  private isCodexProvider(providerId: string): boolean {
+    return providerId.toLowerCase().indexOf('codex') >= 0
+  }
+
+  private resolveLocalProviderModel(providerId: string, models: ModelInfo[]): string {
+    const saved = appState.getSelectedModelForProvider(providerId)
+    for (let i = 0; i < models.length; i++) {
+      if (models[i].id === saved) return saved
+    }
+
+    const modelId = models[0]?.id || ''
+    if (modelId) appState.setSelectedModelForProvider(providerId, modelId)
+    return modelId
   }
 
   private isOfficialCodexSession(): boolean {

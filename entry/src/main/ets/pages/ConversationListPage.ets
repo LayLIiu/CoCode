@@ -231,6 +231,7 @@ export struct ConversationListPage {
   @State searchText: string = ''
   @State sessions: Session[] = []
   @State isLoading: boolean = false
+  @State isSyncingOfficialCodex: boolean = false
   @State refreshTrigger: number = 0
   @State showNewSessionDialog: boolean = false
 
@@ -242,6 +243,7 @@ export struct ConversationListPage {
   private scroller: Scroller = new Scroller()
   private sessionsChangedListener: () => void = () => {}
   private statusChangedListener: (sessionId: string, status: SessionStatus) => void = () => {}
+  private lastOfficialCodexSyncAt: number = 0
 
   private subIcon: HdsNavigationBadgeIconOptions = {
     content: {
@@ -304,13 +306,19 @@ export struct ConversationListPage {
 
   private syncOfficialCodexThreadsIfNeeded(): void {
     if (this.tabType !== TabType.CODEX) return
-    this.isLoading = true
+    if (this.isSyncingOfficialCodex) return
+
+    const now = Date.now()
+    if (now - this.lastOfficialCodexSyncAt < 15 * 1000) return
+
+    this.lastOfficialCodexSyncAt = now
+    this.isSyncingOfficialCodex = true
     void sessionStore.syncOfficialCodexThreadsToLocal(50).then(() => {
       this.refreshSessionsFromStore()
-      this.isLoading = false
     }).catch((e: Error) => {
       console.error(`[ConversationListPage] Sync Official Codex threads error: ${e.message}`)
-      this.isLoading = false
+    }).finally(() => {
+      this.isSyncingOfficialCodex = false
     })
   }
 
@@ -732,7 +740,7 @@ export struct ConversationListPage {
   }
 
   private getEmptySubtitle(): string {
-    if (this.tabType === TabType.CODEX) return '请先确认官方 Codex 授权与 Desktop 已连接'
+    if (this.tabType === TabType.CODEX) return '点击左上角导入，或等待后台同步 Codex Desktop 对话'
     return '点击右上角 + 开始新对话'
   }
 
