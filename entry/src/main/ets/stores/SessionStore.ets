@@ -53,7 +53,6 @@ export class SessionStore {
   private wsSubscribed: boolean = false
   private officialCodexThreadIds: Map<string, string> = new Map()
   private officialCodexSendQueues: Map<string, Promise<void>> = new Map()
-  private officialCodexStreamingTextByTurn: Map<string, string> = new Map()
 
   // 本地删除的会话ID集合（不从服务器重新加载）
   private locallyDeletedSessionIds: Set<string> = new Set()
@@ -89,9 +88,6 @@ export class SessionStore {
 
   // syncMessagesFromServer 并发保护 Set（防止重复调用导致竞态）
   private syncingSessions: Set<string> = new Set()
-
-  // syncOfficialCodexThreadMessages 并发保护 Set（防止 aboutToAppear + onPageShow 同时触发导致竞态）
-  private syncingOfficialCodexThreads: Set<string> = new Set()
 
   // MARK: - 监听者注册
 
@@ -771,23 +767,9 @@ export class SessionStore {
 
   private persistMessages(sessionId: string, messages?: Message[]): Promise<void> {
     const source = messages || this.messages.get(sessionId) || []
-    // 1. 先用 deduplicateMessages 做基础去重（按 ID、tool、内容）
     const deduped = this.deduplicateMessages(source)
-    // 2. 再用 messageSemanticKey 做内容级兜底去重
-    //    清理"ID不同但内容相同"的伪重复（deduplicateMessages 对部分场景可能遗漏）
-    const seen = new Set<string>()
-    const finalList: Message[] = []
-    for (const msg of deduped) {
-      const key = this.messageSemanticKey(msg)
-      if (seen.has(key)) continue
-      seen.add(key)
-      finalList.push(msg)
-    }
-    if (finalList.length < deduped.length) {
-      console.warn(`[SessionStore] persistMessages: semantic dedup removed ${deduped.length - finalList.length} more dups for ${sessionId}`)
-    }
-    const start = Math.max(0, finalList.length - SessionStore.LOCAL_MESSAGE_CACHE_LIMIT)
-    const cached = finalList.slice(start)
+    const start = Math.max(0, deduped.length - SessionStore.LOCAL_MESSAGE_CACHE_LIMIT)
+    const cached = deduped.slice(start)
     return this.enqueueSave(sessionId, () => storageService.saveMessages(sessionId, cached))
   }
 
@@ -795,6 +777,45 @@ export class SessionStore {
   async saveSessionsToStorage(): Promise<void> {
     await storageService.saveSessions(this.sessions)
     this.notifySessionsChanged()
+  }
+
+  async importOfficialCodexThreads(sessions: Session[]): Promise<void> {
+    const imported: Session[] = []
+    for (let i = 0; i < sessions.length; i++) {
+      const session = sessions[i]
+      const threadId = session.officialCodexThreadId || ''
+      if (!threadId) continue
+
+      let exists = false
+      for (let j = 0; j < this.sessions.length; j++) {
+        if (this.sessions[j].id === session.id || this.sessions[j].officialCodexThreadId === threadId) {
+          exists = true
+          break
+        }
+      }
+
+      if (!exists) {
+        this.sessions.push(session)
+        imported.push(session)
+      }
+      this.officialCodexThreadIds.set(session.id, threadId)
+      await this.restoreSessionFromDeleted(session.id)
+    }
+
+    await this.saveOfficialCodexThreadIds()
+    await this.saveSessionsToStorage()
+
+    for (let i = 0; i < imported.length; i++) {
+      const session = imported[i]
+      const threadId = session.officialCodexThreadId || ''
+      void this.syncOfficialCodexThreadMessages(session.id, threadId)
+        .then(() => this.saveSessionsToStorage())
+        .catch((e: Error) => console.error(`[SessionStore] Background Official Codex sync error: ${e.message}`))
+    }
+  }
+
+  async importOfficialCodexThread(session: Session): Promise<void> {
+    await this.importOfficialCodexThreads([session])
   }
 
   async syncOfficialCodexThreadsToLocal(limit: number = 50): Promise<void> {
@@ -847,45 +868,6 @@ export class SessionStore {
     }
   }
 
-  async importOfficialCodexThreads(sessions: Session[]): Promise<void> {
-    const imported: Session[] = []
-    for (let i = 0; i < sessions.length; i++) {
-      const session = sessions[i]
-      const threadId = session.officialCodexThreadId || ''
-      if (!threadId) continue
-
-      let exists = false
-      for (let j = 0; j < this.sessions.length; j++) {
-        if (this.sessions[j].id === session.id || this.sessions[j].officialCodexThreadId === threadId) {
-          exists = true
-          break
-        }
-      }
-
-      if (!exists) {
-        this.sessions.push(session)
-        imported.push(session)
-      }
-      this.officialCodexThreadIds.set(session.id, threadId)
-      await this.restoreSessionFromDeleted(session.id)
-    }
-
-    await this.saveOfficialCodexThreadIds()
-    await this.saveSessionsToStorage()
-
-    for (let i = 0; i < imported.length; i++) {
-      const session = imported[i]
-      const threadId = session.officialCodexThreadId || ''
-      void this.syncOfficialCodexThreadMessages(session.id, threadId)
-        .then(() => this.saveSessionsToStorage())
-        .catch((e: Error) => console.error(`[SessionStore] Background Official Codex sync error: ${e.message}`))
-    }
-  }
-
-  async importOfficialCodexThread(session: Session): Promise<void> {
-    await this.importOfficialCodexThreads([session])
-  }
-
   async syncCurrentOfficialCodexSession(): Promise<void> {
     if (!this.currentSessionId) return
     const session = this.sessions.find(s => s.id === this.currentSessionId)
@@ -925,6 +907,151 @@ export class SessionStore {
     return new Date(ms).toISOString()
   }
 
+  private async recoverOfficialCodexController(): Promise<void> {
+    try {
+      await apiService.restoreCodexControllerSession(true)
+    } catch (e) {}
+    try {
+      await apiService.connectCodexController()
+    } catch (e) {}
+  }
+
+  private async ensureOfficialCodexControllerConnected(): Promise<void> {
+    try {
+      const status = await apiService.getCodexControllerWsStatus()
+      const connected = status['connected'] as boolean
+      if (connected) return
+    } catch (e) {}
+    await this.recoverOfficialCodexController()
+  }
+
+  private async syncOfficialCodexPendingPermissions(sessionId: string, threadId: string): Promise<void> {
+    try {
+      const response = await apiService.getCodexRemotePendingPermissions(sessionId, threadId)
+      const permissions = response['permissions'] as Array<Record<string, Object>>
+      if (!permissions || permissions.length === 0) {
+        this.reconcileOfficialCodexPermissions(sessionId, new Set<string>())
+        return
+      }
+
+      const activeIds: Set<string> = new Set()
+      for (let i = 0; i < permissions.length; i++) {
+        const permission = permissions[i]
+        const requestId = (permission['requestId'] as string) || ''
+        if (requestId.length === 0) continue
+        activeIds.add(requestId)
+        this.addOfficialCodexPermissionMessage(sessionId, {
+          requestId,
+          toolName: (permission['toolName'] as string) || 'unknown',
+          input: (permission['input'] as Record<string, Object>) || {},
+          description: (permission['description'] as string) || ''
+        })
+      }
+      this.reconcileOfficialCodexPermissions(sessionId, activeIds)
+    } catch (e) {
+      console.error(`[SessionStore] Sync Official Codex pending permissions error: ${e}`)
+    }
+  }
+
+  private reconcileOfficialCodexPermissions(sessionId: string, activeIds: Set<string>): void {
+    const currentPending = this.pendingPermissions.get(sessionId)
+    if (currentPending && !activeIds.has(currentPending.requestId)) {
+      this.pendingPermissions.delete(sessionId)
+    }
+
+    const sessionMessages = this.messages.get(sessionId) || []
+    let changed = false
+    for (let i = 0; i < sessionMessages.length; i++) {
+      const message = sessionMessages[i]
+      if (message.type === 'permission_request' &&
+        message.permissionId &&
+        !message.isPermissionHandled &&
+        !activeIds.has(message.permissionId)) {
+        sessionMessages[i] = {
+          id: message.id,
+          type: message.type,
+          content: message.content,
+          timestamp: message.timestamp,
+          toolName: message.toolName,
+          toolInput: message.toolInput,
+          permissionId: message.permissionId,
+          permissionDescription: message.permissionDescription,
+          isPermissionHandled: true
+        }
+        changed = true
+      }
+    }
+
+    if (changed) {
+      this.messages.set(sessionId, sessionMessages)
+      this.persistMessages(sessionId, sessionMessages)
+      this.notifyMessagesChanged(sessionId)
+    }
+
+    if (activeIds.size === 0 && this.sessionStatuses.get(sessionId) === 'permission_pending') {
+      this.updateSessionStatus(sessionId, 'thinking')
+      this.upsertOfficialCodexStatusMessage(sessionId, '权限已处理，Codex Desktop 继续工作')
+    }
+  }
+
+  private addOfficialCodexPermissionMessage(sessionId: string, pending: PendingPermission): void {
+    // 先检查是否已存在
+    const existing = this.messages.get(sessionId) || []
+    for (let i = 0; i < existing.length; i++) {
+      if (existing[i].type === 'permission_request' && existing[i].permissionId === pending.requestId) {
+        return
+      }
+    }
+
+    this.flushHeadToTail(sessionId)
+    this.updateSessionStatus(sessionId, 'permission_pending')
+    this.pendingPermissions.set(sessionId, pending)
+
+    const permissionMessage: Message = {
+      id: 'permission-' + Date.now(),
+      type: 'permission_request',
+      content: '',
+      timestamp: new Date().toISOString(),
+      toolName: pending.toolName,
+      toolInput: pending.input,
+      permissionId: pending.requestId,
+      permissionDescription: pending.description
+    }
+    this.addMessage(sessionId, permissionMessage)
+  }
+
+  private upsertOfficialCodexStatusMessage(sessionId: string, content: string): void {
+    const id = 'official-codex-status-current'
+    const now = new Date().toISOString()
+    const sessionMessages = this.messages.get(sessionId) || []
+    for (let i = sessionMessages.length - 1; i >= 0; i--) {
+      if (sessionMessages[i].id === id) {
+        if (sessionMessages[i].content !== content) {
+          sessionMessages[i] = {
+            id,
+            type: 'system_notification',
+            content,
+            timestamp: now
+          }
+          this.messages.set(sessionId, sessionMessages)
+          this.persistMessages(sessionId, sessionMessages)
+          this.notifyMessagesChanged(sessionId)
+        }
+        return
+      }
+    }
+
+    sessionMessages.push({
+      id,
+      type: 'system_notification',
+      content,
+      timestamp: now
+    })
+    this.messages.set(sessionId, sessionMessages)
+    this.persistMessages(sessionId, sessionMessages)
+    this.notifyMessagesChanged(sessionId)
+  }
+
   // MARK: - 消息操作
 
   async loadMessages(sessionId: string): Promise<void> {
@@ -940,15 +1067,13 @@ export class SessionStore {
         console.info(`[SessionStore] loadMessages: ${sessionId} already has ${existing.length} messages in memory, skip local load`)
         // 始终进行去重清理（即使数量相同也可能有内容重复）
         const deduped = this.deduplicateMessages(existing)
-        // 强制更新内存引用，确保后续 syncMessagesFromServer 读取 currentLocal 时
-        // 拿到的是经过 deduplicateMessages 处理后的干净数组（而非可能含重复的原始引用）
         if (deduped.length !== existing.length) {
           console.warn(`[SessionStore] loadMessages: cleaned ${existing.length - deduped.length} duplicates from memory for ${sessionId}`)
+          this.messages.set(sessionId, deduped)
           // 立即保存去重后的消息到本地存储
           this.persistMessages(sessionId, deduped)
           this.notifyMessagesChanged(sessionId)
         }
-        this.messages.set(sessionId, deduped)
       } else {
         // 先加载本地缓存（快速展示）
         const localMessages = await storageService.loadMessages(sessionId)
@@ -968,30 +1093,8 @@ export class SessionStore {
       console.error(`[SessionStore] loadMessages storage error: ${e}`)
     }
 
-    // 最终兜底：用 getDedupedMessages 做内容级多维度去重
-    // 清理历史遗留的"ID不同但内容相同"的重复（旧版 persistMessages 未做语义去重）
-    {
-      const current = this.messages.get(sessionId)
-      if (current && current.length > 1) {
-        const cleaned = this.getDedupedMessages(sessionId)
-        if (cleaned.length < current.length) {
-          console.warn(`[SessionStore] loadMessages: final dedup removed ${current.length - cleaned.length} dups for ${sessionId}`)
-          this.messages.set(sessionId, cleaned)
-          this.notifyMessagesChanged(sessionId)
-        }
-      }
-    }
-
     // 从现有消息中提取任务列表
     this.refreshTasksFromMessages(sessionId)
-
-    const session = this.sessions.find(s => s.id === sessionId)
-    if (session?.officialCodexThreadId) {
-      void this.syncOfficialCodexThreadMessages(sessionId, session.officialCodexThreadId)
-        .then(() => this.saveSessionsToStorage())
-        .catch((e: Error) => console.error(`[SessionStore] Official Codex load sync error: ${e.message}`))
-      return
-    }
 
     // 后台静默同步服务器消息（不阻塞页面渲染）
     // 检查是否已经在同步中，避免重复调用
@@ -1071,17 +1174,6 @@ export class SessionStore {
         merged = deduped  // 始终使用去重后的结果
       }
 
-      // ⚠️ 最终兜底去重：先用 getDedupedMessages 的多维度去重手段
-      // （normalizeMessageText + removeOverlappingTextMessages）清理
-      // mergeMessages 中可能遗漏的重复（流式临时 toolUseId vs 服务端正式 toolUseId、
-      // 格式化差异等），再将干净的最终结果写入 store
-      const finalMergeLen = merged.length
-      this.messages.set(sessionId, merged)
-      merged = this.getDedupedMessages(sessionId)
-      if (merged.length < finalMergeLen) {
-        console.warn(`[SessionStore] syncMessagesFromServer: final dedup caught ${finalMergeLen - merged.length} more dups for ${sessionId}`)
-      }
-
       this.messages.set(sessionId, merged)
       this.notifyMessagesChanged(sessionId)
 
@@ -1104,9 +1196,6 @@ export class SessionStore {
       } catch (e) {
         console.info(`[SessionStore] Tasks API error (non-fatal): ${e}`)
       }
-
-      // 诊断日志：输出合并前后数量变化
-      console.info(`[SessionStore] syncMessagesFromServer: local=${currentLocal.length} server=${serverMessages.length} merged=${merged.length}`)
 
       // 串行化保存到本地（通过队列确保顺序）
       this.persistMessages(sessionId, merged)
@@ -1224,23 +1313,6 @@ export class SessionStore {
       }
 
       if (!foundByContent) {
-        // 最终兜底：用 messageSemanticKey 比对（忽略 ID/toolUseId 差异，纯内容匹配）
-        // 适用于 toolUseId 不同但内容相同的 tool_result
-        // 以及 content 非空但 ID/type 不同的其他消息类型
-        const semanticKey = this.messageSemanticKey(msg)
-        for (let j = 0; j < serverMessages.length; j++) {
-          const sm = serverMessages[j]
-          if (this.messageSemanticKey(sm) === semanticKey) {
-            foundByContent = true
-            break
-          }
-        }
-      }
-
-      if (!foundByContent) {
-        // ⚠️ 诊断日志：本地消息未被任何方式去重，将被加入结果集
-        const msgContentPreview = (msg.content || msg.toolResult || '').substring(0, 120)
-        console.warn(`[SessionStore] mergeMessages: ADDING local msg (not found in server) type=${msg.type} id=${msg.id} toolUseId=${msg.toolUseId} toolName=${msg.toolName} content=${msgContentPreview.replace(/\n/g, '\\n')} semanticKey=${this.messageSemanticKey(msg).substring(0, 100)}`)
         result.push(msg)
       }
     }
@@ -1493,10 +1565,12 @@ export class SessionStore {
 
     const result: Message[] = []
     const seenById: Set<string> = new Set()
-    const seenBySemanticKey: Set<string> = new Set()
+    const seenByContent: Set<string> = new Set()
+    const seenByTool: Set<string> = new Set()
 
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i]
+      let isDuplicate = false
 
       // 1. 按 ID 去重（排除临时 ID）
       if (msg.id && !msg.id.startsWith('stream-') && !msg.id.startsWith('thinking-') &&
@@ -1510,13 +1584,26 @@ export class SessionStore {
         seenById.add(msg.id)
       }
 
-      // 2. 按语义键去重（统一处理所有消息类型，包括 assistant）
-      const semanticKey = this.messageSemanticKey(msg)
-      if (seenBySemanticKey.has(semanticKey)) {
-        console.info(`[SessionStore] deduplicateMessages: skip ${msg.type} by semantic key, id=${msg.id}`)
-        continue
+      // 2. tool_use 消息：按 toolName + toolInput 去重
+      if (msg.type === 'tool_use' && msg.toolName) {
+        const toolKey = this.messageSemanticKey(msg)
+        if (seenByTool.has(toolKey)) {
+          console.info(`[SessionStore] deduplicateMessages: skip tool_use ${msg.toolName}`)
+          continue
+        }
+        seenByTool.add(toolKey)
       }
-      seenBySemanticKey.add(semanticKey)
+
+      // 3. 其他消息：按规整化内容去重
+      if (msg.type !== 'tool_use') {
+        const content = this.normalizeMessageText(msg.content || msg.toolResult || '')
+        const contentKey = this.messageSemanticKey(msg)
+        if (content.length > 0 && seenByContent.has(contentKey)) {
+          console.info(`[SessionStore] deduplicateMessages: skip ${msg.type} by content`)
+          continue
+        }
+        seenByContent.add(contentKey)
+      }
 
       result.push(msg)
     }
@@ -1725,55 +1812,32 @@ export class SessionStore {
     return aiTool.includes('codex') && (!attachments || attachments.length === 0)
   }
 
-  private async resolveOfficialCodexModelId(): Promise<string> {
-    const codexModelId = appState.getSelectedModelForProvider('codex')
-    if (this.isOfficialCodexModelId(codexModelId)) return codexModelId
-
-    const appModelId = appState.currentModel?.id || ''
-    if (this.isOfficialCodexModelId(appModelId)) return appModelId
-
-    try {
-      const current = await apiService.getCurrentModel()
-      const modelId = current.id || ''
-      return this.isOfficialCodexModelId(modelId) ? modelId : ''
-    } catch (e) {
-      return ''
-    }
-  }
-
-  private isOfficialCodexModelId(modelId: string): boolean {
-    const normalized = modelId.trim().toLowerCase()
-    if (normalized.length <= 0) return false
-    return normalized.startsWith('gpt-') ||
-      normalized.startsWith('o1') ||
-      normalized.startsWith('o3') ||
-      normalized.startsWith('o4') ||
-      normalized.indexOf('codex') >= 0
-  }
-
-  private resolveOfficialCodexReasoningEffort(): string {
-    const effort = appState.effortLevel || ''
-    if (effort === 'low' || effort === 'medium' || effort === 'high') return effort
-    return ''
+  private isOfficialCodexSession(sessionId: string): boolean {
+    const session = this.sessions.find((s: Session) => s.id === sessionId)
+    return !!session?.officialCodexThreadId || (session?.aiTool || '').toLowerCase().indexOf('codex') >= 0
   }
 
   private sendOfficialCodexRemoteMessage(sessionId: string, content: string, session: Session | undefined): void {
+    // 确保 WebSocket 连接已建立，用于接收服务器推送的回复
+    const serverUrl = authStore.serverUrl
+    if (serverUrl) {
+      wsService.setServerUrl(serverUrl)
+      wsService.connectGlobal()
+      console.info(`[SessionStore] Ensured global WS connection for Official Codex: ${sessionId}`)
+    }
+
     const previous = this.officialCodexSendQueues.get(sessionId) || Promise.resolve()
     const next = previous
       .catch(() => {})
       .then(async () => {
         const cwd = session?.workDir || session?.projectPath || ''
         const threadId = this.officialCodexThreadIds.get(sessionId) || session?.officialCodexThreadId || ''
-        const modelId = await this.resolveOfficialCodexModelId()
-        const reasoningEffort = this.resolveOfficialCodexReasoningEffort()
-        this.upsertOfficialCodexStatusMessage(sessionId, '正在发送到 Codex Desktop...')
-        const result = await apiService.sendCodexRemotePrompt(content, cwd, threadId, sessionId, modelId, reasoningEffort)
+        const result = await apiService.sendCodexRemotePrompt(content, cwd, threadId, sessionId)
         const nextThreadId = (result['threadId'] as string) || ''
         const turnId = (result['turnId'] as string) || ''
         if (nextThreadId.length <= 0) return
 
         await this.saveOfficialCodexThreadId(sessionId, nextThreadId)
-        this.upsertOfficialCodexStatusMessage(sessionId, 'Codex Desktop 已收到，正在启动本轮工作')
         await this.pollOfficialCodexRemoteTurn(sessionId, nextThreadId, turnId)
       })
       .catch((e: Error) => {
@@ -1804,225 +1868,72 @@ export class SessionStore {
     return new Promise((resolve) => {
       setTimeout(() => {
         apiService.getCodexRemoteLatestThreadTurns(threadId)
-          .then(async (response: Record<string, Object>) => {
-            await this.syncOfficialCodexPendingPermissions(sessionId, threadId)
+          .then((response: Record<string, Object>) => {
             const result = response['result'] as Record<string, Object>
             const data = (result && result['data']) as Array<Record<string, Object>>
             const targetTurn = this.findOfficialCodexTurn(data, turnId)
             const status = (targetTurn && targetTurn['status'] as string) || ''
+            const text = this.extractOfficialCodexAssistantText(targetTurn)
             const normalizedStatus = this.normalizeOfficialCodexTurnStatus(status)
             const done = normalizedStatus === 'completed' || normalizedStatus === 'succeeded' ||
               normalizedStatus === 'success' || normalizedStatus === 'done' ||
               normalizedStatus === 'failed' || normalizedStatus === 'cancelled' || normalizedStatus === 'canceled'
 
-            if (done) {
-              this.clearOfficialCodexStreamingAssistant(sessionId, turnId)
-              await this.syncOfficialCodexThreadMessages(sessionId, threadId)
-              this.upsertOfficialCodexStatusMessage(sessionId,
-                normalizedStatus === 'completed' || normalizedStatus === 'succeeded' ||
-                  normalizedStatus === 'success' || normalizedStatus === 'done' ? 'Codex Desktop 已完成本轮工作' : '本轮工作已结束'
-              )
-              this.updateSessionStatus(sessionId,
-                normalizedStatus === 'completed' || normalizedStatus === 'succeeded' ||
-                  normalizedStatus === 'success' || normalizedStatus === 'done' ? 'completed' : 'idle'
-              )
-              resolve()
-              return
+            if (text.length > 0) {
+              this.upsertOfficialCodexAssistantMessage(sessionId, turnId, text, normalizedStatus === 'failed', !done)
             }
 
-            this.mergeOfficialCodexPolledMessages(sessionId, data, false)
-            this.updateOfficialCodexStreamingAssistant(sessionId, turnId, targetTurn)
-            const nextStatus = this.getOfficialCodexPollingStatus(sessionId, targetTurn, status)
-            this.updateSessionStatus(sessionId, nextStatus)
-            this.upsertOfficialCodexStatusMessage(sessionId, this.getOfficialCodexStatusText(nextStatus))
-            this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
-          })
-          .catch((e: Error) => {
-            if (this.isRecoverableOfficialCodexPollingError(e) && attempt < 120) {
-              this.recoverOfficialCodexController().then(() => {
-                this.updateSessionStatus(sessionId, 'thinking')
-                this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
+            if (done) {
+              this.syncOfficialCodexThreadMessages(sessionId, threadId).then(() => {
+                this.updateSessionStatus(sessionId,
+                  normalizedStatus === 'completed' || normalizedStatus === 'succeeded' ||
+                    normalizedStatus === 'success' || normalizedStatus === 'done' ? 'completed' : 'idle'
+                )
+                resolve()
               }).catch(() => {
-                this.updateSessionStatus(sessionId, 'thinking')
-                this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
+                this.updateSessionStatus(sessionId,
+                  normalizedStatus === 'completed' || normalizedStatus === 'succeeded' ||
+                    normalizedStatus === 'success' || normalizedStatus === 'done' ? 'completed' : 'idle'
+                )
+                resolve()
               })
               return
             }
-            if (attempt < 20) {
-              this.updateSessionStatus(sessionId, 'thinking')
+
+            this.updateSessionStatus(sessionId, this.getOfficialCodexPollingStatus(targetTurn, normalizedStatus))
+            this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
+          })
+          .catch((e: Error) => {
+            if (attempt < 5) {
               this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
               return
             }
-            this.syncOfficialCodexThreadMessages(sessionId, threadId).then(() => {
-              const current = this.messages.get(sessionId) || []
-              const hasAssistant = current.some(m => m.type === 'assistant' && m.content.length > 0)
-              if (hasAssistant) {
-                this.updateSessionStatus(sessionId, 'completed')
-                resolve()
-                return
-              }
-              this.addOfficialCodexPollingError(sessionId, e)
-              resolve()
-            }).catch(() => {
-              this.addOfficialCodexPollingError(sessionId, e)
-              resolve()
-            })
+            const errMsg: Message = {
+              id: 'official-codex-poll-error-' + Date.now(),
+              type: 'error',
+              content: e.message || String(e),
+              timestamp: new Date().toISOString()
+            }
+            this.addMessage(sessionId, errMsg)
+            this.updateSessionStatus(sessionId, 'idle')
+            resolve()
           })
       }, this.getOfficialCodexPollDelayMs(attempt))
     })
   }
 
-  private isRecoverableOfficialCodexPollingError(error: Error): boolean {
-    const message = error.message || String(error)
-    return message.indexOf('Controller WebSocket closed') >= 0 ||
-      message.indexOf('WebSocket connection to Codex Remote Control is closed') >= 0 ||
-      message.indexOf('Controller WebSocket is not connected') >= 0 ||
-      message.indexOf('1006') >= 0
-  }
-
-  private async recoverOfficialCodexController(): Promise<void> {
-    try {
-      await apiService.restoreCodexControllerSession(true)
-    } catch (e) {}
-    try {
-      await apiService.connectCodexController()
-    } catch (e) {}
-  }
-
-  private async ensureOfficialCodexControllerConnected(): Promise<void> {
-    try {
-      const status = await apiService.getCodexControllerWsStatus()
-      const connected = status['connected'] as boolean
-      if (connected) return
-    } catch (e) {}
-    await this.recoverOfficialCodexController()
-  }
-
-  private addOfficialCodexPollingError(sessionId: string, e: Error): void {
-    const errMsg: Message = {
-      id: 'official-codex-poll-error-' + Date.now(),
-      type: 'error',
-      content: e.message || String(e),
-      timestamp: new Date().toISOString()
-    }
-    this.addMessage(sessionId, errMsg)
-    this.updateSessionStatus(sessionId, 'idle')
-  }
-
   private getOfficialCodexPollDelayMs(attempt: number): number {
-    if (attempt <= 0) return 0
     if (attempt < 20) return 500
     if (attempt < 60) return 1000
     return 2000
   }
 
-  private async syncOfficialCodexPendingPermissions(sessionId: string, threadId: string): Promise<void> {
-    try {
-      const response = await apiService.getCodexRemotePendingPermissions(sessionId, threadId)
-      const permissions = response['permissions'] as Array<Record<string, Object>>
-      if (!permissions || permissions.length === 0) {
-        this.reconcileOfficialCodexPermissions(sessionId, new Set<string>())
-        return
-      }
-
-      const activeIds: Set<string> = new Set()
-      for (let i = 0; i < permissions.length; i++) {
-        const permission = permissions[i]
-        const requestId = (permission['requestId'] as string) || ''
-        if (requestId.length === 0) continue
-        activeIds.add(requestId)
-        this.addOfficialCodexPermissionMessage(sessionId, {
-          requestId,
-          toolName: (permission['toolName'] as string) || 'unknown',
-          input: (permission['input'] as Record<string, Object>) || {},
-          description: (permission['description'] as string) || ''
-        })
-      }
-      this.reconcileOfficialCodexPermissions(sessionId, activeIds)
-    } catch (e) {
-      console.error(`[SessionStore] Sync Official Codex pending permissions error: ${e}`)
-    }
+  private normalizeOfficialCodexTurnStatus(status: string): string {
+    return (status || '').replace(/[-_]/g, '').toLowerCase()
   }
 
-  private reconcileOfficialCodexPermissions(sessionId: string, activeIds: Set<string>): void {
-    const currentPending = this.pendingPermissions.get(sessionId)
-    if (currentPending && !activeIds.has(currentPending.requestId)) {
-      this.pendingPermissions.delete(sessionId)
-    }
-
-    const sessionMessages = this.messages.get(sessionId) || []
-    let changed = false
-    for (let i = 0; i < sessionMessages.length; i++) {
-      const message = sessionMessages[i]
-      if (message.type === 'permission_request' &&
-        message.permissionId &&
-        !message.isPermissionHandled &&
-        !activeIds.has(message.permissionId)) {
-        sessionMessages[i] = {
-          id: message.id,
-          type: message.type,
-          content: message.content,
-          timestamp: message.timestamp,
-          toolName: message.toolName,
-          toolInput: message.toolInput,
-          permissionId: message.permissionId,
-          permissionDescription: message.permissionDescription,
-          isPermissionHandled: true
-        }
-        changed = true
-      }
-    }
-
-    if (changed) {
-      this.messages.set(sessionId, sessionMessages)
-      this.persistMessages(sessionId, sessionMessages)
-      this.notifyMessagesChanged(sessionId)
-    }
-
-    if (activeIds.size === 0 && this.sessionStatuses.get(sessionId) === 'permission_pending') {
-      this.updateSessionStatus(sessionId, 'thinking')
-      this.upsertOfficialCodexStatusMessage(sessionId, '权限已处理，Codex Desktop 继续工作')
-    }
-  }
-
-  private addOfficialCodexPermissionMessage(sessionId: string, pending: PendingPermission): void {
-    // 先检查是否已存在
-    const existing = this.messages.get(sessionId) || []
-    for (let i = 0; i < existing.length; i++) {
-      if (existing[i].type === 'permission_request' && existing[i].permissionId === pending.requestId) {
-        return
-      }
-    }
-
-    this.flushHeadToTail(sessionId)
-    this.updateSessionStatus(sessionId, 'permission_pending')
-    this.pendingPermissions.set(sessionId, pending)
-
-    // AskUserQuestion 有专门的交互卡片（通过 tool_use 渲染），不需要额外的权限请求卡片
-    // 但仍然需要设置 pendingPermissions，以便提交答案时能获取 requestId
-    if (pending.toolName === 'AskUserQuestion') {
-      console.info(`[SessionStore] Skip permission_request card for AskUserQuestion: ${pending.requestId}, but still set pendingPermissions`)
-      return
-    }
-
-    const permMessage: Message = {
-      id: 'permission-' + pending.requestId,
-      type: 'permission_request',
-      content: pending.description || '权限请求: ' + (pending.toolName || ''),
-      timestamp: new Date().toISOString(),
-      toolName: pending.toolName,
-      permissionId: pending.requestId,
-      permissionDescription: pending.description,
-      toolInput: pending.input
-    }
-    this.addMessage(sessionId, permMessage)
-    this.notifyIfBackground(sessionId, 'Codex 等待权限审批', pending.toolName || '', 'permission')
-  }
-
-  private getOfficialCodexPollingStatus(sessionId: string, turn: Record<string, Object> | null, status: string): SessionStatus {
-    if (this.pendingPermissions.has(sessionId)) return 'permission_pending'
-    const normalizedStatus = this.normalizeOfficialCodexTurnStatus(status)
-    if (normalizedStatus !== 'inprogress' && normalizedStatus !== 'pending' && normalizedStatus !== 'running') return 'thinking'
+  private getOfficialCodexPollingStatus(turn: Record<string, Object> | null, status: string): SessionStatus {
+    if (status !== 'inprogress' && status !== 'pending' && status !== 'running') return 'thinking'
     const items = turn && turn['items'] as Array<Record<string, Object>>
     if (items) {
       for (let i = 0; i < items.length; i++) {
@@ -2032,196 +1943,43 @@ export class SessionStore {
         }
       }
     }
-    return normalizedStatus === 'inprogress' || normalizedStatus === 'running' ? 'streaming' : 'thinking'
+    return status === 'inprogress' || status === 'running' ? 'streaming' : 'thinking'
   }
 
-  private normalizeOfficialCodexTurnStatus(status: string): string {
-    return (status || '').replace(/[-_]/g, '').toLowerCase()
-  }
+  private handleOfficialCodexUpdate(sessionId: string, threadId: string, data: Record<string, Object>): void {
+    const status = data['status'] as string
+    const content = data['content'] as Record<string, Object>
+    const turnId = data['turnId'] as string
+    const role = data['role'] as string
 
-  private getOfficialCodexStatusText(status: SessionStatus): string {
-    if (status === 'permission_pending') return 'Codex Desktop 正在等待权限审批'
-    if (status === 'tool_executing') return 'Codex Desktop 正在调用工具'
-    if (status === 'streaming') return 'Codex Desktop 正在生成回复'
-    if (status === 'thinking') return 'Codex Desktop 正在分析上下文'
-    if (status === 'completed') return 'Codex Desktop 已完成本轮工作'
-    return 'Codex Desktop 已连接'
-  }
+    console.info(`[SessionStore] handleOfficialCodexUpdate: sessionId=${sessionId}, status=${status}, role=${role}, turnId=${turnId}`)
 
-  private upsertOfficialCodexStatusMessage(sessionId: string, content: string): void {
-    const id = 'official-codex-status-current'
-    const now = new Date().toISOString()
-    const sessionMessages = this.messages.get(sessionId) || []
-    for (let i = sessionMessages.length - 1; i >= 0; i--) {
-      if (sessionMessages[i].id === id) {
-        if (sessionMessages[i].content !== content) {
-          sessionMessages[i] = {
-            id,
-            type: 'system_notification',
-            content,
-            timestamp: now
+    if (status === 'completed' || status === 'idle') {
+      if (turnId) {
+        const msgId = 'official-codex-assistant-' + turnId
+        const existing = this.messages.get(sessionId) || []
+        for (let i = existing.length - 1; i >= 0; i--) {
+          if (existing[i].id === msgId) {
+            existing[i].isStreaming = false
+            break
           }
-          this.messages.set(sessionId, sessionMessages)
-          this.persistMessages(sessionId, sessionMessages)
-          this.notifyMessagesChanged(sessionId)
         }
-        return
+        this.messages.set(sessionId, existing)
+        this.notifyMessagesChanged(sessionId)
+      }
+      this.updateSessionStatusFromState(sessionId, status)
+      setTimeout(() => {
+        void this.syncOfficialCodexThreadMessages(sessionId, threadId)
+      }, 2000)
+      return
+    }
+
+    if (content && content['type'] === 'text') {
+      const text = (content['text'] as string) || ''
+      if (text.trim() && role === 'assistant') {
+        this.upsertOfficialCodexAssistantMessage(sessionId, turnId, text, false, true)
       }
     }
-
-    sessionMessages.push({
-      id,
-      type: 'system_notification',
-      content,
-      timestamp: now
-    })
-    this.messages.set(sessionId, sessionMessages)
-    this.persistMessages(sessionId, sessionMessages)
-    this.notifyMessagesChanged(sessionId)
-  }
-
-  private mergeOfficialCodexPolledMessages(sessionId: string, data: Array<Record<string, Object>> | undefined, includeAssistant: boolean = true): void {
-    let imported = this.buildOfficialCodexMessagesFromTurns(data)
-    if (!includeAssistant) {
-      imported = imported.filter((message: Message) => message.type !== 'assistant')
-    }
-    if (imported.length === 0) return
-
-    const current = this.messages.get(sessionId) || []
-    const merged = current.slice()
-    let changed = false
-
-    for (let i = 0; i < imported.length; i++) {
-      const next = imported[i]
-      let index = -1
-      for (let j = 0; j < merged.length; j++) {
-        if (merged[j].id === next.id || this.messageSemanticKey(merged[j]) === this.messageSemanticKey(next)) {
-          index = j
-          break
-        }
-      }
-
-      if (index >= 0) {
-        const old = merged[index]
-        const updated = this.mergeOfficialCodexMessage(old, next)
-        if (this.messageChanged(old, updated)) {
-          merged[index] = updated
-          changed = true
-        }
-      } else {
-        merged.push(next)
-        changed = true
-      }
-    }
-
-    if (!changed) return
-    merged.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-    const deduped = this.deduplicateMessages(merged)
-    this.messages.set(sessionId, deduped)
-    this.persistMessages(sessionId, deduped)
-    this.refreshTasksFromMessages(sessionId)
-    this.notifyMessagesChanged(sessionId)
-  }
-
-  private updateOfficialCodexStreamingAssistant(sessionId: string, turnId: string, turn: Record<string, Object> | null): void {
-    const content = this.extractOfficialCodexAssistantText(turn)
-    if (content.length <= 0) return
-
-    const streamKey = this.officialCodexStreamKey(sessionId, turnId)
-    const previous = this.officialCodexStreamingTextByTurn.get(streamKey) || ''
-    if (previous === content) return
-
-    this.officialCodexStreamingTextByTurn.set(streamKey, content)
-
-    let head = this.streamHeads.get(sessionId) || []
-    const messageId = this.officialCodexStreamingMessageId(turnId)
-    let index = -1
-    for (let i = 0; i < head.length; i++) {
-      if (head[i].id === messageId) {
-        index = i
-        break
-      }
-    }
-
-    const streamingMessage: Message = {
-      id: messageId,
-      type: 'assistant',
-      content,
-      isStreaming: true,
-      timestamp: new Date().toISOString()
-    }
-
-    if (index >= 0) {
-      head[index] = streamingMessage
-    } else {
-      head = head.filter((message: Message) => !(message.type === 'assistant' && message.isStreaming))
-      head.push(streamingMessage)
-    }
-
-    this.streamHeads.set(sessionId, head)
-    this.updateSessionStatus(sessionId, 'streaming')
-    this.notifyMessagesChanged(sessionId)
-  }
-
-  private clearOfficialCodexStreamingAssistant(sessionId: string, turnId: string): void {
-    this.officialCodexStreamingTextByTurn.delete(this.officialCodexStreamKey(sessionId, turnId))
-    const head = this.streamHeads.get(sessionId)
-    if (!head || head.length === 0) return
-
-    const messageId = this.officialCodexStreamingMessageId(turnId)
-    const nextHead = head.filter((message: Message) => message.id !== messageId)
-    if (nextHead.length !== head.length) {
-      this.streamHeads.set(sessionId, nextHead)
-      this.notifyMessagesChanged(sessionId)
-    }
-  }
-
-  private officialCodexStreamKey(sessionId: string, turnId: string): string {
-    return sessionId + ':' + (turnId || 'latest')
-  }
-
-  private officialCodexStreamingMessageId(turnId: string): string {
-    return 'official-codex-stream-' + (turnId || 'latest')
-  }
-
-  private mergeOfficialCodexMessage(old: Message, next: Message): Message {
-    return {
-      id: old.id,
-      type: next.type || old.type,
-      content: next.content || old.content,
-      timestamp: old.timestamp,
-      toolUseId: next.toolUseId || old.toolUseId,
-      toolName: next.toolName || old.toolName,
-      toolInput: next.toolInput || old.toolInput,
-      toolResult: next.toolResult || old.toolResult,
-      toolStatus: next.toolStatus || old.toolStatus,
-      isStreaming: next.isStreaming,
-      permissionId: old.permissionId,
-      permissionDescription: old.permissionDescription,
-      isPermissionHandled: old.isPermissionHandled,
-      permissionResult: old.permissionResult,
-      questionId: old.questionId,
-      options: old.options,
-      selectedAnswer: old.selectedAnswer,
-      isQuestionAnswered: old.isQuestionAnswered,
-      questions: old.questions,
-      parentToolUseId: next.parentToolUseId || old.parentToolUseId,
-      agentTaskStatus: old.agentTaskStatus,
-      agentSummary: old.agentSummary,
-      tasks: next.tasks || old.tasks,
-      images: next.images || old.images,
-      isError: next.isError,
-    }
-  }
-
-  private messageChanged(left: Message, right: Message): boolean {
-    return left.type !== right.type ||
-      left.content !== right.content ||
-      left.toolResult !== right.toolResult ||
-      left.toolStatus !== right.toolStatus ||
-      left.isStreaming !== right.isStreaming ||
-      left.isError !== right.isError ||
-      this.stableStringify(left.toolInput) !== this.stableStringify(right.toolInput)
   }
 
   private upsertOfficialCodexAssistantMessage(
@@ -2236,9 +1994,35 @@ export class SessionStore {
     for (let i = sessionMessages.length - 1; i >= 0; i--) {
       if (sessionMessages[i].id === id) {
         if (sessionMessages[i].content !== content || sessionMessages[i].isStreaming !== isStreaming) {
-          sessionMessages[i].content = content
-          sessionMessages[i].type = isError ? 'error' : 'assistant'
-          sessionMessages[i].isStreaming = isStreaming
+          const old = sessionMessages[i]
+          sessionMessages[i] = {
+            id: old.id,
+            type: isError ? 'error' : 'assistant',
+            content,
+            timestamp: old.timestamp,
+            toolUseId: old.toolUseId,
+            toolName: old.toolName,
+            toolInput: old.toolInput,
+            toolResult: old.toolResult,
+            toolStatus: old.toolStatus,
+            isStreaming,
+            permissionId: old.permissionId,
+            permissionDescription: old.permissionDescription,
+            isPermissionHandled: old.isPermissionHandled,
+            permissionResult: old.permissionResult,
+            questionId: old.questionId,
+            options: old.options,
+            selectedAnswer: old.selectedAnswer,
+            isQuestionAnswered: old.isQuestionAnswered,
+            questions: old.questions,
+            parentToolUseId: old.parentToolUseId,
+            agentTaskStatus: old.agentTaskStatus,
+            agentSummary: old.agentSummary,
+            tasks: old.tasks,
+            images: old.images,
+            isError: isError || old.isError
+          }
+          sessionMessages = sessionMessages.slice()
           this.messages.set(sessionId, sessionMessages)
           this.persistMessages(sessionId, sessionMessages)
           this.notifyMessagesChanged(sessionId)
@@ -2259,6 +2043,24 @@ export class SessionStore {
 
   private async saveOfficialCodexThreadId(sessionId: string, threadId: string): Promise<void> {
     this.officialCodexThreadIds.set(sessionId, threadId)
+    const index = this.sessions.findIndex((s: Session) => s.id === sessionId)
+    if (index >= 0 && this.sessions[index].officialCodexThreadId !== threadId) {
+      const old = this.sessions[index]
+      this.sessions[index] = {
+        id: old.id,
+        title: old.title,
+        projectPath: old.projectPath,
+        workDir: old.workDir,
+        workDirExists: old.workDirExists,
+        createdAt: old.createdAt,
+        modifiedAt: old.modifiedAt,
+        messageCount: old.messageCount,
+        aiTool: old.aiTool || 'codex',
+        officialCodexThreadId: threadId
+      }
+      await this.saveSessionsToStorage()
+      this.notifySessionsChanged()
+    }
     await this.saveOfficialCodexThreadIds()
   }
 
@@ -2295,73 +2097,32 @@ export class SessionStore {
   }
 
   private async syncOfficialCodexThreadMessages(sessionId: string, threadId: string): Promise<void> {
-    // 并发保护：已有同步进行中则跳过（防止 aboutToAppear + onPageShow 同时触发导致竞态重复）
-    if (this.syncingOfficialCodexThreads.has(sessionId)) {
-      console.info(`[SessionStore] syncOfficialCodexThreadMessages: already syncing ${sessionId}, skip`)
-      return
-    }
-    this.syncingOfficialCodexThreads.add(sessionId)
-
     try {
       const response = await apiService.getCodexRemoteThreadTurns(threadId)
       const result = response['result'] as Record<string, Object>
       const data = (result && result['data']) as Array<Record<string, Object>>
       const importedMessages = this.buildOfficialCodexMessagesFromTurns(data)
-      if (importedMessages.length === 0) {
-        await this.syncOfficialCodexThreadPreviewMessage(sessionId, threadId)
-        return
-      }
+      if (importedMessages.length === 0) return
 
-      const mergedMessages = this.mergeOfficialCodexMessages(this.messages.get(sessionId) || [], importedMessages)
+      const mergedMessages = this.mergeOfficialCodexThreadMessages(this.messages.get(sessionId) || [], importedMessages)
       this.messages.set(sessionId, mergedMessages)
       await this.persistMessages(sessionId, mergedMessages)
       this.updateOfficialCodexImportedMessageCount(sessionId, mergedMessages.length)
       this.notifyMessagesChanged(sessionId)
-      this.refreshTasksFromMessages(sessionId)
     } catch (e) {
       console.error(`[SessionStore] Sync Official Codex thread messages error: ${e}`)
-      await this.syncOfficialCodexThreadPreviewMessage(sessionId, threadId)
-    } finally {
-      this.syncingOfficialCodexThreads.delete(sessionId)
     }
   }
 
-  private async syncOfficialCodexThreadPreviewMessage(sessionId: string, threadId: string): Promise<void> {
-    try {
-      const response = await apiService.readCodexRemoteThread(threadId)
-      const result = response['result'] as Record<string, Object>
-      const thread = result && result['thread'] as Record<string, Object>
-      const preview = ((thread && thread['preview'] as string) || '').trim()
-      if (preview.length <= 0) return
-
-      const existing = this.messages.get(sessionId) || []
-      const hasOfficialMessage = existing.some((m: Message) => m.id === 'official-codex-preview-' + threadId)
-      if (hasOfficialMessage) return
-
-      const createdAt = this.formatOfficialCodexTime(thread['createdAt'])
-      const previewMessage: Message = {
-        id: 'official-codex-preview-' + threadId,
-        type: 'user',
-        content: preview,
-        timestamp: createdAt
-      }
-      const mergedMessages = this.mergeOfficialCodexMessages(existing, [previewMessage])
-      this.messages.set(sessionId, mergedMessages)
-      await this.persistMessages(sessionId, mergedMessages)
-      this.updateOfficialCodexImportedMessageCount(sessionId, mergedMessages.length)
-      this.notifyMessagesChanged(sessionId)
-    } catch (e) {
-      console.error(`[SessionStore] Sync Official Codex preview error: ${e}`)
-    }
-  }
-
-  private mergeOfficialCodexMessages(current: Message[], imported: Message[]): Message[] {
+  private mergeOfficialCodexThreadMessages(current: Message[], imported: Message[]): Message[] {
     const merged = current.slice()
     for (let i = 0; i < imported.length; i++) {
       const next = imported[i]
       let index = -1
       for (let j = 0; j < merged.length; j++) {
-        if (merged[j].id === next.id || this.messageSemanticKey(merged[j]) === this.messageSemanticKey(next)) {
+        if (merged[j].id === next.id ||
+          this.isSameOfficialCodexTurnMessage(merged[j], next) ||
+          this.messageSemanticKey(merged[j]) === this.messageSemanticKey(next)) {
           index = j
           break
         }
@@ -2374,8 +2135,89 @@ export class SessionStore {
       }
     }
 
-    merged.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    merged.sort((a, b) => this.compareMessagesForDisplay(a, b))
     return this.deduplicateMessages(merged)
+  }
+
+  private isSameOfficialCodexTurnMessage(left: Message, right: Message): boolean {
+    if (left.type !== right.type) return false
+    if (left.type !== 'assistant' && left.type !== 'error') return false
+    const leftTurn = this.extractOfficialCodexTurnIdFromMessage(left.id)
+    const rightTurn = this.extractOfficialCodexTurnIdFromMessage(right.id)
+    return leftTurn.length > 0 && leftTurn === rightTurn
+  }
+
+  private compareMessagesForDisplay(a: Message, b: Message): number {
+    const aTurn = this.extractOfficialCodexTurnIdFromMessage(a.id)
+    const bTurn = this.extractOfficialCodexTurnIdFromMessage(b.id)
+    if (aTurn && bTurn && aTurn === bTurn) {
+      const rankDiff = this.getMessageRoleRank(a) - this.getMessageRoleRank(b)
+      if (rankDiff !== 0) return rankDiff
+    }
+
+    const timeDiff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    if (timeDiff !== 0) return timeDiff
+    return this.getMessageRoleRank(a) - this.getMessageRoleRank(b)
+  }
+
+  private extractOfficialCodexTurnIdFromMessage(id: string): string {
+    const prefixes = [
+      'official-codex-user-',
+      'official-codex-assistant-',
+      'official-codex-thinking-',
+      'official-codex-tool-',
+      'official-codex-tool-result-',
+      'official-codex-error-'
+    ]
+    for (let i = 0; i < prefixes.length; i++) {
+      const prefix = prefixes[i]
+      if (id.startsWith(prefix)) {
+        const rest = id.substring(prefix.length)
+        const lastDash = rest.lastIndexOf('-')
+        return lastDash > 0 ? rest.substring(0, lastDash) : rest
+      }
+    }
+    return ''
+  }
+
+  private getMessageRoleRank(message: Message): number {
+    if (message.type === 'user') return 10
+    if (message.type === 'thinking') return 20
+    if (message.type === 'tool_use') return 30
+    if (message.type === 'tool_result') return 40
+    if (message.type === 'assistant') return 50
+    if (message.type === 'error') return 60
+    return 70
+  }
+
+  private mergeOfficialCodexMessage(old: Message, next: Message): Message {
+    return {
+      id: old.id,
+      type: next.type || old.type,
+      content: next.content || old.content,
+      timestamp: old.timestamp,
+      toolUseId: next.toolUseId || old.toolUseId,
+      toolName: next.toolName || old.toolName,
+      toolInput: next.toolInput || old.toolInput,
+      toolResult: next.toolResult || old.toolResult,
+      toolStatus: next.toolStatus || old.toolStatus,
+      isStreaming: next.isStreaming,
+      permissionId: old.permissionId,
+      permissionDescription: old.permissionDescription,
+      isPermissionHandled: old.isPermissionHandled,
+      permissionResult: old.permissionResult,
+      questionId: old.questionId,
+      options: old.options,
+      selectedAnswer: old.selectedAnswer,
+      isQuestionAnswered: old.isQuestionAnswered,
+      questions: old.questions,
+      parentToolUseId: next.parentToolUseId || old.parentToolUseId,
+      agentTaskStatus: old.agentTaskStatus,
+      agentSummary: old.agentSummary,
+      tasks: next.tasks || old.tasks,
+      images: next.images || old.images,
+      isError: next.isError,
+    }
   }
 
   private buildOfficialCodexMessagesFromTurns(data: Array<Record<string, Object>> | undefined): Message[] {
@@ -2387,20 +2229,12 @@ export class SessionStore {
       const turnId = (turn['id'] as string) || i.toString()
       const items = turn['items'] as Array<Record<string, Object>>
       if (!items || items.length === 0) continue
+      const turnBaseTime = this.getOfficialCodexTurnBaseTime(turn, i)
 
       for (let j = 0; j < items.length; j++) {
         const item = items[j]
-        const rawType = (item['type'] as string) || ''
-        const type = this.normalizeOfficialCodexItemType(rawType)
-        const timestamp = this.getOfficialCodexItemTimestamp(turn, item, i, j)
-
-        // DEBUG: 打印每个 item 的类型和关键字段
-        console.info(`[SessionStore] buildOfficialCodexMessagesFromTurns: turnId=${turnId} idx=${j} rawType=${rawType} normalizedType=${type}`)
-        const rawTypeLower = rawType.toLowerCase()
-        if (type === 'agentMessage' || type === 'assistantMessage' || rawTypeLower.includes('assistant') || rawTypeLower.includes('agent') || rawTypeLower.includes('message')) {
-          console.info(`[SessionStore] AI message item keys: ${Object.keys(item).join(',')} text=${((item['text'] as string) || '').substring(0, 50)} message=${((item['message'] as string) || '').substring(0, 50)} content=${typeof item['content']}`)
-        }
-
+        const type = this.normalizeOfficialCodexItemType((item['type'] as string) || '')
+        const timestamp = this.getOfficialCodexMessageTimestamp(turnBaseTime, j, type)
         if (type === 'userMessage') {
           const text = this.extractOfficialCodexUserText(item)
           if (text.length > 0) {
@@ -2408,7 +2242,7 @@ export class SessionStore {
               id: 'official-codex-user-' + turnId + '-' + j,
               type: 'user',
               content: text,
-              timestamp: timestamp
+              timestamp
             })
           }
         } else if (type === 'agentMessage' || type === 'assistantMessage') {
@@ -2418,9 +2252,63 @@ export class SessionStore {
               id: 'official-codex-assistant-' + turnId + '-' + j,
               type: 'assistant',
               content: text,
-              timestamp: timestamp
+              timestamp
             })
           }
+        } else if (type === 'thinking') {
+          const thinking = this.extractOfficialCodexItemText(item) ||
+            ((item['thinking'] as string) || '').trim()
+          if (thinking.length > 0) {
+            messages.push({
+              id: 'official-codex-thinking-' + turnId + '-' + j,
+              type: 'thinking',
+              content: thinking,
+              timestamp
+            })
+          }
+        } else if (type === 'tool_use') {
+          const rawToolName = ((item['name'] as string) ||
+            (item['toolName'] as string) ||
+            (item['tool_name'] as string) ||
+            (item['kind'] as string) ||
+            'tool').trim()
+          const toolUseId = ((item['id'] as string) ||
+            (item['toolUseId'] as string) ||
+            (item['tool_use_id'] as string) ||
+            (item['call_id'] as string) ||
+            '').trim()
+          const toolInput = (item['input'] as Record<string, Object>) ||
+            (item['arguments'] as Record<string, Object>) ||
+            (item['args'] as Record<string, Object>) ||
+            {}
+          messages.push({
+            id: 'official-codex-tool-' + turnId + '-' + j,
+            type: 'tool_use',
+            content: '',
+            toolName: this.normalizeOfficialCodexToolName(rawToolName),
+            toolUseId: toolUseId || 'official-codex-tool-' + turnId + '-' + j,
+            toolInput,
+            toolStatus: this.getOfficialCodexToolStatus(item),
+            timestamp
+          } as Message)
+        } else if (type === 'tool_result') {
+          const toolUseId = ((item['tool_use_id'] as string) ||
+            (item['toolUseId'] as string) ||
+            (item['call_id'] as string) ||
+            (item['id'] as string) ||
+            '').trim()
+          const content = this.extractOfficialCodexItemText(item)
+          const isError = item['is_error'] === true || item['isError'] === true
+          messages.push({
+            id: 'official-codex-tool-result-' + turnId + '-' + j,
+            type: 'tool_result',
+            content,
+            toolUseId,
+            toolResult: content,
+            toolStatus: isError ? 'failed' : 'completed',
+            isError,
+            timestamp
+          } as Message)
         } else if (type === 'error') {
           const message = ((item['message'] as string) || '').trim()
           if (message.length > 0) {
@@ -2428,124 +2316,8 @@ export class SessionStore {
               id: 'official-codex-error-' + turnId + '-' + j,
               type: 'error',
               content: message,
-              timestamp: timestamp
+              timestamp
             })
-          }
-        } else if (type === 'toolUse') {
-          // 工具调用消息
-          const rawToolName = (item['name'] as string) || (item['toolName'] as string) || 'unknown'
-          const toolName = this.normalizeOfficialCodexToolName(rawToolName)
-          const toolId = (item['id'] as string) || (item['toolUseId'] as string) || ''
-          const toolInput = (item['input'] as Record<string, Object>) ||
-            (item['arguments'] as Record<string, Object>) ||
-            (item['args'] as Record<string, Object>)
-          const toolStatus = this.getOfficialCodexToolStatus(item)
-          messages.push({
-            id: 'official-codex-tool-' + turnId + '-' + j,
-            type: 'tool_use',
-            content: '',
-            toolName: toolName,
-            toolUseId: toolId,
-            toolInput: toolInput,
-            toolStatus: toolStatus,
-            timestamp: timestamp
-          } as Message)
-        } else if (type === 'toolResult') {
-          // 工具结果消息
-          const toolUseId = (item['tool_use_id'] as string) || (item['toolUseId'] as string) || (item['id'] as string) || ''
-          const content = this.extractOfficialCodexItemText(item)
-          const isError = item['is_error'] as boolean
-          messages.push({
-            id: 'official-codex-tool-result-' + turnId + '-' + j,
-            type: 'tool_result',
-            content: content,
-            toolUseId: toolUseId,
-            toolResult: content,
-            isError: isError,
-            timestamp: timestamp
-          } as Message)
-        } else if (type === 'thinking' || type === 'reasoning') {
-          // 思考消息
-          const thinking = this.extractOfficialCodexItemText(item) ||
-            this.extractOfficialCodexSummaryText(item) ||
-            (item['thinking'] as string) ||
-            (item['content'] as string) ||
-            ''
-          if (thinking.length > 0) {
-            messages.push({
-              id: 'official-codex-thinking-' + turnId + '-' + j,
-              type: 'thinking',
-              content: thinking,
-              timestamp: timestamp
-            })
-          }
-        } else if (type === 'localCommand' || type === 'commandExecution') {
-          // 本地命令执行
-          const command = this.extractOfficialCodexCommandText(item)
-          const output = this.extractOfficialCodexCommandOutput(item)
-          const exitCode = Number(item['exit_code'] !== undefined ? item['exit_code'] : item['exitCode'])
-          const hasExitCode = !Number.isNaN(exitCode)
-          const statusText = exitCode === 0 ? 'OK' : 'FAIL'
-          const toolContent = hasExitCode
-            ? `\`\`\`bash\n$ ${command}\n${output}\n\`\`\`\nExit code: ${exitCode} ${statusText}`
-            : `\`\`\`bash\n$ ${command}\n${output}\n\`\`\``
-          const cmdInput: Record<string, Object> = {}
-          cmdInput['command'] = command
-          if (item['cwd']) cmdInput['cwd'] = item['cwd']
-          messages.push({
-            id: 'official-codex-command-' + turnId + '-' + j,
-            type: 'tool_use',
-            content: '',
-            toolName: 'Bash',
-            toolUseId: (item['id'] as string) || 'cmd-' + turnId + '-' + j,
-            toolInput: cmdInput,
-            toolResult: toolContent,
-            toolStatus: this.getOfficialCodexToolStatus(item, hasExitCode ? (exitCode === 0 ? 'completed' : 'failed') : 'running'),
-            timestamp: timestamp
-          } as Message)
-        } else if (type === 'fileEdit' || type === 'file_change' || type === 'fileChange') {
-          // 文件编辑
-          const filePath = this.extractOfficialCodexFilePath(item)
-          const diffContent = this.extractOfficialCodexFileDiff(item)
-          const fileInput: Record<string, Object> = {}
-          fileInput['file_path'] = filePath
-          messages.push({
-            id: 'official-codex-file-' + turnId + '-' + j,
-            type: 'tool_use',
-            content: '',
-            toolName: 'Edit',
-            toolUseId: (item['id'] as string) || 'file-' + turnId + '-' + j,
-            toolInput: fileInput,
-            toolResult: diffContent,
-            toolStatus: this.getOfficialCodexToolStatus(item),
-            timestamp: timestamp
-          } as Message)
-        } else {
-          // 兜底处理：未知类型可能是 AI 回复
-          // 尝试提取文本，如果有内容则作为 assistant 消息
-          const fallbackText = this.extractOfficialCodexItemText(item) ||
-            this.extractOfficialCodexSummaryText(item) ||
-            ''
-          if (fallbackText.length > 0) {
-            console.info(`[SessionStore] buildOfficialCodexMessagesFromTurns: fallback to assistant for unknown type="${type}" textLength=${fallbackText.length}`)
-            messages.push({
-              id: 'official-codex-fallback-' + turnId + '-' + j,
-              type: 'assistant',
-              content: fallbackText,
-              timestamp: timestamp
-            })
-          } else {
-            // 检查是否有 reasoning_summary 等新字段
-            const reasoningSummary = (item['reasoning_summary'] as string) || (item['reasoningSummary'] as string) || ''
-            if (reasoningSummary.length > 0) {
-              console.info(`[SessionStore] buildOfficialCodexMessagesFromTurns: found reasoning_summary for type="${type}"`)
-              messages.push({
-                id: 'official-codex-reasoning-' + turnId + '-' + j,
-                type: 'thinking',
-                content: reasoningSummary,
-                timestamp: timestamp
-              })
-            }
           }
         }
       }
@@ -2553,134 +2325,114 @@ export class SessionStore {
     return messages
   }
 
-  private extractOfficialCodexCommandText(item: Record<string, Object>): string {
-    const commandValue = item['command']
-    if (typeof commandValue === 'string') return commandValue
-    if (Array.isArray(commandValue)) {
-      const parts: string[] = []
-      for (let i = 0; i < commandValue.length; i++) {
-        parts.push(String(commandValue[i]))
-      }
-      return parts.join(' ')
+  private getOfficialCodexTurnBaseTime(turn: Record<string, Object>, fallbackIndex: number): number {
+    const candidates: string[] = ['createdAt', 'created_at', 'startedAt', 'started_at', 'updatedAt', 'updated_at']
+    for (let i = 0; i < candidates.length; i++) {
+      const raw = turn[candidates[i]]
+      const parsed = this.parseOfficialCodexTime(raw)
+      if (parsed > 0) return parsed
     }
-
-    const input = item['input'] as Record<string, Object>
-    if (input) {
-      const inputCommand = input['command']
-      if (typeof inputCommand === 'string') return inputCommand
-      if (Array.isArray(inputCommand)) {
-        const parts: string[] = []
-        for (let i = 0; i < inputCommand.length; i++) {
-          parts.push(String(inputCommand[i]))
-        }
-        return parts.join(' ')
-      }
-    }
-    return ''
+    return Date.now() + fallbackIndex * 1000
   }
 
-  private extractOfficialCodexCommandOutput(item: Record<string, Object>): string {
-    const keys: string[] = ['aggregatedOutput', 'output', 'stdout', 'stderr', 'result']
-    const parts: string[] = []
-    for (let i = 0; i < keys.length; i++) {
-      const value = item[keys[i]]
-      if (typeof value === 'string' && value.trim().length > 0) {
-        parts.push(value.trim())
-      }
-    }
-
-    const outputPartsRaw: Object = item['outputParts']
-    if (Array.isArray(outputPartsRaw)) {
-      const outputParts = outputPartsRaw as Object[]
-      for (let i = 0; i < outputParts.length; i++) {
-        const part: Object = outputParts[i]
-        if (typeof part === 'string' && part.trim().length > 0) {
-          parts.push(part.trim())
-        } else if (typeof part === 'object' && part !== null) {
-          const record = part as Record<string, Object>
-          const text = ((record['text'] as string) || (record['output'] as string) || '').trim()
-          if (text.length > 0) parts.push(text)
-        }
-      }
-    }
-    return parts.join('\n').trim()
+  private getOfficialCodexMessageTimestamp(turnBaseTime: number, itemIndex: number, itemType: string): string {
+    return new Date(turnBaseTime + itemIndex * 10 + this.getOfficialCodexItemRoleOffset(itemType)).toISOString()
   }
 
-  private extractOfficialCodexFilePath(item: Record<string, Object>): string {
-    const direct = ((item['path'] as string) || (item['file_path'] as string) || (item['filePath'] as string) || '').trim()
+  private getOfficialCodexItemRoleOffset(itemType: string): number {
+    if (itemType === 'userMessage') return 1
+    if (itemType === 'thinking') return 2
+    if (itemType === 'tool_use') return 3
+    if (itemType === 'tool_result') return 4
+    if (itemType === 'agentMessage' || itemType === 'assistantMessage') return 8
+    if (itemType === 'error') return 9
+    return 5
+  }
+
+  private parseOfficialCodexTime(value: Object): number {
+    if (value === undefined || value === null) return 0
+    if (typeof value === 'number') {
+      return value > 1000000000000 ? value : value * 1000
+    }
+    if (typeof value === 'string') {
+      const numeric = Number(value)
+      if (!Number.isNaN(numeric) && numeric > 0) {
+        return numeric > 1000000000000 ? numeric : numeric * 1000
+      }
+      const parsed = Date.parse(value)
+      return Number.isNaN(parsed) ? 0 : parsed
+    }
+    return 0
+  }
+
+  private normalizeOfficialCodexItemType(type: string): string {
+    const normalized = type.replace(/[-_]/g, '').toLowerCase()
+    if (normalized === 'agentmessage' || normalized === 'assistantmessage' || normalized === 'assistant') return 'assistantMessage'
+    if (normalized === 'usermessage' || normalized === 'user') return 'userMessage'
+    if (normalized === 'tooluse' || normalized === 'functioncall') return 'tool_use'
+    if (normalized === 'toolresult' || normalized === 'functionresult') return 'tool_result'
+    if (normalized === 'thinking' || normalized === 'reasoning') return 'thinking'
+    if (normalized === 'localcommand' || normalized === 'commandexecution' || normalized === 'command') return 'tool_use'
+    if (normalized === 'error') return 'error'
+    return type
+  }
+
+  private normalizeOfficialCodexToolName(name: string): string {
+    const normalized = name.trim()
+    if (normalized.length === 0) return 'tool'
+    const lower = normalized.toLowerCase()
+    if (lower === 'shell' || lower === 'bash' || lower === 'command' || lower === 'localcommand') return 'Bash'
+    if (lower === 'edit' || lower === 'fileedit' || lower === 'applypatch') return 'Edit'
+    if (lower === 'write' || lower === 'filewrite') return 'Write'
+    if (lower === 'read' || lower === 'fileread') return 'Read'
+    return normalized
+  }
+
+  private getOfficialCodexToolStatus(item: Record<string, Object>): 'pending' | 'running' | 'completed' | 'failed' {
+    const raw = (((item['status'] as string) || (item['state'] as string) || '') as string)
+      .replace(/[-_]/g, '')
+      .toLowerCase()
+    if (raw === 'failed' || raw === 'error' || raw === 'cancelled' || raw === 'canceled') return 'failed'
+    if (raw === 'pending' || raw === 'queued') return 'pending'
+    if (raw === 'running' || raw === 'inprogress' || raw === 'started') return 'running'
+    return 'completed'
+  }
+
+  private extractOfficialCodexItemText(item: Record<string, Object>): string {
+    const direct = ((item['text'] as string) ||
+      (item['message'] as string) ||
+      (item['output_text'] as string) ||
+      (item['outputText'] as string) ||
+      (item['output'] as string) ||
+      (item['value'] as string) ||
+      '').trim()
     if (direct.length > 0) return direct
 
-    const changesRaw: Object = item['changes']
-    if (Array.isArray(changesRaw)) {
-      const changes = changesRaw as Object[]
-      for (let i = 0; i < changes.length; i++) {
-        const change = changes[i] as Record<string, Object>
-        const path = ((change['path'] as string) || (change['file_path'] as string) || (change['filePath'] as string) || '').trim()
-        if (path.length > 0) return path
-      }
-    }
-    return ''
-  }
-
-  private extractOfficialCodexFileDiff(item: Record<string, Object>): string {
-    const directDiff = item['diff']
-    if (typeof directDiff === 'string' && directDiff.trim().length > 0) return directDiff.trim()
-
-    const changesRaw: Object = item['changes']
-    if (typeof changesRaw === 'string') return changesRaw.trim()
-    if (!Array.isArray(changesRaw)) {
-      if (changesRaw === undefined || changesRaw === null) return ''
-      return JSON.stringify(changesRaw, null, 2)
-    }
+    const content = item['content']
+    if (typeof content === 'string') return content.trim()
+    if (!Array.isArray(content)) return ''
 
     const parts: string[] = []
-    const changes = changesRaw as Object[]
-    for (let i = 0; i < changes.length; i++) {
-      const change: Object = changes[i]
-      if (typeof change === 'string') {
-        const text = change.trim()
-        if (text.length > 0) parts.push(text)
-      } else if (typeof change === 'object' && change !== null) {
-        const record = change as Record<string, Object>
-        const path = ((record['path'] as string) || (record['file_path'] as string) || (record['filePath'] as string) || '').trim()
-        const kind = ((record['kind'] as string) || (record['type'] as string) || '').trim()
-        const diff = ((record['diff'] as string) || (record['patch'] as string) || '').trim()
-        if (diff.length > 0) {
-          const header = path.length > 0 ? `# ${kind.length > 0 ? kind + ': ' : ''}${path}` : ''
-          parts.push(header.length > 0 ? `${header}\n${diff}` : diff)
-        } else {
-          parts.push(JSON.stringify(record, null, 2))
-        }
-      }
+    for (let i = 0; i < content.length; i++) {
+      const part = content[i] as Record<string, Object>
+      const text = ((part['text'] as string) ||
+        (part['content'] as string) ||
+        (part['input_text'] as string) ||
+        (part['output_text'] as string) ||
+        (part['outputText'] as string) ||
+        (part['output'] as string) ||
+        (part['value'] as string) ||
+        '').trim()
+      if (text.length > 0) parts.push(text)
     }
     return parts.join('\n\n').trim()
   }
 
-  private getOfficialCodexItemTimestamp(
-    turn: Record<string, Object>,
-    item: Record<string, Object>,
-    turnIndex: number,
-    itemIndex: number
-  ): string {
-    const raw = (item['createdAt'] as string) || (item['created_at'] as string) ||
-      (item['timestamp'] as string) || (item['time'] as string) ||
-      (turn['createdAt'] as string) || (turn['created_at'] as string) ||
-      (turn['timestamp'] as string) || ''
-    if (raw.length > 0) {
-      const parsed = new Date(raw).getTime()
-      if (!Number.isNaN(parsed)) return new Date(parsed + itemIndex).toISOString()
-    }
-
-    const base = Date.now() - Math.max(0, 10000 - turnIndex * 100 - itemIndex)
-    return new Date(base).toISOString()
-  }
-
   private extractOfficialCodexUserText(item: Record<string, Object>): string {
-    const direct = this.extractOfficialCodexItemText(item)
-    if (direct.length > 0) return direct
-
     const content = item['content'] as Array<Record<string, Object>>
-    if (!content || content.length === 0) return ''
+    if (!content || content.length === 0) {
+      return ((item['text'] as string) || (item['message'] as string) || '').trim()
+    }
 
     const parts: string[] = []
     for (let i = 0; i < content.length; i++) {
@@ -2714,7 +2466,7 @@ export class SessionStore {
       const item = data[i]
       if (!turnId || item['id'] === turnId) return item
     }
-    return data[0]
+    return data[data.length - 1]
   }
 
   private extractOfficialCodexAssistantText(turn: Record<string, Object> | null): string {
@@ -2725,186 +2477,22 @@ export class SessionStore {
     let latest = ''
     for (let i = items.length - 1; i >= 0; i--) {
       const item = items[i]
-      const rawType = ((item['type'] as string) || '').toLowerCase()
       const type = this.normalizeOfficialCodexItemType((item['type'] as string) || '')
-      if (type === 'assistantMessage' || type === 'agentMessage') {
+
+      if (type === 'agentMessage' || type === 'assistantMessage') {
         const text = this.extractOfficialCodexItemText(item)
-        if (text.length > 0) return text.trim()
+        if (text.length > 0) return text
       } else if (type === 'error') {
         const message = (item['message'] as string) || ''
         if (message.length > 0) latest = message
-      } else if (rawType.includes('assistant') || rawType.includes('agent') || rawType.includes('message') || rawType.includes('response')) {
-        // 兜底：尝试从可能包含 AI 回复的类型中提取文本
-        const text = this.extractOfficialCodexItemText(item)
-        if (text.length > 0) {
-          console.info(`[SessionStore] extractOfficialCodexAssistantText: found text in item with rawType="${rawType}"`)
-          return text.trim()
-        }
       }
     }
     return latest.trim()
   }
 
-  private normalizeOfficialCodexItemType(type: string): string {
-    const normalized = type.replace(/[-_]/g, '').toLowerCase()
-    if (normalized === 'tooluse' || normalized === 'functioncall') return 'toolUse'
-    if (normalized === 'toolresult' || normalized === 'functionresult') return 'toolResult'
-    // 支持更多 AI 消息类型名称
-    if (normalized === 'agentmessage' ||
-        normalized === 'assistantmessage' ||
-        normalized === 'assistant' ||
-        normalized === 'agent' ||
-        normalized === 'response' ||
-        normalized === 'reply' ||
-        normalized === 'output' ||
-        normalized === 'answer') {
-      console.info(`[SessionStore] normalizeOfficialCodexItemType: "${type}" -> "assistantMessage"`)
-      return 'assistantMessage'
-    }
-    if (normalized === 'usermessage' || normalized === 'user') return 'userMessage'
-    if (normalized === 'localcommand' || normalized === 'commandexecution' || normalized === 'command') return 'localCommand'
-    if (normalized === 'fileedit' || normalized === 'filechange' || normalized === 'filepatch') return 'fileEdit'
-    if (normalized === 'thinking' || normalized === 'reasoning') return 'thinking'
-    // 未知类型打印日志
-    if (type.length > 0) {
-      console.info(`[SessionStore] normalizeOfficialCodexItemType: unknown type "${type}" (normalized="${normalized}"), keeping as-is`)
-    }
-    return type
-  }
-
-  private normalizeOfficialCodexToolName(name: string): string {
-    const normalized = name.replace(/[-_]/g, '').toLowerCase()
-    if (normalized === 'shell' || normalized === 'bash' || normalized === 'terminal' || normalized === 'localcommand') return 'Bash'
-    if (normalized === 'readfile' || normalized === 'read') return 'Read'
-    if (normalized === 'writefile' || normalized === 'write') return 'Write'
-    if (normalized === 'editfile' || normalized === 'fileedit' || normalized === 'edit') return 'Edit'
-    if (normalized === 'grep' || normalized === 'search') return 'Grep'
-    if (normalized === 'glob' || normalized === 'findfiles') return 'Glob'
-    return name
-  }
-
-  private extractOfficialCodexSummaryText(item: Record<string, Object>): string {
-    const summary: Object | undefined = item['summary']
-    if (typeof summary === 'string') return summary.trim()
-    if (!Array.isArray(summary)) return ''
-
-    const parts: string[] = []
-    for (let i = 0; i < summary.length; i++) {
-      const value: Object = summary[i] as Object
-      if (typeof value === 'string') {
-        const text = value.trim()
-        if (text.length > 0) parts.push(text)
-      } else if (typeof value === 'object' && value !== null) {
-        const record = value as Record<string, Object>
-        const text = ((record['text'] as string) || (record['summary'] as string) || '').trim()
-        if (text.length > 0) parts.push(text)
-      }
-    }
-    return parts.join('\n\n').trim()
-  }
-
-  private extractOfficialCodexItemText(item: Record<string, Object>): string {
-    // 尝试多种可能的字段名
-    const directFields = ['text', 'message', 'output', 'response', 'result', 'value', 'body', 'data']
-    for (let i = 0; i < directFields.length; i++) {
-      const field = directFields[i]
-      const value = item[field]
-      if (typeof value === 'string') {
-        const trimmed = (value as string).trim()
-        if (trimmed.length > 0) {
-          console.info(`[SessionStore] extractOfficialCodexItemText: found text in field "${field}"`)
-          return trimmed
-        }
-      }
-    }
-
-    const content = item['content']
-    if (typeof content === 'string') {
-      const trimmed = (content as string).trim()
-      if (trimmed.length > 0) {
-        console.info('[SessionStore] extractOfficialCodexItemText: found text in content (string)')
-        return trimmed
-      }
-    }
-    if (!Array.isArray(content)) {
-      // DEBUG: 打印 item 的所有字段，帮助定位问题
-      const keys = Object.keys(item)
-      console.info(`[SessionStore] extractOfficialCodexItemText: no text found, item keys: ${keys.join(',')}`)
-      return ''
-    }
-
-    const parts: string[] = []
-    for (let i = 0; i < content.length; i++) {
-      const part = content[i] as Record<string, Object>
-      // 尝试更多可能的字段名
-      const text = ((part['text'] as string) ||
-        (part['content'] as string) ||
-        (part['input_text'] as string) ||
-        (part['output_text'] as string) ||
-        (part['outputText'] as string) ||
-        (part['output'] as string) ||
-        (part['value'] as string) ||
-        (part['body'] as string) ||
-        (part['data'] as string) ||
-        '').trim()
-      if (text.length > 0) parts.push(text)
-    }
-    const result = parts.join('\n\n').trim()
-    if (result.length > 0) {
-      console.info(`[SessionStore] extractOfficialCodexItemText: found text in content array, length=${result.length}`)
-    }
-    return result
-  }
-
-  private getOfficialCodexToolStatus(item: Record<string, Object>, fallback: 'running' | 'completed' | 'failed' = 'completed'): 'running' | 'completed' | 'failed' {
-    const raw = (((item['status'] as string) || (item['state'] as string) || '') as string).toLowerCase()
-    if (raw === 'failed' || raw === 'error' || raw === 'cancelled' || raw === 'canceled' || raw === 'skipped') return 'failed'
-    if (raw === 'running' || raw === 'inprogress' || raw === 'in_progress' || raw === 'pending' || raw === 'started') return 'running'
-    if (raw === 'completed' || raw === 'complete' || raw === 'succeeded' || raw === 'success' || raw === 'done') return 'completed'
-    return fallback
-  }
-
   sendPermissionResponse(requestId: string, allowed: boolean, always: boolean = false): void {
     if (!this.currentSessionId) return
-    const sessionId = this.currentSessionId
-    const session = this.sessions.find(s => s.id === sessionId)
-    if (session?.officialCodexThreadId || (session?.aiTool || '').toLowerCase().indexOf('codex') >= 0) {
-      void apiService.sendCodexRemotePermissionResponse(requestId, allowed).catch((e: Error) => {
-        console.error(`[SessionStore] Official Codex permission response error: ${e.message}`)
-      })
-      this.markOfficialCodexPermissionHandled(sessionId, requestId, allowed)
-      return
-    }
-    wsService.sendPermissionResponse(sessionId, requestId, allowed, always)
-  }
-
-  private markOfficialCodexPermissionHandled(sessionId: string, requestId: string, allowed: boolean): void {
-    const sessionMessages = this.messages.get(sessionId) || []
-    let changed = false
-    for (let i = 0; i < sessionMessages.length; i++) {
-      if (sessionMessages[i].type === 'permission_request' && sessionMessages[i].permissionId === requestId) {
-        sessionMessages[i] = {
-          id: sessionMessages[i].id,
-          type: sessionMessages[i].type,
-          content: sessionMessages[i].content,
-          timestamp: sessionMessages[i].timestamp,
-          toolName: sessionMessages[i].toolName,
-          toolInput: sessionMessages[i].toolInput,
-          permissionId: sessionMessages[i].permissionId,
-          permissionDescription: sessionMessages[i].permissionDescription,
-          isPermissionHandled: true,
-          permissionResult: allowed
-        }
-        changed = true
-      }
-    }
-    this.pendingPermissions.delete(sessionId)
-    this.updateSessionStatus(sessionId, 'thinking')
-    this.upsertOfficialCodexStatusMessage(sessionId, allowed ? '权限已允许，Codex Desktop 继续工作' : '权限已拒绝，等待 Codex Desktop 处理结果')
-    if (!changed) return
-    this.messages.set(sessionId, sessionMessages)
-    this.persistMessages(sessionId, sessionMessages)
-    this.notifyMessagesChanged(sessionId)
+    wsService.sendPermissionResponse(this.currentSessionId, requestId, allowed, always)
   }
 
   sendQuestionResponse(questionId: string, answer: string): void {
@@ -2955,10 +2543,6 @@ export class SessionStore {
       const status = this.sessionStatuses.get(session.id)
       if (!status || status === 'idle') continue
 
-      if (session.officialCodexThreadId) {
-        continue
-      }
-
       // 如果 WS 没连接，working 状态肯定是过期的
       const wsConnected = wsService.isConnected(session.id)
 
@@ -2976,6 +2560,9 @@ export class SessionStore {
       }
 
       // working 状态（thinking、streaming、tool_executing 等）
+      if (session.officialCodexThreadId || (session.aiTool || '').toLowerCase().indexOf('codex') >= 0) {
+        continue
+      }
       if (!wsConnected) {
         console.info(`[SessionStore] Stale status for ${session.id}: ${status}, WS not connected, resetting to idle`)
         this.updateSessionStatus(session.id, 'idle')
@@ -3020,9 +2607,9 @@ export class SessionStore {
     return this.sessionStatuses.get(sessionId) || 'idle'
   }
 
-  // 获取所有活跃会话（状态为 thinking/streaming/tool_executing/等待用户处理）
+  // 获取所有活跃会话（状态为 thinking/streaming/tool_executing）
   getActiveSessions(): Session[] {
-    const activeStatuses: SessionStatus[] = ['thinking', 'streaming', 'tool_executing', 'permission_pending', 'question_pending']
+    const activeStatuses: SessionStatus[] = ['thinking', 'streaming', 'tool_executing']
     const result: Session[] = []
     for (let i = 0; i < this.sessions.length; i++) {
       const session = this.sessions[i]
@@ -3062,7 +2649,11 @@ export class SessionStore {
     // 导致 streamingText 重复积累（内容翻倍）或消息重复插入。
     // 优先用 msg.id（最可靠），没有 ID 时降级到 toolUseId/type+content 多维摘要
     let dedupKey: string
-    if (msg.id && !msg.id.startsWith('tool-')) {
+    if (messageType === 'official_codex_update') {
+      // Codex 消息用 threadId+turnId+status 去重（避免所有流式 delta 共用同一个 key）
+      const codexData = (msg as Record<string, Object>)['data'] as Record<string, Object> | undefined
+      dedupKey = sessionId + ':codex:' + ((msg as Record<string, Object>)['threadId'] || '') + ':' + (codexData?.['turnId'] || '') + ':' + (codexData?.['status'] || '')
+    } else if (msg.id && !msg.id.startsWith('tool-')) {
       dedupKey = sessionId + ':id:' + msg.id + ':' + msg.type
     } else if (msg.toolUseId) {
       // 必须包含 msg.type，防止 tool_use_complete 和 tool_result 共享 toolUseId 互相去重
@@ -3158,6 +2749,9 @@ export class SessionStore {
         break
 
       case 'content_start':
+        if (this.isOfficialCodexSession(sessionId)) {
+          break
+        }
         this.updateSessionStatus(sessionId, 'streaming')
         // 启动实况窗
         liveViewService.showThinking(sessionId, this.getSessionAiTool(sessionId))
@@ -3178,19 +2772,11 @@ export class SessionStore {
         }
         break
 
-// 修复后的 content_delta 和 thinking 处理逻辑
-// 替换原有的 case 'content_delta' 和 case 'thinking' 部分
-
       case 'content_delta':
-        // 添加调试日志
-        console.info(`[SessionStore] content_delta received: sessionId=${sessionId}, blockType=${msg.blockType}, textLen=${(msg.text as string)?.length || 0}`)
-        
-        // 仅处理文本内容（blockType === "text" 或未指定）
-        if (msg.blockType && msg.blockType !== 'text') {
-          console.info(`[SessionStore] Skip content_delta with blockType=${msg.blockType}`)
+      case 'thinking':
+        if (this.isOfficialCodexSession(sessionId)) {
           break
         }
-        
         // 流式增量更新 Head 缓冲
         {
           const deltaText = typeof msg.text === 'string' ? msg.text as string : ''
@@ -3200,70 +2786,35 @@ export class SessionStore {
               head = []
             }
 
-            if (head.length > 0 && head[head.length - 1].type === 'assistant') {
-              const last = head[head.length - 1]
-              last.content = (last.content || '') + deltaText
-            } else {
-              head.push({
-                id: 'stream-' + Date.now(),
-                type: 'assistant',
-                content: deltaText,
-                isStreaming: true,
-                timestamp: new Date().toISOString(),
-              })
+            if (messageType === 'content_delta') {
+              if (head.length > 0 && head[head.length - 1].type === 'assistant') {
+                const last = head[head.length - 1]
+                last.content = (last.content || '') + deltaText
+              } else {
+                head.push({
+                  id: 'stream-' + Date.now(),
+                  type: 'assistant',
+                  content: deltaText,
+                  isStreaming: true,
+                  timestamp: new Date().toISOString(),
+                })
+              }
+            } else { // thinking
+              if (head.length > 0 && head[head.length - 1].type === 'thinking') {
+                const last = head[head.length - 1]
+                last.content = (last.content || '') + deltaText
+              } else {
+                head.push({
+                  id: 'thinking-' + Date.now(),
+                  type: 'thinking',
+                  content: deltaText,
+                  isStreaming: true,
+                  timestamp: new Date().toISOString(),
+                })
+              }
             }
 
             this.streamHeads.set(sessionId, head)
-            // 降低节流阈值：每 20 字符更新一次 UI，提升短消息响应
-            const lastMsg = head[head.length - 1]
-            const contentLen = (lastMsg.content || '').length
-            if (contentLen % 20 < deltaText.length || contentLen < 50) {
-              console.info(`[SessionStore] content_delta notify UI: contentLen=${contentLen}`)
-              this.notifyMessagesChanged(sessionId)
-            }
-          }
-        }
-        break
-
-      case 'thinking':
-        // 流式增量更新 Head 缓冲
-        {
-          const deltaText = typeof msg.text === 'string' ? msg.text as string : ''
-          if (deltaText) {
-            let head = this.streamHeads.get(sessionId)
-            if (!head) {
-              head = []
-            }
-
-            if (head.length > 0 && head[head.length - 1].type === 'thinking') {
-              const last = head[head.length - 1]
-              last.content = (last.content || '') + deltaText
-            } else {
-              head.push({
-                id: 'thinking-' + Date.now(),
-                type: 'thinking',
-                content: deltaText,
-                isStreaming: true,
-                timestamp: new Date().toISOString(),
-              })
-            }
-
-            this.streamHeads.set(sessionId, head)
-            // 降低节流阈值：每 20 字符更新一次 UI
-            const lastMsg = head[head.length - 1]
-            const contentLen = (lastMsg.content || '').length
-            if (contentLen % 20 < deltaText.length || contentLen < 50) {
-              this.notifyMessagesChanged(sessionId)
-            }
-          }
-        }
-        break
-            const lastMsg = head[head.length - 1]
-            const contentLen = (lastMsg.content || '').length
-            // 每 50 字符更新一次 UI，平衡流畅度和性能
-            if (contentLen % 50 < deltaText.length || contentLen < 100) {
-              this.notifyMessagesChanged(sessionId)
-            }
           }
         }
         break
@@ -3298,19 +2849,6 @@ export class SessionStore {
             parentToolUseId: msg.parentToolUseId as string | undefined
           }
           this.addMessage(sessionId, toolMessage)
-
-          // AskUserQuestion 需要设置 pendingPermissions，以便提交答案时能获取 requestId
-          if (msg.toolName === 'AskUserQuestion' && msg.requestId) {
-            console.info(`[SessionStore] Setting pendingPermissions for AskUserQuestion: ${msg.requestId}`)
-            this.updateSessionStatus(sessionId, 'permission_pending')
-            this.pendingPermissions.set(sessionId, {
-              requestId: msg.requestId,
-              toolName: msg.toolName,
-              toolUseId: toolId,
-              input: msg.input as Record<string, Object>,
-              description: msg.description
-            })
-          }
 
           // 跟踪 TaskCreate / TaskUpdate 工具调用（实时更新任务列表）
           if (msg.toolName === 'TaskCreate' || msg.toolName === 'TaskUpdate') {
@@ -3399,16 +2937,36 @@ export class SessionStore {
         break
 
       case 'permission_request':
-        // AskUserQuestion 需要 requestId 来提交答案，但不需要显示权限卡片
+        // 非流式事件：先将 Head 刷新到 Tail
+        this.flushHeadToTail(sessionId)
+        this.updateSessionStatus(sessionId, 'permission_pending')
+
+        // 设置 pendingPermission 状态
         if (msg.requestId) {
-          this.addOfficialCodexPermissionMessage(sessionId, {
+          const pending: PendingPermission = {
             requestId: msg.requestId,
             toolName: msg.toolName,
             toolUseId: msg.toolUseId,
             input: msg.input as Record<string, Object>,
             description: msg.description
-          })
+          }
+          this.pendingPermissions.set(sessionId, pending)
+
+          // AskUserQuestion 工具特殊处理：添加带 toolName 的消息，由 ChatDetailPage 特殊渲染
+          const permMessage: Message = {
+            id: 'permission-' + msg.requestId,
+            type: 'permission_request',
+            content: msg.description || '权限请求: ' + (msg.toolName || ''),
+            timestamp: new Date().toISOString(),
+            toolName: msg.toolName,
+            permissionId: msg.requestId,
+            permissionDescription: msg.description,
+            toolInput: msg.input as Record<string, Object>
+          }
+          this.addMessage(sessionId, permMessage)
         }
+        // 后台通知
+        this.notifyIfBackground(sessionId, '权限请求', msg.toolName || '', 'permission')
         break
 
       case 'question':
@@ -3588,6 +3146,14 @@ export class SessionStore {
         }
         break
       }
+      case 'official_codex_update': {
+        const codexData = (msg as Record<string, Object>)['data'] as Record<string, Object> | undefined
+        const codexThreadId = (msg as Record<string, Object>)['threadId'] as string || ''
+        if (codexThreadId && codexData) {
+          this.handleOfficialCodexUpdate(sessionId, codexThreadId, codexData)
+        }
+        break
+      }
     }
   }
 
@@ -3619,13 +3185,32 @@ export class SessionStore {
 
       case 'session_broadcast':
         if (msg.sessionId && msg.message) {
+          // 检查是否是 Official Codex 格式的 sessionId (official-codex-{threadId})
+          let targetSessionId = msg.sessionId
+          let isOfficialCodexBroadcast = false
+          if (msg.sessionId.startsWith('official-codex-')) {
+            isOfficialCodexBroadcast = true
+            // 从 threadId 找到对应的真实 sessionId
+            const threadId = msg.sessionId.replace('official-codex-', '')
+            // 遍历所有会话找到匹配的 threadId
+            for (let i = 0; i < this.sessions.length; i++) {
+              const session = this.sessions[i]
+              if (session.officialCodexThreadId === threadId ||
+                  this.officialCodexThreadIds.get(session.id) === threadId) {
+                targetSessionId = session.id
+                console.info(`[SessionStore] Mapped threadId ${threadId} to sessionId ${targetSessionId}`)
+                break
+              }
+            }
+          }
+
           // 已有直连 WS 且真正在线时才跳过全局广播，防止 WS 断开后遗漏 message_complete 等关键消息
-          if (wsService.isSubscribed(msg.sessionId) && wsService.isConnected(msg.sessionId)) {
-            console.info(`[SessionStore] Skip session_broadcast for ${msg.sessionId}: already connected`)
+          if (!isOfficialCodexBroadcast && wsService.isSubscribed(targetSessionId) && wsService.isConnected(targetSessionId)) {
+            console.info(`[SessionStore] Skip session_broadcast for ${targetSessionId}: already connected`)
             break
           }
-          console.info(`[SessionStore] Session broadcast for ${msg.sessionId} (direct WS not connected)`)
-          this.handleWSMessage(msg.sessionId, msg.message as WSMessage)
+          console.info(`[SessionStore] Session broadcast for ${targetSessionId} (direct WS not connected)`)
+          this.handleWSMessage(targetSessionId, msg.message as WSMessage)
         }
         break
 
