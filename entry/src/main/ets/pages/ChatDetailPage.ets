@@ -1826,10 +1826,15 @@ struct ChatDetailPage {
           }, (message: Message) => {
             // 生成稳定且唯一的 key，防止重复渲染
             if (message.toolUseId && message.type === 'tool_use') {
-              return 'tool_' + message.toolUseId
+              return 'tool_' + message.toolUseId + '_' +
+                (message.toolResult || '').length + '_' +
+                (message.toolStatus || '') + '_' +
+                (message.isStreaming ? 'streaming' : 'done')
             }
             if (message.toolUseId && message.type === 'tool_result') {
-              return 'result_' + message.toolUseId
+              return 'result_' + message.toolUseId + '_' +
+                (message.toolResult || message.content || '').length + '_' +
+                (message.toolStatus || '')
             }
             if (message.type === 'permission_request') {
               return message.id + '_' + (message.isPermissionHandled ? 'done' : 'pending')
@@ -3010,7 +3015,8 @@ struct ChatDetailPage {
             } else if (msg.type === 'tool_result') {
               this.ToolResultBubble(msg)
             }
-          }, (msg: Message) => msg.id + '_' + (msg.toolStatus || ''))
+          }, (msg: Message) => msg.id + '_' + (msg.toolStatus || '') + '_' +
+            (msg.toolResult || msg.content || '').length)
         }
         .width('100%')
       }

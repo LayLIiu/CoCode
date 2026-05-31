@@ -2165,8 +2165,8 @@ export class SessionStore {
       'official-codex-user-',
       'official-codex-assistant-',
       'official-codex-thinking-',
-      'official-codex-tool-',
       'official-codex-tool-result-',
+      'official-codex-tool-',
       'official-codex-error-'
     ]
     for (let i = 0; i < prefixes.length; i++) {
@@ -2256,8 +2256,7 @@ export class SessionStore {
             })
           }
         } else if (type === 'thinking') {
-          const thinking = this.extractOfficialCodexItemText(item) ||
-            ((item['thinking'] as string) || '').trim()
+          const thinking = this.extractOfficialCodexThinkingText(item)
           if (thinking.length > 0) {
             messages.push({
               id: 'official-codex-thinking-' + turnId + '-' + j,
@@ -2307,6 +2306,44 @@ export class SessionStore {
             toolResult: content,
             toolStatus: isError ? 'failed' : 'completed',
             isError,
+            timestamp
+          } as Message)
+        } else if (type === 'file_change') {
+          const toolUseId = ((item['id'] as string) || 'official-codex-file-change-' + turnId + '-' + j).trim()
+          const summary = this.getOfficialCodexFileChangeSummary(item)
+          const diff = this.getOfficialCodexFileChangeDiff(item)
+          const toolInput: Record<string, Object> = {}
+          toolInput['file_path'] = summary
+          messages.push({
+            id: 'official-codex-tool-' + turnId + '-' + j,
+            type: 'tool_use',
+            content: '',
+            toolName: 'Edit',
+            toolUseId,
+            toolInput,
+            toolResult: diff,
+            toolStatus: this.getOfficialCodexToolStatus(item),
+            timestamp
+          } as Message)
+        } else if (type === 'mcp_tool_call') {
+          const toolUseId = ((item['id'] as string) || 'official-codex-mcp-tool-' + turnId + '-' + j).trim()
+          const toolName = this.normalizeOfficialCodexToolName(
+            ((item['tool'] as string) || (item['name'] as string) || 'Tool').trim()
+          )
+          const args = (item['arguments'] as Record<string, Object>) ||
+            (item['input'] as Record<string, Object>) ||
+            {}
+          const result = this.extractOfficialCodexMcpToolResult(item)
+          messages.push({
+            id: 'official-codex-tool-' + turnId + '-' + j,
+            type: 'tool_use',
+            content: '',
+            toolName,
+            toolUseId,
+            toolInput: args,
+            toolResult: result,
+            toolStatus: this.getOfficialCodexToolStatus(item),
+            isError: this.getOfficialCodexToolStatus(item) === 'failed',
             timestamp
           } as Message)
         } else if (type === 'error') {
@@ -2373,6 +2410,8 @@ export class SessionStore {
     if (normalized === 'toolresult' || normalized === 'functionresult') return 'tool_result'
     if (normalized === 'thinking' || normalized === 'reasoning') return 'thinking'
     if (normalized === 'localcommand' || normalized === 'commandexecution' || normalized === 'command') return 'tool_use'
+    if (normalized === 'filechange' || normalized === 'filechanges' || normalized === 'fileedit') return 'file_change'
+    if (normalized === 'mcptoolcall' || normalized === 'mcpcall') return 'mcp_tool_call'
     if (normalized === 'error') return 'error'
     return type
   }
@@ -2385,6 +2424,8 @@ export class SessionStore {
     if (lower === 'edit' || lower === 'fileedit' || lower === 'applypatch') return 'Edit'
     if (lower === 'write' || lower === 'filewrite') return 'Write'
     if (lower === 'read' || lower === 'fileread') return 'Read'
+    if (lower === 'rg' || lower === 'grep' || lower === 'search') return 'Grep'
+    if (lower === 'glob' || lower === 'find') return 'Glob'
     return normalized
   }
 
@@ -2396,6 +2437,73 @@ export class SessionStore {
     if (raw === 'pending' || raw === 'queued') return 'pending'
     if (raw === 'running' || raw === 'inprogress' || raw === 'started') return 'running'
     return 'completed'
+  }
+
+  private extractOfficialCodexThinkingText(item: Record<string, Object>): string {
+    const direct = this.extractOfficialCodexItemText(item) ||
+      ((item['thinking'] as string) || '').trim()
+    if (direct.length > 0) return direct
+
+    const summary = item['summary']
+    if (typeof summary === 'string') return summary.trim()
+    if (Array.isArray(summary)) {
+      const parts: string[] = []
+      for (let i = 0; i < summary.length; i++) {
+        const value = summary[i] as string
+        if (typeof value === 'string' && value.trim().length > 0) {
+          parts.push(value.trim())
+        }
+      }
+      if (parts.length > 0) return parts.join('\n\n').trim()
+    }
+
+    return ''
+  }
+
+  private getOfficialCodexFileChangeSummary(item: Record<string, Object>): string {
+    const changes = item['changes'] as Array<Record<string, Object>>
+    if (!changes || changes.length === 0) return '文件变更'
+
+    const firstPath = ((changes[0]['path'] as string) || '').trim()
+    if (changes.length === 1) return firstPath || '文件变更'
+    return (firstPath || '文件变更') + ' +' + (changes.length - 1)
+  }
+
+  private getOfficialCodexFileChangeDiff(item: Record<string, Object>): string {
+    const changes = item['changes'] as Array<Record<string, Object>>
+    if (!changes || changes.length === 0) return ''
+
+    const parts: string[] = []
+    for (let i = 0; i < changes.length; i++) {
+      const change = changes[i]
+      const path = ((change['path'] as string) || '文件').trim()
+      const kind = change['kind'] as Record<string, Object>
+      const kindType = kind ? ((kind['type'] as string) || '').trim() : ''
+      const diff = ((change['diff'] as string) || '').trim()
+      const header = kindType.length > 0 ? path + ' · ' + kindType : path
+      parts.push('### ' + header + (diff.length > 0 ? '\n\n```diff\n' + diff + '\n```' : ''))
+    }
+    return parts.join('\n\n').trim()
+  }
+
+  private extractOfficialCodexMcpToolResult(item: Record<string, Object>): string {
+    const error = item['error'] as Record<string, Object>
+    if (error) {
+      const message = ((error['message'] as string) || '').trim()
+      if (message.length > 0) return message
+    }
+
+    const result = item['result']
+    if (typeof result === 'string') return result.trim()
+    if (result !== undefined && result !== null) {
+      try {
+        return JSON.stringify(result, null, 2)
+      } catch (_) {
+        return String(result)
+      }
+    }
+
+    return ''
   }
 
   private extractOfficialCodexItemText(item: Record<string, Object>): string {
