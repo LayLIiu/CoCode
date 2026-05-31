@@ -1418,6 +1418,10 @@ export class SessionStore {
   // 生成跨来源的语义去重键：忽略服务端 ID / 临时 ID / 变化的 toolUseId。
   // 用于历史同步和页面重新进入时清理”同一内容不同 ID”的重复消息。
   private messageSemanticKey(msg: Message): string {
+    if (this.isOfficialCodexMessageId(msg.id)) {
+      return msg.type + ':official:' + msg.id
+    }
+
     if (msg.type === 'tool_use' && msg.toolName) {
       const inputStr = msg.toolInput ? this.stableStringify(msg.toolInput) : ''
       const parentId = msg.parentToolUseId ? ':parent:' + msg.parentToolUseId : ''
@@ -1584,6 +1588,13 @@ export class SessionStore {
         seenById.add(msg.id)
       }
 
+      // 官方 Codex 历史消息用官方 item id 保真。不要再按内容/包含关系去重，
+      // 否则相似回复、重复“继续”、同 turn 多个 item 会互相覆盖。
+      if (this.isOfficialCodexMessageId(msg.id)) {
+        result.push(msg)
+        continue
+      }
+
       // 2. tool_use 消息：按 toolName + toolInput 去重
       if (msg.type === 'tool_use' && msg.toolName) {
         const toolKey = this.messageSemanticKey(msg)
@@ -1625,6 +1636,12 @@ export class SessionStore {
         if (removedIndexes.has(j)) continue
         const b = messages[j]
         if (a.type !== b.type) continue
+
+        const aTurn = this.extractOfficialCodexTurnIdFromMessage(a.id)
+        const bTurn = this.extractOfficialCodexTurnIdFromMessage(b.id)
+        if (aTurn.length > 0 && bTurn.length > 0 && aTurn !== bTurn) {
+          continue
+        }
 
         const bText = this.normalizeMessageText(b.content || b.toolResult || '')
         if (bText.length < 80) continue
@@ -2120,9 +2137,7 @@ export class SessionStore {
       const next = imported[i]
       let index = -1
       for (let j = 0; j < merged.length; j++) {
-        if (merged[j].id === next.id ||
-          this.isSameOfficialCodexTurnMessage(merged[j], next) ||
-          this.messageSemanticKey(merged[j]) === this.messageSemanticKey(next)) {
+        if (this.shouldMergeOfficialCodexMessage(merged[j], next)) {
           index = j
           break
         }
@@ -2139,12 +2154,33 @@ export class SessionStore {
     return this.deduplicateMessages(merged)
   }
 
+  private shouldMergeOfficialCodexMessage(left: Message, right: Message): boolean {
+    if (left.id === right.id) return true
+
+    // 本地刚发送的 user 气泡与官方 thread 回传的 userMessage 合并，避免自己消息重复。
+    if (left.type === 'user' && right.type === 'user' &&
+      left.id.startsWith('user-') &&
+      this.isOfficialCodexMessageId(right.id) &&
+      this.normalizeMessageText(left.content) === this.normalizeMessageText(right.content) &&
+      this.isMessageTimeClose(left.timestamp, right.timestamp, 10 * 60 * 1000)) {
+      return true
+    }
+
+    return this.isSameOfficialCodexTurnMessage(left, right)
+  }
+
   private isSameOfficialCodexTurnMessage(left: Message, right: Message): boolean {
     if (left.type !== right.type) return false
     if (left.type !== 'assistant' && left.type !== 'error') return false
     const leftTurn = this.extractOfficialCodexTurnIdFromMessage(left.id)
     const rightTurn = this.extractOfficialCodexTurnIdFromMessage(right.id)
-    return leftTurn.length > 0 && leftTurn === rightTurn
+    if (leftTurn.length <= 0 || leftTurn !== rightTurn) return false
+
+    // 只把“流式临时消息”和“最终 item 消息”合并。
+    // 如果两个都是官方最终 item，即使同属一个 turn，也必须保留为独立气泡。
+    const leftItemIndex = this.extractOfficialCodexItemIndexFromMessage(left.id)
+    const rightItemIndex = this.extractOfficialCodexItemIndexFromMessage(right.id)
+    return leftItemIndex < 0 || rightItemIndex < 0
   }
 
   private compareMessagesForDisplay(a: Message, b: Message): number {
@@ -2161,6 +2197,33 @@ export class SessionStore {
   }
 
   private extractOfficialCodexTurnIdFromMessage(id: string): string {
+    const prefix = this.getOfficialCodexMessagePrefix(id)
+    if (prefix.length <= 0) return ''
+    const rest = id.substring(prefix.length)
+    const lastDash = rest.lastIndexOf('-')
+    if (lastDash <= 0) return rest
+
+    const suffix = rest.substring(lastDash + 1)
+    if (this.isNumericString(suffix)) {
+      return rest.substring(0, lastDash)
+    }
+    return rest
+  }
+
+  private extractOfficialCodexItemIndexFromMessage(id: string): number {
+    const prefix = this.getOfficialCodexMessagePrefix(id)
+    if (prefix.length <= 0) return -1
+    const rest = id.substring(prefix.length)
+    const lastDash = rest.lastIndexOf('-')
+    if (lastDash <= 0) return -1
+
+    const suffix = rest.substring(lastDash + 1)
+    if (!this.isNumericString(suffix)) return -1
+    const parsed = Number(suffix)
+    return Number.isNaN(parsed) ? -1 : parsed
+  }
+
+  private getOfficialCodexMessagePrefix(id: string): string {
     const prefixes = [
       'official-codex-user-',
       'official-codex-assistant-',
@@ -2172,12 +2235,30 @@ export class SessionStore {
     for (let i = 0; i < prefixes.length; i++) {
       const prefix = prefixes[i]
       if (id.startsWith(prefix)) {
-        const rest = id.substring(prefix.length)
-        const lastDash = rest.lastIndexOf('-')
-        return lastDash > 0 ? rest.substring(0, lastDash) : rest
+        return prefix
       }
     }
     return ''
+  }
+
+  private isOfficialCodexMessageId(id: string): boolean {
+    return this.getOfficialCodexMessagePrefix(id).length > 0
+  }
+
+  private isNumericString(value: string): boolean {
+    if (value.length <= 0) return false
+    for (let i = 0; i < value.length; i++) {
+      const code = value.charCodeAt(i)
+      if (code < 48 || code > 57) return false
+    }
+    return true
+  }
+
+  private isMessageTimeClose(left: string, right: string, windowMs: number): boolean {
+    const leftTime = new Date(left).getTime()
+    const rightTime = new Date(right).getTime()
+    if (Number.isNaN(leftTime) || Number.isNaN(rightTime)) return false
+    return Math.abs(leftTime - rightTime) <= windowMs
   }
 
   private getMessageRoleRank(message: Message): number {
