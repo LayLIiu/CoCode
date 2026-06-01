@@ -1895,8 +1895,18 @@ export class SessionStore {
             const done = normalizedStatus === 'completed' || normalizedStatus === 'succeeded' ||
               normalizedStatus === 'success' || normalizedStatus === 'done' ||
               normalizedStatus === 'failed' || normalizedStatus === 'cancelled' || normalizedStatus === 'canceled'
+            const importedMessages = this.buildOfficialCodexMessagesFromTurns(data)
+            const hasImportedAssistant = this.hasOfficialCodexAssistantForTurn(importedMessages, turnId)
 
-            if (text.length > 0) {
+            if (importedMessages.length > 0) {
+              const mergedMessages = this.mergeOfficialCodexThreadMessages(this.messages.get(sessionId) || [], importedMessages)
+              this.messages.set(sessionId, mergedMessages)
+              this.persistMessages(sessionId, mergedMessages)
+              this.updateOfficialCodexImportedMessageCount(sessionId, mergedMessages.length)
+              this.notifyMessagesChanged(sessionId)
+            }
+
+            if (!hasImportedAssistant && text.length > 0) {
               this.upsertOfficialCodexAssistantMessage(sessionId, turnId, text, normalizedStatus === 'failed', !done)
             }
 
@@ -2273,7 +2283,7 @@ export class SessionStore {
 
   private mergeOfficialCodexMessage(old: Message, next: Message): Message {
     return {
-      id: old.id,
+      id: this.getOfficialCodexMergedMessageId(old, next),
       type: next.type || old.type,
       content: next.content || old.content,
       timestamp: old.timestamp,
@@ -2299,6 +2309,13 @@ export class SessionStore {
       images: next.images || old.images,
       isError: next.isError,
     }
+  }
+
+  private getOfficialCodexMergedMessageId(old: Message, next: Message): string {
+    const oldItemIndex = this.extractOfficialCodexItemIndexFromMessage(old.id)
+    const nextItemIndex = this.extractOfficialCodexItemIndexFromMessage(next.id)
+    if (oldItemIndex < 0 && nextItemIndex >= 0) return next.id
+    return old.id
   }
 
   private buildOfficialCodexMessagesFromTurns(data: Array<Record<string, Object>> | undefined): Message[] {
@@ -2441,6 +2458,18 @@ export class SessionStore {
       }
     }
     return messages
+  }
+
+  private hasOfficialCodexAssistantForTurn(messages: Message[], turnId: string): boolean {
+    if (turnId.length <= 0) return false
+    for (let i = 0; i < messages.length; i++) {
+      const message = messages[i]
+      if (message.type === 'assistant' &&
+        this.extractOfficialCodexTurnIdFromMessage(message.id) === turnId) {
+        return true
+      }
+    }
+    return false
   }
 
   private getOfficialCodexTurnBaseTime(turn: Record<string, Object>, fallbackIndex: number): number {
