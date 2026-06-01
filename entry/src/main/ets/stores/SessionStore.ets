@@ -53,6 +53,7 @@ export class SessionStore {
   private wsSubscribed: boolean = false
   private officialCodexThreadIds: Map<string, string> = new Map()
   private officialCodexSendQueues: Map<string, Promise<void>> = new Map()
+  private syncingOfficialCodexLatest: Set<string> = new Set()
 
   // 本地删除的会话ID集合（不从服务器重新加载）
   private locallyDeletedSessionIds: Set<string> = new Set()
@@ -2931,6 +2932,10 @@ export class SessionStore {
 
       // working 状态（thinking、streaming、tool_executing 等）
       if (session.officialCodexThreadId || (session.aiTool || '').toLowerCase().indexOf('codex') >= 0) {
+        const threadId = this.officialCodexThreadIds.get(session.id) || session.officialCodexThreadId || ''
+        if (threadId.length > 0) {
+          void this.refreshOfficialCodexActiveSession(session.id, threadId)
+        }
         continue
       }
       if (!wsConnected) {
@@ -2938,6 +2943,60 @@ export class SessionStore {
         this.updateSessionStatus(session.id, 'idle')
       }
     }
+  }
+
+  private async refreshOfficialCodexActiveSession(sessionId: string, threadId: string): Promise<void> {
+    if (this.syncingOfficialCodexLatest.has(sessionId)) return
+    this.syncingOfficialCodexLatest.add(sessionId)
+    try {
+      const response = await apiService.getCodexRemoteLatestThreadTurns(threadId, 12, 6000)
+      const result = response['result'] as Record<string, Object>
+      const data = (result && result['data']) as Array<Record<string, Object>>
+      const importedMessages = this.buildOfficialCodexMessagesFromTurns(data)
+      if (importedMessages.length > 0) {
+        const mergedMessages = this.mergeOfficialCodexThreadMessages(this.messages.get(sessionId) || [], importedMessages)
+        this.messages.set(sessionId, mergedMessages)
+        this.persistMessages(sessionId, mergedMessages)
+        this.updateOfficialCodexImportedMessageCount(sessionId, mergedMessages.length)
+        this.notifyMessagesChanged(sessionId)
+      }
+
+      const latestTurn = this.getLatestOfficialCodexTurn(data)
+      const status = (latestTurn && latestTurn['status'] as string) || ''
+      const normalizedStatus = this.normalizeOfficialCodexTurnStatus(status)
+      if (normalizedStatus.length > 0) {
+        const done = normalizedStatus === 'completed' || normalizedStatus === 'succeeded' ||
+          normalizedStatus === 'success' || normalizedStatus === 'done' ||
+          normalizedStatus === 'failed' || normalizedStatus === 'cancelled' || normalizedStatus === 'canceled'
+        if (done) {
+          void this.syncOfficialCodexThreadMessages(sessionId, threadId)
+          this.updateSessionStatus(sessionId,
+            normalizedStatus === 'completed' || normalizedStatus === 'succeeded' ||
+              normalizedStatus === 'success' || normalizedStatus === 'done' ? 'completed' : 'idle')
+        } else {
+          this.updateSessionStatus(sessionId, this.getOfficialCodexPollingStatus(latestTurn, normalizedStatus))
+        }
+      }
+    } catch (e) {
+      console.info(`[SessionStore] refreshOfficialCodexActiveSession skipped: ${e}`)
+    } finally {
+      this.syncingOfficialCodexLatest.delete(sessionId)
+    }
+  }
+
+  private getLatestOfficialCodexTurn(data: Array<Record<string, Object>> | undefined): Record<string, Object> | null {
+    if (!data || data.length <= 0) return null
+    let latest: Record<string, Object> | null = null
+    let latestTime = -1
+    for (let i = 0; i < data.length; i++) {
+      const turn = data[i]
+      const time = this.getOfficialCodexTurnBaseTime(turn, i)
+      if (!latest || time > latestTime) {
+        latest = turn
+        latestTime = time
+      }
+    }
+    return latest
   }
 
   // 更新会话状态
