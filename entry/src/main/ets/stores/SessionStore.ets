@@ -871,6 +871,7 @@ export class SessionStore {
       }
     } catch (e) {
       console.error(`[SessionStore] Sync Official Codex threads error: ${e}`)
+      this.notifySessionsChanged()
     }
   }
 

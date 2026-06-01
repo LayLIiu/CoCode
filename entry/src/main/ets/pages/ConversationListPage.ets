@@ -302,6 +302,7 @@ export struct ConversationListPage {
 
   onPageShow(): void {
     this.refreshSessionsFromStore()
+    sessionStore.warmOfficialCodexControllerIfNeeded()
     this.syncOfficialCodexThreadsIfNeeded()
     // 每次页面显示时重新设置键盘避让模式
     try {
@@ -324,6 +325,7 @@ export struct ConversationListPage {
 
     this.lastOfficialCodexSyncAt = now
     this.isSyncingOfficialCodex = true
+    this.refreshSessionsFromStore()
     sessionStore.warmOfficialCodexControllerIfNeeded()
     void sessionStore.syncOfficialCodexThreadsToLocal(20).then(() => {
       this.refreshSessionsFromStore()
