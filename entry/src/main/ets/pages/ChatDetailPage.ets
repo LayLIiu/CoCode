@@ -58,6 +58,11 @@ class ToolIconInfo {
   }
 }
 
+class DiffStats {
+  added: number = 0
+  removed: number = 0
+}
+
 function getToolIcon(toolName: string): ToolIconInfo {
   switch (toolName) {
     case 'Bash':
@@ -2817,9 +2822,38 @@ struct ChatDetailPage {
   /** 获取工具结果行数摘要（如 "23 lines"） */
   private getToolResultLineCount(message: Message): string {
     if (!message.toolResult || message.toolStatus !== 'completed') return ''
+    const diffStats = this.getToolDiffStatsText(message)
+    if (diffStats.length > 0) return diffStats
     const lines = message.toolResult.split('\n').length
     if (lines <= 1) return ''
     return lines + ' 行输出'
+  }
+
+  private getToolDiffStatsText(message: Message): string {
+    if (message.toolName !== 'Edit' && message.toolName !== 'Write') return ''
+    const stats = this.countDiffLines(message.toolResult || '')
+    if (stats.added <= 0 && stats.removed <= 0) return ''
+    if (stats.added > 0 && stats.removed > 0) {
+      return '+' + stats.added + ' -' + stats.removed
+    }
+    if (stats.added > 0) return '+' + stats.added + ' 行'
+    return '-' + stats.removed + ' 行'
+  }
+
+  private countDiffLines(diffText: string): DiffStats {
+    const stats = new DiffStats()
+    if (!diffText) return stats
+    const lines = diffText.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (line.startsWith('+++') || line.startsWith('---')) continue
+      if (line.startsWith('+')) {
+        stats.added++
+      } else if (line.startsWith('-')) {
+        stats.removed++
+      }
+    }
+    return stats
   }
 
   private isToolExpandableWithResult(message: Message): boolean {
@@ -3088,7 +3122,29 @@ struct ChatDetailPage {
       const count = typeCounts[name] !== undefined ? typeCounts[name] : 0
       parts.push(this.getToolVerb(name, count))
     }
+    const diffStats = this.getToolGroupDiffStatsText(messages)
+    if (diffStats.length > 0) {
+      parts.push(diffStats)
+    }
     return parts.join('，')
+  }
+
+  private getToolGroupDiffStatsText(messages: Message[]): string {
+    const total = new DiffStats()
+    for (let i = 0; i < messages.length; i++) {
+      const message = messages[i]
+      if (message.type !== 'tool_use') continue
+      if (message.toolName !== 'Edit' && message.toolName !== 'Write') continue
+      const stats = this.countDiffLines(message.toolResult || '')
+      total.added += stats.added
+      total.removed += stats.removed
+    }
+    if (total.added <= 0 && total.removed <= 0) return ''
+    if (total.added > 0 && total.removed > 0) {
+      return '+' + total.added + ' -' + total.removed
+    }
+    if (total.added > 0) return '+' + total.added + ' 行'
+    return '-' + total.removed + ' 行'
   }
 
   private isToolGroupComplete(messages: Message[]): boolean {
