@@ -1343,7 +1343,7 @@ export class APIService {
     return item
   }
 
-  private async request<T>(path: string, method: string, body: string): Promise<T> {
+  private async request<T>(path: string, method: string, body: string, timeoutMs: number = 30000): Promise<T> {
     if (!this.baseUrl) {
       throw new APIError('服务器地址未设置', -1)
     }
@@ -1376,8 +1376,8 @@ export class APIService {
     const options: http.HttpRequestOptions = {
       method: httpMethod,
       header: headers,
-      connectTimeout: 30000,
-      readTimeout: 30000
+      connectTimeout: timeoutMs,
+      readTimeout: timeoutMs
     }
 
     if (body) {
@@ -1524,7 +1524,8 @@ export class APIService {
     return await this.request<Record<string, Object>>(
       `/api/official-codex-remote/thread/${encoded}/turns?itemsView=full&sortDirection=desc&limit=20`,
       'GET',
-      ''
+      '',
+      90000
     )
   }
 
@@ -1536,7 +1537,8 @@ export class APIService {
     return await this.request<Record<string, Object>>(
       `/api/official-codex-remote/thread/${encoded}/turns?itemsView=full&sortDirection=desc&limit=${limit}`,
       'GET',
-      ''
+      '',
+      90000
     )
   }
 

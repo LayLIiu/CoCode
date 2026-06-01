@@ -1877,7 +1877,7 @@ export class SessionStore {
   }
 
   private pollOfficialCodexRemoteTurn(sessionId: string, threadId: string, turnId: string, attempt: number = 0): Promise<void> {
-    if (attempt > 120) {
+    if (attempt > 1800) {
       this.updateSessionStatus(sessionId, 'idle')
       return Promise.resolve()
     }
@@ -1931,7 +1931,8 @@ export class SessionStore {
             this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
           })
           .catch((e: Error) => {
-            if (attempt < 5) {
+            if (this.isOfficialCodexTransientPollingError(e) || attempt < 5) {
+              this.updateSessionStatus(sessionId, 'thinking')
               this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
               return
             }
@@ -1953,6 +1954,17 @@ export class SessionStore {
     if (attempt < 20) return 500
     if (attempt < 60) return 1000
     return 2000
+  }
+
+  private isOfficialCodexTransientPollingError(error: Error): boolean {
+    const message = (error.message || String(error)).toLowerCase()
+    return message.indexOf('timeout') >= 0 ||
+      message.indexOf('超时') >= 0 ||
+      message.indexOf('network') >= 0 ||
+      message.indexOf('网络') >= 0 ||
+      message.indexOf('controller websocket closed') >= 0 ||
+      message.indexOf('connection ended') >= 0 ||
+      message.indexOf('temporarily') >= 0
   }
 
   private normalizeOfficialCodexTurnStatus(status: string): string {
