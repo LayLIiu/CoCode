@@ -54,6 +54,8 @@ export class SessionStore {
   private officialCodexThreadIds: Map<string, string> = new Map()
   private officialCodexSendQueues: Map<string, Promise<void>> = new Map()
   private syncingOfficialCodexLatest: Set<string> = new Set()
+  private officialCodexWarmupInFlight: Promise<void> | null = null
+  private lastOfficialCodexWarmupAt: number = 0
 
   // 本地删除的会话ID集合（不从服务器重新加载）
   private locallyDeletedSessionIds: Set<string> = new Set()
@@ -227,6 +229,7 @@ export class SessionStore {
         })
 
         this.notifySessionsChanged()
+        this.warmOfficialCodexControllerIfNeeded()
         console.info(`[SessionStore] Loaded ${localSessions.length} sessions from local, ${savedStatuses.size} statuses`)
       }
 
@@ -821,6 +824,7 @@ export class SessionStore {
 
   async syncOfficialCodexThreadsToLocal(limit: number = 50): Promise<void> {
     try {
+      this.warmOfficialCodexControllerIfNeeded()
       const response = await apiService.listCodexRemoteThreads(limit)
       const result = response['result'] as Record<string, Object>
       const data = (result && result['data']) as Array<Record<string, Object>>
@@ -863,6 +867,7 @@ export class SessionStore {
       if (changed) {
         await this.saveOfficialCodexThreadIds()
         await this.saveSessionsToStorage()
+        this.notifySessionsChanged()
       }
     } catch (e) {
       console.error(`[SessionStore] Sync Official Codex threads error: ${e}`)
@@ -915,6 +920,24 @@ export class SessionStore {
     try {
       await apiService.connectCodexController()
     } catch (e) {}
+  }
+
+  warmOfficialCodexControllerIfNeeded(force: boolean = false): void {
+    const hasOfficialCodexState = this.officialCodexThreadIds.size > 0 ||
+      this.sessions.some((session: Session) =>
+        !!session.officialCodexThreadId || (session.aiTool || '').toLowerCase().indexOf('codex') >= 0)
+    if (!hasOfficialCodexState) return
+
+    const now = Date.now()
+    if (!force && now - this.lastOfficialCodexWarmupAt < 30 * 1000) return
+    if (this.officialCodexWarmupInFlight) return
+
+    this.lastOfficialCodexWarmupAt = now
+    this.officialCodexWarmupInFlight = this.recoverOfficialCodexController()
+      .catch((e: Error) => console.info(`[SessionStore] Official Codex warmup skipped: ${e.message}`))
+      .then(() => {
+        this.officialCodexWarmupInFlight = null
+      })
   }
 
   private async ensureOfficialCodexControllerConnected(): Promise<void> {

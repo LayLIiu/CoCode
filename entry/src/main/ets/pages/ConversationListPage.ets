@@ -320,11 +320,12 @@ export struct ConversationListPage {
     if (this.isSyncingOfficialCodex) return
 
     const now = Date.now()
-    if (now - this.lastOfficialCodexSyncAt < 15 * 1000) return
+    if (now - this.lastOfficialCodexSyncAt < 8 * 1000) return
 
     this.lastOfficialCodexSyncAt = now
     this.isSyncingOfficialCodex = true
-    void sessionStore.syncOfficialCodexThreadsToLocal(50).then(() => {
+    sessionStore.warmOfficialCodexControllerIfNeeded()
+    void sessionStore.syncOfficialCodexThreadsToLocal(20).then(() => {
       this.refreshSessionsFromStore()
     }).catch((e: Error) => {
       console.error(`[ConversationListPage] Sync Official Codex threads error: ${e.message}`)

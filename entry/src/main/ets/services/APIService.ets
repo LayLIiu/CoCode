@@ -1490,7 +1490,7 @@ export class APIService {
    */
   async restoreCodexControllerSession(autoConnect: boolean = false): Promise<Record<string, Object>> {
     const body = JSON.stringify({ autoConnect })
-    return await this.request<Record<string, Object>>('/api/official-codex-remote/restore', 'POST', body)
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/restore', 'POST', body, 10000)
   }
 
   /**
@@ -1504,14 +1504,14 @@ export class APIService {
    * 连接 controller WebSocket
    */
   async connectCodexController(): Promise<Record<string, Object>> {
-    return await this.request<Record<string, Object>>('/api/official-codex-remote/connect', 'POST', '')
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/connect', 'POST', '', 10000)
   }
 
   /**
    * 获取 controller WebSocket 状态
    */
   async getCodexControllerWsStatus(): Promise<Record<string, Object>> {
-    return await this.request<Record<string, Object>>('/api/official-codex-remote/ws-status', 'GET', '')
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/ws-status', 'GET', '', 4000)
   }
 
   /**
@@ -1559,7 +1559,7 @@ export class APIService {
     if (cursor && cursor.length > 0) {
       path += `&cursor=${encodeURIComponent(cursor)}`
     }
-    return await this.request<Record<string, Object>>(path, 'GET', '')
+    return await this.request<Record<string, Object>>(path, 'GET', '', 12000)
   }
 
   /**
