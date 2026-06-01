@@ -1933,7 +1933,7 @@ export class SessionStore {
           .catch((e: Error) => {
             if (this.isOfficialCodexTransientPollingError(e) || attempt < 5) {
               this.updateSessionStatus(sessionId, 'thinking')
-              this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
+              this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, this.getNextOfficialCodexPollAttempt(attempt)).then(() => resolve())
               return
             }
             const errMsg: Message = {
@@ -1954,6 +1954,11 @@ export class SessionStore {
     if (attempt < 20) return 500
     if (attempt < 60) return 1000
     return 2000
+  }
+
+  private getNextOfficialCodexPollAttempt(attempt: number): number {
+    if (attempt < 60) return attempt + 1
+    return 60
   }
 
   private isOfficialCodexTransientPollingError(error: Error): boolean {

@@ -1538,7 +1538,7 @@ export class APIService {
       `/api/official-codex-remote/thread/${encoded}/turns?itemsView=full&sortDirection=desc&limit=${limit}`,
       'GET',
       '',
-      90000
+      12000
     )
   }
 
