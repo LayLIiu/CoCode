@@ -112,10 +112,13 @@ export class ProviderInfo {
 
 // 内容块类型
 export class ContentBlock {
+  id?: string
   type: string = ''
   text: string = ''
   name: string = ''
   input: Record<string, Object> = {}
+  tool_use_id?: string
+  toolUseId?: string
   source?: Record<string, Object>
 }
 
@@ -126,6 +129,8 @@ export class RawMessage {
   timestamp: string = ''
   isError: boolean = false
   thinking: string = ''
+  tool_use_id?: string
+  toolUseId?: string
 }
 
 // 文件信息响应
@@ -1532,13 +1537,17 @@ export class APIService {
   /**
    * 拉取官方 Codex Desktop 最新 turns，用于正在进行的回复轮询
    */
-  async getCodexRemoteLatestThreadTurns(threadId: string, limit: number = 50): Promise<Record<string, Object>> {
+  async getCodexRemoteLatestThreadTurns(
+    threadId: string,
+    limit: number = 8,
+    timeoutMs: number = 6000
+  ): Promise<Record<string, Object>> {
     const encoded = encodeURIComponent(threadId)
     return await this.request<Record<string, Object>>(
       `/api/official-codex-remote/thread/${encoded}/turns?itemsView=full&sortDirection=desc&limit=${limit}`,
       'GET',
       '',
-      12000
+      timeoutMs
     )
   }
 
@@ -1662,13 +1671,15 @@ export class APIService {
                   result.push(textMsg)
                 }
               } else if (block.type === 'tool_use') {
+                const toolUseId = block.id || block.tool_use_id || block.toolUseId || ''
                 const toolMsg: Message = {
-                  id: msgId + '-tool-' + blockIdx,
+                  id: toolUseId || msgId + '-tool-' + blockIdx,
                   type: 'tool_use',
                   content: '',
                   timestamp: timestamp,
                   toolName: block.name || 'Unknown',
                   toolInput: block.input,
+                  toolUseId: toolUseId || undefined,
                   toolStatus: 'completed'
                 }
                 result.push(toolMsg)
@@ -1720,11 +1731,14 @@ export class APIService {
         }
 
         if (!resultContent.startsWith('[{')) {
+          const rawMsg = msg as RawMessage
+          const toolUseId = rawMsg.tool_use_id || rawMsg.toolUseId || ''
           const resultMsg: Message = {
             id: msgId,
             type: 'tool_result',
             content: '',
             timestamp: timestamp,
+            toolUseId: toolUseId || undefined,
             toolResult: resultContent,
             toolStatus: msg.isError ? 'failed' : 'completed',
             images: extractedImages.length > 0 ? extractedImages : undefined
@@ -1757,15 +1771,34 @@ export class APIService {
 
     for (let i = 0; i < messages.length; i++) {
       if (messages[i].type === 'tool_result') {
-        // 找到对应的 tool_use 并合并
-        for (let j = i - 1; j >= 0; j--) {
-          if (messages[j].type === 'tool_use' && !messages[j].toolResult) {
-            messages[j].toolResult = messages[i].toolResult
-            messages[j].toolStatus = messages[i].toolStatus
-            if (messages[i].images && messages[i].images!.length > 0) {
-              messages[j].images = messages[i].images
+        let paired = false
+        if (messages[i].toolUseId) {
+          for (let j = i - 1; j >= 0; j--) {
+            if (messages[j].type === 'tool_use' &&
+              messages[j].toolUseId === messages[i].toolUseId &&
+              !messages[j].toolResult) {
+              messages[j].toolResult = messages[i].toolResult
+              messages[j].toolStatus = messages[i].toolStatus
+              if (messages[i].images && messages[i].images!.length > 0) {
+                messages[j].images = messages[i].images
+              }
+              paired = true
+              break
             }
-            break
+          }
+        }
+
+        // 找不到 toolUseId 或历史数据缺字段时，回退到最近的未配对 tool_use。
+        if (!paired) {
+          for (let j = i - 1; j >= 0; j--) {
+            if (messages[j].type === 'tool_use' && !messages[j].toolResult) {
+              messages[j].toolResult = messages[i].toolResult
+              messages[j].toolStatus = messages[i].toolStatus
+              if (messages[i].images && messages[i].images!.length > 0) {
+                messages[j].images = messages[i].images
+              }
+              break
+            }
           }
         }
       }

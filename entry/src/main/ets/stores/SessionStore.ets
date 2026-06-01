@@ -1218,6 +1218,7 @@ export class SessionStore {
     for (let i = 0; i < serverMessages.length; i++) {
       const msg = serverMessages[i]
       const primaryKey = this.messageContentKey(msg)
+      const semanticKey = this.messageSemanticKey(msg)
 
       // 检查是否已在去重后的列表中
       let isDup = false
@@ -1228,12 +1229,13 @@ export class SessionStore {
           serverIds.add(msg.id)
         }
       }
-      if (!isDup && serverKeys.has(primaryKey)) {
+      if (!isDup && (serverKeys.has(primaryKey) || serverKeys.has(semanticKey))) {
         isDup = true
       }
 
       if (!isDup) {
         serverKeys.set(primaryKey, true)
+        serverKeys.set(semanticKey, true)
         dedupedServerMessages.push(msg)
       } else {
         console.info(`[SessionStore] mergeMessages: skip dup server msg id=${msg.id} type=${msg.type}`)
@@ -1247,9 +1249,12 @@ export class SessionStore {
     for (let i = 0; i < localMessages.length; i++) {
       const msg = localMessages[i]
       const primaryKey = this.messageContentKey(msg)
+      const semanticKey = this.messageSemanticKey(msg)
 
       // 跳过: 主键匹配（含 type + toolUseId / type + id / type + content）
       if (serverKeys.has(primaryKey)) continue
+      // 跳过: 语义匹配（服务端有正式 ID，本地是 stream-/user-/toolUseId 临时形态时尤其重要）
+      if (serverKeys.has(semanticKey)) continue
       // 跳过: id 匹配
       if (msg.id && serverIds.has(msg.id)) continue
 
@@ -1884,7 +1889,7 @@ export class SessionStore {
 
     return new Promise((resolve) => {
       setTimeout(() => {
-        apiService.getCodexRemoteLatestThreadTurns(threadId)
+        apiService.getCodexRemoteLatestThreadTurns(threadId, 8, 6000)
           .then((response: Record<string, Object>) => {
             const result = response['result'] as Record<string, Object>
             const data = (result && result['data']) as Array<Record<string, Object>>
@@ -1928,7 +1933,12 @@ export class SessionStore {
             }
 
             this.updateSessionStatus(sessionId, this.getOfficialCodexPollingStatus(targetTurn, normalizedStatus))
-            this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, attempt + 1).then(() => resolve())
+            this.pollOfficialCodexRemoteTurn(
+              sessionId,
+              threadId,
+              turnId,
+              this.getNextOfficialCodexPollAttemptAfterSuccess(attempt, importedMessages.length > 0)
+            ).then(() => resolve())
           })
           .catch((e: Error) => {
             if (this.isOfficialCodexTransientPollingError(e) || attempt < 5) {
@@ -1957,8 +1967,15 @@ export class SessionStore {
   }
 
   private getNextOfficialCodexPollAttempt(attempt: number): number {
-    if (attempt < 60) return attempt + 1
-    return 60
+    if (attempt < 20) return attempt + 1
+    return 20
+  }
+
+  private getNextOfficialCodexPollAttemptAfterSuccess(attempt: number, hasData: boolean): number {
+    if (hasData) {
+      return Math.min(attempt + 1, 20)
+    }
+    return attempt + 1
   }
 
   private isOfficialCodexTransientPollingError(error: Error): boolean {
