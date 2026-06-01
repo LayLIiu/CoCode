@@ -1222,14 +1222,17 @@ export class SessionStore {
 
       // 检查是否已在去重后的列表中
       let isDup = false
-      if (msg.id && !msg.id.startsWith('tool-')) {
+      const hasStableId = this.isStableMessageId(msg.id)
+      if (hasStableId) {
         if (serverIds.has(msg.id)) {
           isDup = true
         } else {
           serverIds.add(msg.id)
         }
       }
-      if (!isDup && (serverKeys.has(primaryKey) || serverKeys.has(semanticKey))) {
+      // 服务端历史内部不要按 semanticKey 去重，否则两条相同内容的真实历史消息会被误删。
+      // semanticKey 只登记给后续“本地临时消息 vs 服务端正式消息”匹配使用。
+      if (!isDup && serverKeys.has(primaryKey)) {
         isDup = true
       }
 
@@ -1336,13 +1339,20 @@ export class SessionStore {
     for (let i = 0; i < result.length; i++) {
       const m = result[i]
       // 优先按 ID 去重（如果有有效 ID）
-      if (m.id && !m.id.startsWith('stream-') && !m.id.startsWith('thinking-')) {
+      const hasStableId = this.isStableMessageId(m.id)
+      if (hasStableId) {
         if (seenFinalIds.has(m.id)) {
           continue
         }
         seenFinalIds.add(m.id)
       }
-      // 使用语义键去重，捕获流式 vs 服务端格式差异，也避免 toolUseId 变化造成重复
+      // 稳定 ID 的服务端历史消息只按 ID 去重，避免两次相同内容的真实消息被误删。
+      if (hasStableId) {
+        seenFinal.set(this.messageSemanticKey(m), true)
+        finalResult.push(m)
+        continue
+      }
+      // 临时消息使用语义键去重，捕获流式 vs 服务端格式差异，也避免 toolUseId 变化造成重复
       const finalKey = this.messageSemanticKey(m)
       const existing = seenFinal.get(finalKey)
       if (existing) continue
@@ -1374,6 +1384,17 @@ export class SessionStore {
       return '{' + pairs.join(',') + '}'
     }
     return JSON.stringify(value)
+  }
+
+  private isStableMessageId(id: string | undefined | null): boolean {
+    if (!id) return false
+    return !id.startsWith('stream-') &&
+      !id.startsWith('thinking-') &&
+      !id.startsWith('user-') &&
+      !id.startsWith('permission-') &&
+      !id.startsWith('question-') &&
+      !id.startsWith('err-') &&
+      !id.startsWith('sys-')
   }
 
   // 生成消息内容去重键
@@ -1582,10 +1603,8 @@ export class SessionStore {
       let isDuplicate = false
 
       // 1. 按 ID 去重（排除临时 ID）
-      if (msg.id && !msg.id.startsWith('stream-') && !msg.id.startsWith('thinking-') &&
-          !msg.id.startsWith('user-') && !msg.id.startsWith('permission-') &&
-          !msg.id.startsWith('question-') && !msg.id.startsWith('err-') &&
-          !msg.id.startsWith('sys-')) {
+      const hasStableId = this.isStableMessageId(msg.id)
+      if (hasStableId) {
         if (seenById.has(msg.id)) {
           console.info(`[SessionStore] deduplicateMessages: skip by ID ${msg.id}`)
           continue
@@ -1593,9 +1612,9 @@ export class SessionStore {
         seenById.add(msg.id)
       }
 
-      // 官方 Codex 历史消息用官方 item id 保真。不要再按内容/包含关系去重，
-      // 否则相似回复、重复“继续”、同 turn 多个 item 会互相覆盖。
-      if (this.isOfficialCodexMessageId(msg.id)) {
+      // 有稳定 ID 的历史消息用 ID 保真。不要再按内容去重，
+      // 否则相同文本的两次真实对话会互相覆盖。
+      if (hasStableId) {
         result.push(msg)
         continue
       }
@@ -1641,6 +1660,7 @@ export class SessionStore {
         if (removedIndexes.has(j)) continue
         const b = messages[j]
         if (a.type !== b.type) continue
+        if (this.isStableMessageId(a.id) && this.isStableMessageId(b.id)) continue
 
         const aTurn = this.extractOfficialCodexTurnIdFromMessage(a.id)
         const bTurn = this.extractOfficialCodexTurnIdFromMessage(b.id)
@@ -1701,14 +1721,16 @@ export class SessionStore {
     let dupCount = 0
 
     for (let i = 0; i < source.length; i++) {
-      const key = this.messageSemanticKey(source[i])
+      const msg = source[i]
+      const hasStableId = this.isStableMessageId(msg.id)
+      const key = hasStableId ? msg.type + ':id:' + msg.id : this.messageSemanticKey(msg)
       if (seen.has(key)) {
         dupCount++
-        console.info(`[SessionStore] getDedupedMessages #${dupCount}: skip type=${source[i].type} id=${source[i].id} key=${key.substring(0, 80)}`)
+        console.info(`[SessionStore] getDedupedMessages #${dupCount}: skip type=${msg.type} id=${msg.id} key=${key.substring(0, 80)}`)
         continue
       }
       seen.add(key)
-      result.push(source[i])
+      result.push(msg)
     }
 
     // 第二道去重：用规整化内容去重
@@ -1719,8 +1741,11 @@ export class SessionStore {
     for (let i = 0; i < result.length; i++) {
       const msg = result[i]
       let normKey: string
+      const hasStableId = this.isStableMessageId(msg.id)
 
-      if (msg.type === 'tool_use' && msg.toolName) {
+      if (hasStableId) {
+        normKey = msg.type + ':id:' + msg.id
+      } else if (msg.type === 'tool_use' && msg.toolName) {
         normKey = this.messageSemanticKey(msg)
       } else {
         const normContent = this.normalizeMessageText((msg.content || '') || (msg.toolResult || ''))
