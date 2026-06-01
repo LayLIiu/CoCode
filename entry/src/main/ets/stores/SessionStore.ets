@@ -2425,25 +2425,17 @@ export class SessionStore {
             })
           }
         } else if (type === 'tool_use') {
-          const rawToolName = ((item['name'] as string) ||
-            (item['toolName'] as string) ||
-            (item['tool_name'] as string) ||
-            (item['kind'] as string) ||
-            'tool').trim()
           const toolUseId = ((item['id'] as string) ||
             (item['toolUseId'] as string) ||
             (item['tool_use_id'] as string) ||
             (item['call_id'] as string) ||
             '').trim()
-          const toolInput = (item['input'] as Record<string, Object>) ||
-            (item['arguments'] as Record<string, Object>) ||
-            (item['args'] as Record<string, Object>) ||
-            {}
+          const toolInput = this.extractOfficialCodexToolInput(item)
           messages.push({
             id: 'official-codex-tool-' + turnId + '-' + j,
             type: 'tool_use',
             content: '',
-            toolName: this.normalizeOfficialCodexToolName(rawToolName),
+            toolName: this.resolveOfficialCodexToolName(item, toolInput),
             toolUseId: toolUseId || 'official-codex-tool-' + turnId + '-' + j,
             toolInput,
             toolStatus: this.getOfficialCodexToolStatus(item),
@@ -2510,18 +2502,13 @@ export class SessionStore {
           }
         } else if (type === 'mcp_tool_call') {
           const toolUseId = ((item['id'] as string) || 'official-codex-mcp-tool-' + turnId + '-' + j).trim()
-          const toolName = this.normalizeOfficialCodexToolName(
-            ((item['tool'] as string) || (item['name'] as string) || 'Tool').trim()
-          )
-          const args = (item['arguments'] as Record<string, Object>) ||
-            (item['input'] as Record<string, Object>) ||
-            {}
+          const args = this.extractOfficialCodexToolInput(item)
           const result = this.extractOfficialCodexMcpToolResult(item)
           messages.push({
             id: 'official-codex-tool-' + turnId + '-' + j,
             type: 'tool_use',
             content: '',
-            toolName,
+            toolName: this.resolveOfficialCodexToolName(item, args),
             toolUseId,
             toolInput: args,
             toolResult: result,
@@ -2615,13 +2602,87 @@ export class SessionStore {
     const normalized = name.trim()
     if (normalized.length === 0) return 'tool'
     const lower = normalized.toLowerCase()
-    if (lower === 'shell' || lower === 'bash' || lower === 'command' || lower === 'localcommand') return 'Bash'
-    if (lower === 'edit' || lower === 'fileedit' || lower === 'applypatch') return 'Edit'
-    if (lower === 'write' || lower === 'filewrite') return 'Write'
-    if (lower === 'read' || lower === 'fileread') return 'Read'
-    if (lower === 'rg' || lower === 'grep' || lower === 'search') return 'Grep'
-    if (lower === 'glob' || lower === 'find') return 'Glob'
+    if (lower === 'shell' || lower === 'bash' || lower === 'command' || lower === 'localcommand' ||
+      lower.includes('exec') || lower.includes('terminal') || lower.includes('shell')) return 'Bash'
+    if (lower === 'edit' || lower === 'fileedit' || lower === 'applypatch' ||
+      lower.includes('apply_patch') || lower.includes('patch') || lower.includes('edit')) return 'Edit'
+    if (lower === 'write' || lower === 'filewrite' || lower.includes('write')) return 'Write'
+    if (lower === 'read' || lower === 'fileread' || lower.includes('read')) return 'Read'
+    if (lower === 'rg' || lower === 'grep' || lower === 'search' ||
+      lower.includes('grep') || lower.includes('search')) return 'Grep'
+    if (lower === 'glob' || lower === 'find' || lower.includes('glob') || lower.includes('find')) return 'Glob'
     return normalized
+  }
+
+  private resolveOfficialCodexToolName(item: Record<string, Object>, input: Record<string, Object>): string {
+    const rawTool = item['tool']
+    let rawToolName = ''
+    if (typeof rawTool === 'string') {
+      rawToolName = rawTool
+    } else if (rawTool && typeof rawTool === 'object') {
+      const toolRecord = rawTool as Record<string, Object>
+      rawToolName = ((toolRecord['name'] as string) ||
+        (toolRecord['tool'] as string) ||
+        (toolRecord['type'] as string) ||
+        '').trim()
+    }
+
+    const rawName = (rawToolName ||
+      (item['name'] as string) ||
+      (item['toolName'] as string) ||
+      (item['tool_name'] as string) ||
+      (item['kind'] as string) ||
+      '').trim()
+    const normalized = this.normalizeOfficialCodexToolName(rawName)
+    if (normalized !== 'tool' && normalized !== 'Tool') return normalized
+
+    if (this.hasStringInput(input, ['command', 'cmd', 'shellCommand'])) return 'Bash'
+    if (this.hasStringInput(input, ['pattern', 'query', 'regex'])) return 'Grep'
+    if (this.hasStringInput(input, ['glob'])) return 'Glob'
+    if (this.hasStringInput(input, ['file_path', 'filePath', 'path', 'uri'])) return 'Read'
+    return 'Tool'
+  }
+
+  private extractOfficialCodexToolInput(item: Record<string, Object>): Record<string, Object> {
+    const input = (item['input'] as Record<string, Object>) ||
+      (item['arguments'] as Record<string, Object>) ||
+      (item['args'] as Record<string, Object>) ||
+      (item['params'] as Record<string, Object>) ||
+      {}
+    const normalized: Record<string, Object> = {}
+    const keys = Object.keys(input)
+    for (let i = 0; i < keys.length; i++) {
+      normalized[keys[i]] = input[keys[i]]
+    }
+
+    this.copyStringField(item, normalized, ['command', 'cmd', 'shellCommand'], 'command')
+    this.copyStringField(item, normalized, ['path', 'filePath', 'file_path', 'uri'], 'file_path')
+    this.copyStringField(item, normalized, ['pattern', 'query', 'regex'], 'pattern')
+    this.copyStringField(item, normalized, ['glob'], 'glob')
+
+    this.copyStringField(normalized, normalized, ['cmd', 'shellCommand'], 'command')
+    this.copyStringField(normalized, normalized, ['path', 'filePath', 'uri'], 'file_path')
+    this.copyStringField(normalized, normalized, ['query', 'regex'], 'pattern')
+    return normalized
+  }
+
+  private copyStringField(source: Record<string, Object>, target: Record<string, Object>, keys: string[], targetKey: string): void {
+    if (typeof target[targetKey] === 'string' && (target[targetKey] as string).length > 0) return
+    for (let i = 0; i < keys.length; i++) {
+      const value = source[keys[i]]
+      if (typeof value === 'string' && value.trim().length > 0) {
+        target[targetKey] = value.trim()
+        return
+      }
+    }
+  }
+
+  private hasStringInput(input: Record<string, Object>, keys: string[]): boolean {
+    for (let i = 0; i < keys.length; i++) {
+      const value = input[keys[i]]
+      if (typeof value === 'string' && value.trim().length > 0) return true
+    }
+    return false
   }
 
   private getOfficialCodexToolStatus(item: Record<string, Object>): 'pending' | 'running' | 'completed' | 'failed' {

@@ -901,12 +901,12 @@ struct ChatDetailPage {
   // 获取工具输入摘要
   private getToolInputSummary(toolName: string, input: Record<string, Object>): string {
     if (toolName === 'Bash') {
-      const cmd = input['command']
+      const cmd = input['command'] || input['cmd'] || input['shellCommand']
       if (typeof cmd === 'string') {
-        return cmd.length > 50 ? cmd.substring(0, 50) + '...' : cmd
+        return this.truncateInlineSummary(cmd, 72)
       }
     } else if (toolName === 'Read' || toolName === 'Write' || toolName === 'Edit') {
-      const filePath = input['file_path']
+      const filePath = input['file_path'] || input['filePath'] || input['path'] || input['uri']
       if (typeof filePath === 'string') {
         const parts = filePath.split('/')
         if (parts.length > 0) {
@@ -915,12 +915,22 @@ struct ChatDetailPage {
         return filePath
       }
     } else if (toolName === 'Glob' || toolName === 'Grep') {
-      const pattern = input['pattern']
+      const pattern = input['pattern'] || input['query'] || input['regex'] || input['glob']
       if (typeof pattern === 'string') {
-        return pattern
+        return this.truncateInlineSummary(pattern, 72)
       }
     }
+    const fallback = input['command'] || input['cmd'] || input['file_path'] || input['filePath'] ||
+      input['path'] || input['pattern'] || input['query'] || input['name']
+    if (typeof fallback === 'string') {
+      return this.truncateInlineSummary(fallback, 72)
+    }
     return ''
+  }
+
+  private truncateInlineSummary(value: string, maxLength: number): string {
+    const normalized = value.trim().replace(/\s+/g, ' ')
+    return normalized.length > maxLength ? normalized.substring(0, maxLength) + '...' : normalized
   }
 
   /**
@@ -2819,13 +2829,13 @@ struct ChatDetailPage {
 
   private getBashCommand(message: Message): string {
     if (!message.toolInput) return ''
-    const cmd = message.toolInput['command']
+    const cmd = message.toolInput['command'] || message.toolInput['cmd'] || message.toolInput['shellCommand']
     return typeof cmd === 'string' ? cmd : ''
   }
 
   private getToolFilePath(message: Message): string {
     if (!message.toolInput) return ''
-    const fp = message.toolInput['file_path']
+    const fp = message.toolInput['file_path'] || message.toolInput['filePath'] || message.toolInput['path'] || message.toolInput['uri']
     return typeof fp === 'string' ? fp : ''
   }
 
