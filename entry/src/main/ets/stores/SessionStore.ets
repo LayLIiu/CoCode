@@ -2434,22 +2434,46 @@ export class SessionStore {
             timestamp
           } as Message)
         } else if (type === 'file_change') {
-          const toolUseId = ((item['id'] as string) || 'official-codex-file-change-' + turnId + '-' + j).trim()
-          const summary = this.getOfficialCodexFileChangeSummary(item)
-          const diff = this.getOfficialCodexFileChangeDiff(item)
-          const toolInput: Record<string, Object> = {}
-          toolInput['file_path'] = summary
-          messages.push({
-            id: 'official-codex-tool-' + turnId + '-' + j,
-            type: 'tool_use',
-            content: '',
-            toolName: 'Edit',
-            toolUseId,
-            toolInput,
-            toolResult: diff,
-            toolStatus: this.getOfficialCodexToolStatus(item),
-            timestamp
-          } as Message)
+          const changes = item['changes'] as Array<Record<string, Object>>
+          if (changes && changes.length > 0) {
+            for (let k = 0; k < changes.length; k++) {
+              const change = changes[k]
+              const path = ((change['path'] as string) || '文件变更').trim()
+              const kind = change['kind'] as Record<string, Object>
+              const kindType = kind ? ((kind['type'] as string) || '').trim() : ''
+              const diff = ((change['diff'] as string) || '').trim()
+              const toolInput: Record<string, Object> = {}
+              toolInput['file_path'] = path
+              if (kindType.length > 0) {
+                toolInput['operation'] = kindType
+              }
+              messages.push({
+                id: 'official-codex-tool-' + turnId + '-' + j + '-' + k,
+                type: 'tool_use',
+                content: '',
+                toolName: 'Edit',
+                toolUseId: 'official-codex-file-change-' + turnId + '-' + j + '-' + k,
+                toolInput,
+                toolResult: this.formatOfficialCodexFileChangeDiff(path, kindType, diff),
+                toolStatus: this.getOfficialCodexToolStatus(item),
+                timestamp: new Date(new Date(timestamp).getTime() + k).toISOString()
+              } as Message)
+            }
+          } else {
+            const toolInput: Record<string, Object> = {}
+            toolInput['file_path'] = '文件变更'
+            messages.push({
+              id: 'official-codex-tool-' + turnId + '-' + j,
+              type: 'tool_use',
+              content: '',
+              toolName: 'Edit',
+              toolUseId: 'official-codex-file-change-' + turnId + '-' + j,
+              toolInput,
+              toolResult: '',
+              toolStatus: this.getOfficialCodexToolStatus(item),
+              timestamp
+            } as Message)
+          }
         } else if (type === 'mcp_tool_call') {
           const toolUseId = ((item['id'] as string) || 'official-codex-mcp-tool-' + turnId + '-' + j).trim()
           const toolName = this.normalizeOfficialCodexToolName(
@@ -2621,6 +2645,12 @@ export class SessionStore {
       parts.push('### ' + header + (diff.length > 0 ? '\n\n```diff\n' + diff + '\n```' : ''))
     }
     return parts.join('\n\n').trim()
+  }
+
+  private formatOfficialCodexFileChangeDiff(path: string, kindType: string, diff: string): string {
+    const header = kindType.length > 0 ? path + ' · ' + kindType : path
+    if (diff.length <= 0) return '### ' + header
+    return '### ' + header + '\n\n```diff\n' + diff + '\n```'
   }
 
   private extractOfficialCodexMcpToolResult(item: Record<string, Object>): string {

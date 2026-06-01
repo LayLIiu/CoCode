@@ -2843,6 +2843,16 @@ struct ChatDetailPage {
       : message.toolResult
   }
 
+  private getToolResultLabel(message: Message): string {
+    if (message.toolName === 'Edit' || message.toolName === 'Write') {
+      return 'DIFF / OUTPUT'
+    }
+    if (message.toolName === 'Bash') {
+      return 'OUTPUT'
+    }
+    return 'RESULT'
+  }
+
   @Builder
   ToolUseBubble(message: Message) {
     Column({ space: 0 }) {
@@ -2929,7 +2939,7 @@ struct ChatDetailPage {
           // 输出结果
           if (message.toolResult) {
             Column({ space: 4 }) {
-              Text('OUTPUT')
+              Text(this.getToolResultLabel(message))
                 .fontSize(9)
                 .fontWeight(FontWeight.Bold)
                 .fontColor(Theme.TextSecondary)
