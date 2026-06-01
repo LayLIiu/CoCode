@@ -2176,11 +2176,7 @@ export class SessionStore {
     const rightTurn = this.extractOfficialCodexTurnIdFromMessage(right.id)
     if (leftTurn.length <= 0 || leftTurn !== rightTurn) return false
 
-    // 只把“流式临时消息”和“最终 item 消息”合并。
-    // 如果两个都是官方最终 item，即使同属一个 turn，也必须保留为独立气泡。
-    const leftItemIndex = this.extractOfficialCodexItemIndexFromMessage(left.id)
-    const rightItemIndex = this.extractOfficialCodexItemIndexFromMessage(right.id)
-    return leftItemIndex < 0 || rightItemIndex < 0
+    return true
   }
 
   private compareMessagesForDisplay(a: Message, b: Message): number {
@@ -2440,7 +2436,122 @@ export class SessionStore {
         }
       }
     }
-    return messages
+    return this.coalesceOfficialCodexTurnTextMessages(messages)
+  }
+
+  private coalesceOfficialCodexTurnTextMessages(messages: Message[]): Message[] {
+    if (messages.length < 2) return messages
+
+    const result: Message[] = []
+    const groupIndexes: Map<string, number> = new Map()
+
+    for (let i = 0; i < messages.length; i++) {
+      const message = messages[i]
+      const groupKey = this.getOfficialCodexTextGroupKey(message)
+      if (groupKey.length <= 0) {
+        result.push(message)
+        continue
+      }
+
+      const existingIndex = groupIndexes.get(groupKey)
+      if (existingIndex === undefined) {
+        const coalesced = this.withOfficialCodexTurnMessageId(message)
+        groupIndexes.set(groupKey, result.length)
+        result.push(coalesced)
+      } else {
+        result[existingIndex] = this.appendOfficialCodexTextMessage(result[existingIndex], message)
+      }
+    }
+
+    return result
+  }
+
+  private getOfficialCodexTextGroupKey(message: Message): string {
+    if (message.type !== 'user' && message.type !== 'assistant' && message.type !== 'error') return ''
+    const turnId = this.extractOfficialCodexTurnIdFromMessage(message.id)
+    if (turnId.length <= 0) return ''
+    return message.type + ':' + turnId
+  }
+
+  private withOfficialCodexTurnMessageId(message: Message): Message {
+    const turnId = this.extractOfficialCodexTurnIdFromMessage(message.id)
+    if (turnId.length <= 0) return message
+
+    let prefix = ''
+    if (message.type === 'user') {
+      prefix = 'official-codex-user-'
+    } else if (message.type === 'assistant') {
+      prefix = 'official-codex-assistant-'
+    } else if (message.type === 'error') {
+      prefix = 'official-codex-error-'
+    } else {
+      return message
+    }
+
+    return {
+      id: prefix + turnId,
+      type: message.type,
+      content: message.content,
+      timestamp: message.timestamp,
+      toolUseId: message.toolUseId,
+      toolName: message.toolName,
+      toolInput: message.toolInput,
+      toolResult: message.toolResult,
+      toolStatus: message.toolStatus,
+      isStreaming: message.isStreaming,
+      permissionId: message.permissionId,
+      permissionDescription: message.permissionDescription,
+      isPermissionHandled: message.isPermissionHandled,
+      permissionResult: message.permissionResult,
+      questionId: message.questionId,
+      options: message.options,
+      selectedAnswer: message.selectedAnswer,
+      isQuestionAnswered: message.isQuestionAnswered,
+      questions: message.questions,
+      parentToolUseId: message.parentToolUseId,
+      agentTaskStatus: message.agentTaskStatus,
+      agentSummary: message.agentSummary,
+      tasks: message.tasks,
+      images: message.images,
+      isError: message.isError,
+    }
+  }
+
+  private appendOfficialCodexTextMessage(old: Message, next: Message): Message {
+    const oldText = old.content || ''
+    const nextText = next.content || ''
+    let content = oldText
+    if (nextText.length > 0 && !this.normalizeMessageText(oldText).includes(this.normalizeMessageText(nextText))) {
+      content = oldText.length > 0 ? oldText + '\n\n' + nextText : nextText
+    }
+
+    return {
+      id: old.id,
+      type: old.type,
+      content,
+      timestamp: old.timestamp,
+      toolUseId: old.toolUseId,
+      toolName: old.toolName,
+      toolInput: old.toolInput,
+      toolResult: old.toolResult,
+      toolStatus: old.toolStatus,
+      isStreaming: next.isStreaming || old.isStreaming,
+      permissionId: old.permissionId,
+      permissionDescription: old.permissionDescription,
+      isPermissionHandled: old.isPermissionHandled,
+      permissionResult: old.permissionResult,
+      questionId: old.questionId,
+      options: old.options,
+      selectedAnswer: old.selectedAnswer,
+      isQuestionAnswered: old.isQuestionAnswered,
+      questions: old.questions,
+      parentToolUseId: old.parentToolUseId,
+      agentTaskStatus: old.agentTaskStatus,
+      agentSummary: old.agentSummary,
+      tasks: old.tasks,
+      images: old.images,
+      isError: next.isError || old.isError,
+    }
   }
 
   private getOfficialCodexTurnBaseTime(turn: Record<string, Object>, fallbackIndex: number): number {
