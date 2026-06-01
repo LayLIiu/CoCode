@@ -1811,8 +1811,7 @@ struct ChatDetailPage {
                 // Agent / AskUserQuestion 有特殊渲染，不参与合组
                 this.MessageBubble(message)
               } else if ((message.type === 'tool_use' || message.type === 'tool_result') &&
-                !message.parentToolUseId &&
-                !this.isOfficialCodexMessage(message)) {
+                !message.parentToolUseId) {
                 // 工具组：仅在组内第一条渲染 ToolGroupBubble，其余跳过
                 if (this.isFirstToolInReverseGroup(message)) {
                   this.ToolGroupBubble(this.collectToolGroup(message))
@@ -2325,7 +2324,6 @@ struct ChatDetailPage {
    */
   private isFirstToolInReverseGroup(message: Message): boolean {
     if (message.type !== 'tool_use' && message.type !== 'tool_result') return false
-    if (this.isOfficialCodexMessage(message)) return false
     if (message.parentToolUseId) return false
     if (message.toolName === 'Agent' || message.toolName === 'AskUserQuestion') return false
     const reversed = [...this.getVisibleMessages()].reverse()
@@ -2410,11 +2408,6 @@ struct ChatDetailPage {
 
   private hasMoreMessages(): boolean {
     return this.messages.length > this.displayedMessageCount
-  }
-
-  private isOfficialCodexMessage(message: Message): boolean {
-    return message.id.startsWith('official-codex-') ||
-      (message.toolUseId !== undefined && message.toolUseId.startsWith('official-codex-'))
   }
 
   // 计算 List 总项数（用于 onScrollIndex）
