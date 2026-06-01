@@ -2313,7 +2313,7 @@ export class SessionStore {
       id: this.getOfficialCodexMergedMessageId(old, next),
       type: next.type || old.type,
       content: next.content || old.content,
-      timestamp: old.timestamp,
+      timestamp: this.getOfficialCodexMergedTimestamp(old, next),
       toolUseId: next.toolUseId || old.toolUseId,
       toolName: next.toolName || old.toolName,
       toolInput: next.toolInput || old.toolInput,
@@ -2343,6 +2343,15 @@ export class SessionStore {
     const nextItemIndex = this.extractOfficialCodexItemIndexFromMessage(next.id)
     if (oldItemIndex < 0 && nextItemIndex >= 0) return next.id
     return old.id
+  }
+
+  private getOfficialCodexMergedTimestamp(old: Message, next: Message): string {
+    if (old.type === 'user' &&
+      old.id.startsWith('user-') &&
+      this.isOfficialCodexMessageId(next.id)) {
+      return next.timestamp || old.timestamp
+    }
+    return old.timestamp
   }
 
   private buildOfficialCodexMessagesFromTurns(data: Array<Record<string, Object>> | undefined): Message[] {
