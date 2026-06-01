@@ -720,12 +720,10 @@ struct ChatDetailPage {
     await sessionStore.loadMessages(this.sessionId)
     // 使用 getDedupedMessages 确保加载时就是去重的（防御性）
     const msgs = sessionStore.getDedupedMessages(this.sessionId)
-    if (msgs && msgs.length > 0) {
-      this.messages = msgs
-      this.lastMessagesSignature = this.buildMessagesSignature(msgs)
-      // 初始显示最后100条
-      this.displayedMessageCount = Math.min(100, this.messages.length)
-    }
+    this.messages = [...msgs]
+    this.lastMessagesSignature = this.buildMessagesSignature(msgs)
+    // 初始显示最后100条
+    this.displayedMessageCount = Math.min(100, this.messages.length)
     // 倒序列表默认就在最新消息位置，无需scrollTo
     this.isMessagesLoaded = true
     this.isListReady = true
@@ -1812,7 +1810,9 @@ struct ChatDetailPage {
               if (message.type === 'tool_use' && (message.toolName === 'Agent' || message.toolName === 'AskUserQuestion')) {
                 // Agent / AskUserQuestion 有特殊渲染，不参与合组
                 this.MessageBubble(message)
-              } else if ((message.type === 'tool_use' || message.type === 'tool_result') && !message.parentToolUseId) {
+              } else if ((message.type === 'tool_use' || message.type === 'tool_result') &&
+                !message.parentToolUseId &&
+                !this.isOfficialCodexMessage(message)) {
                 // 工具组：仅在组内第一条渲染 ToolGroupBubble，其余跳过
                 if (this.isFirstToolInReverseGroup(message)) {
                   this.ToolGroupBubble(this.collectToolGroup(message))
@@ -2300,8 +2300,9 @@ struct ChatDetailPage {
   // 获取可见消息（分页 + 展示层内容去重），过滤掉 Agent 子工具（由 AgentToolUseBubble 嵌套渲染）
   private getVisibleMessages(): Message[] {
     const renderTick = this.messageUpdateCounter
-    // 用 getDedupedMessages 作为展示层安全网，过滤内容重复的消息
-    const allMessages = this.messages.length > 0 ? this.messages : sessionStore.getDedupedMessages(this.sessionId)
+    // 始终以 Store 的去重视图为准，避免页面本地状态和同步后的 Store 原始数组短暂不一致。
+    const dedupedMessages = sessionStore.getDedupedMessages(this.sessionId)
+    const allMessages = dedupedMessages.length > 0 ? dedupedMessages : this.messages
     // 过滤：排除有 parentToolUseId 的子工具，它们在 Agent 卡片内嵌套渲染
     const filtered = allMessages.filter(m => !(m.type === 'tool_use' && m.parentToolUseId))
     // DEBUG: 统计 tool_use 消息
@@ -2324,6 +2325,7 @@ struct ChatDetailPage {
    */
   private isFirstToolInReverseGroup(message: Message): boolean {
     if (message.type !== 'tool_use' && message.type !== 'tool_result') return false
+    if (this.isOfficialCodexMessage(message)) return false
     if (message.parentToolUseId) return false
     if (message.toolName === 'Agent' || message.toolName === 'AskUserQuestion') return false
     const reversed = [...this.getVisibleMessages()].reverse()
@@ -2356,7 +2358,9 @@ struct ChatDetailPage {
    */
   private collectToolGroup(anyToolInGroup: Message): Message[] {
     const group: Message[] = []
-    const allMessages = sessionStore.messages.get(this.sessionId) || []
+    // 必须使用当前可见的去重消息源；直接读取 sessionStore.messages 会绕过展示层去重，
+    // 页面重进后 Claude 的本地流式消息和服务端历史消息可能在工具组里重复出现。
+    const allMessages = this.getVisibleMessages()
     // 先用引用匹配，失败后用 ID 回退（组件重建后引用会变）
     let startIdx = allMessages.indexOf(anyToolInGroup)
     if (startIdx < 0) {
@@ -2406,6 +2410,11 @@ struct ChatDetailPage {
 
   private hasMoreMessages(): boolean {
     return this.messages.length > this.displayedMessageCount
+  }
+
+  private isOfficialCodexMessage(message: Message): boolean {
+    return message.id.startsWith('official-codex-') ||
+      (message.toolUseId !== undefined && message.toolUseId.startsWith('official-codex-'))
   }
 
   // 计算 List 总项数（用于 onScrollIndex）

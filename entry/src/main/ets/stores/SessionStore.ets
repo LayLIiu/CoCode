@@ -2211,13 +2211,6 @@ export class SessionStore {
   }
 
   private compareMessagesForDisplay(a: Message, b: Message): number {
-    const aTurn = this.extractOfficialCodexTurnIdFromMessage(a.id)
-    const bTurn = this.extractOfficialCodexTurnIdFromMessage(b.id)
-    if (aTurn && bTurn && aTurn === bTurn) {
-      const rankDiff = this.getMessageRoleRank(a) - this.getMessageRoleRank(b)
-      if (rankDiff !== 0) return rankDiff
-    }
-
     const timeDiff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     if (timeDiff !== 0) return timeDiff
     return this.getMessageRoleRank(a) - this.getMessageRoleRank(b)
