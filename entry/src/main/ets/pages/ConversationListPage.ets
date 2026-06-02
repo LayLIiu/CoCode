@@ -320,14 +320,17 @@ export struct ConversationListPage {
     if (this.tabType !== TabType.CODEX) return
     if (this.isSyncingOfficialCodex) return
 
-    const now = Date.now()
-    if (now - this.lastOfficialCodexSyncAt < 8 * 1000) return
-
-    this.lastOfficialCodexSyncAt = now
+    // 移除 8 秒限制，每次进入 Codex 标签页都刷新
+    this.lastOfficialCodexSyncAt = Date.now()
     this.isSyncingOfficialCodex = true
     this.refreshSessionsFromStore()
     sessionStore.warmOfficialCodexControllerIfNeeded()
+    // 加载全部官方 Codex 线程（先 20，后台再 50）
     void sessionStore.syncOfficialCodexThreadsToLocal(20).then(() => {
+      this.refreshSessionsFromStore()
+      // 后台继续加载剩余的
+      return sessionStore.syncOfficialCodexThreadsToLocal(50)
+    }).then(() => {
       this.refreshSessionsFromStore()
     }).catch((e: Error) => {
       console.error(`[ConversationListPage] Sync Official Codex threads error: ${e.message}`)
