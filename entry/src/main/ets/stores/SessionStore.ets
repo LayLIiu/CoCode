@@ -1121,6 +1121,11 @@ export class SessionStore {
     // 从现有消息中提取任务列表
     this.refreshTasksFromMessages(sessionId)
 
+
+    // Official Codex 会话：主动同步最新状态和消息
+    if (this.isOfficialCodexSession(sessionId)) {
+      void this.syncOfficialCodexSessionOnLoad(sessionId)
+    }
     // 后台静默同步服务器消息（不阻塞页面渲染）
     // 检查是否已经在同步中，避免重复调用
     if (!this.syncingSessions.has(sessionId)) {
@@ -2207,6 +2212,46 @@ export class SessionStore {
     }
   }
 
+
+  /**
+   * 打开 Official Codex 会话时，同步最新状态和消息
+   * 解决：移动端打开对话时不知道桌面端工作到哪一步的问题
+   */
+  private async syncOfficialCodexSessionOnLoad(sessionId: string): Promise<void> {
+    const session = this.sessions.find((s: Session) => s.id === sessionId)
+    const threadId = session?.officialCodexThreadId || this.officialCodexThreadIds.get(sessionId)
+    if (!threadId) return
+
+    console.info(`[SessionStore] syncOfficialCodexSessionOnLoad: syncing thread ${threadId} for ${sessionId}`)
+
+    try {
+      // 1. 同步最新消息
+      await this.syncOfficialCodexThreadMessages(sessionId, threadId)
+
+      // 2. 查询最新 turn 状态
+      const response = await apiService.getCodexRemoteLatestThreadTurns(threadId, 5, 5000)
+      const result = response['result'] as Record<string, Object>
+      const data = (result && result['data']) as Array<Record<string, Object>>
+      if (data && data.length > 0) {
+        const latestTurn = data[0]
+        const status = (latestTurn && latestTurn['status'] as string) || ''
+        const normalizedStatus = this.normalizeOfficialCodexTurnStatus(status)
+
+        // 如果有正在进行的 turn，更新状态并开始轮询
+        if (normalizedStatus === 'in_progress' || normalizedStatus === 'running' || normalizedStatus === 'pending') {
+          const turnId = (latestTurn['id'] as string) || ''
+          console.info(`[SessionStore] syncOfficialCodexSessionOnLoad: found running turn ${turnId}, starting poll`)
+          this.updateSessionStatus(sessionId, 'thinking')
+          // 开始轮询
+          this.pollOfficialCodexRemoteTurn(sessionId, threadId, turnId, 0)
+        } else {
+          this.updateSessionStatus(sessionId, 'idle')
+        }
+      }
+    } catch (e) {
+      console.error(`[SessionStore] syncOfficialCodexSessionOnLoad error: ${e}`)
+    }
+  }
   private async syncOfficialCodexThreadMessages(sessionId: string, threadId: string): Promise<void> {
     try {
       const response = await apiService.getCodexRemoteThreadTurns(threadId)
