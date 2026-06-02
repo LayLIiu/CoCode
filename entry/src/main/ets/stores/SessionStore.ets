@@ -1966,8 +1966,13 @@ export class SessionStore {
               this.notifyMessagesChanged(sessionId)
             }
 
+            // 不再通过 upsertOfficialCodexAssistantMessage 创建 assistant 消息。
+            // AI 回复文本统一由标准 WS 流式路径（content_start → content_delta → message_complete）处理，
+            // 避免两条路径同时创建 assistant 消息导致重复。
+            // 如果标准 WS 路径因网络延迟未收到 content_delta，等 turn 完成后
+            // syncOfficialCodexThreadMessages 的 buildOfficialCodexMessagesFromTurns 会补充完整消息。
             if (!hasImportedAssistant && text.length > 0) {
-              this.upsertOfficialCodexAssistantMessage(sessionId, turnId, text, normalizedStatus === 'failed', !done)
+              console.info(`[SessionStore] poll: no imported assistant yet, text len=${text.length}. WS stream should handle this.`)
             }
 
             if (done) {
@@ -2071,18 +2076,8 @@ export class SessionStore {
     console.info(`[SessionStore] handleOfficialCodexUpdate: sessionId=${sessionId}, status=${status}, role=${role}, turnId=${turnId}`)
 
     if (status === 'completed' || status === 'idle') {
-      if (turnId) {
-        const msgId = 'official-codex-assistant-' + turnId
-        const existing = this.messages.get(sessionId) || []
-        for (let i = existing.length - 1; i >= 0; i--) {
-          if (existing[i].id === msgId) {
-            existing[i].isStreaming = false
-            break
-          }
-        }
-        this.messages.set(sessionId, existing)
-        this.notifyMessagesChanged(sessionId)
-      }
+      // turn 完成：标记流式消息为非流式，更新状态，然后从 API 拉取完整消息
+      this.flushHeadToTail(sessionId)
       this.updateSessionStatusFromState(sessionId, status)
       setTimeout(() => {
         void this.syncOfficialCodexThreadMessages(sessionId, threadId)
@@ -2090,11 +2085,12 @@ export class SessionStore {
       return
     }
 
-    if (content && content['type'] === 'text') {
-      const text = (content['text'] as string) || ''
-      if (text.trim() && role === 'assistant') {
-        this.upsertOfficialCodexAssistantMessage(sessionId, turnId, text, false, true)
-      }
+    // 非 completed 状态：不通过此路径创建 assistant 消息。
+    // AI 回复文本统一由标准 WS 流式路径（content_start → content_delta → message_complete）处理，
+    // 避免同一条回复被两条路径各创建一遍导致重复。
+    // 仅在此更新工作状态，让 UI 显示"思考中"等
+    if (status === 'active' || status === 'in_progress' || status === 'running') {
+      this.updateSessionStatus(sessionId, 'thinking')
     }
   }
 
@@ -2271,7 +2267,50 @@ export class SessionStore {
   }
 
   private mergeOfficialCodexThreadMessages(current: Message[], imported: Message[]): Message[] {
-    const merged = current.slice()
+    // 清理：imported 中包含某个 turn 的正式 assistant 消息时，
+    // 从 current 中删除对应的流式临时消息（stream- 前缀），
+    // 防止标准 WS 流式路径创建的临时消息和 API 正式消息同时存在导致重复。
+
+    // 收集 imported 中所有 assistant 消息的归一化内容
+    const importedAssistantContents: string[] = []
+    for (let i = 0; i < imported.length; i++) {
+      if (imported[i].type === 'assistant' && imported[i].content) {
+        importedAssistantContents.push(this.normalizeMessageText(imported[i].content))
+      }
+    }
+
+    let cleanedCurrent = current
+    if (importedAssistantContents.length > 0) {
+      cleanedCurrent = []
+      let removedCount = 0
+      for (let i = 0; i < current.length; i++) {
+        const msg = current[i]
+        // 清理 stream- 前缀的流式消息：如果内容与 imported 中的 assistant 高度匹配
+        if (msg.type === 'assistant' && !this.isStableMessageId(msg.id) && msg.content) {
+          const normContent = this.normalizeMessageText(msg.content)
+          let matched = false
+          for (let j = 0; j < importedAssistantContents.length; j++) {
+            const importedNorm = importedAssistantContents[j]
+            if (normContent === importedNorm ||
+                (importedNorm.length >= 80 && importedNorm.includes(normContent))) {
+              matched = true
+              break
+            }
+          }
+          if (matched) {
+            removedCount++
+            console.info(`[SessionStore] mergeCodex: removed streaming msg id=${msg.id}, matched imported content`)
+            continue
+          }
+        }
+        cleanedCurrent.push(msg)
+      }
+      if (removedCount > 0) {
+        console.info(`[SessionStore] mergeCodex: removed ${removedCount} streaming messages`)
+      }
+    }
+
+    const merged = cleanedCurrent.slice()
     for (let i = 0; i < imported.length; i++) {
       const next = imported[i]
       let index = -1
@@ -2323,6 +2362,21 @@ export class SessionStore {
   }
 
   private compareMessagesForDisplay(a: Message, b: Message): number {
+    // Official Codex 消息：同 turn 内按 item index 排序
+    const aIsCodex = this.isOfficialCodexMessageId(a.id)
+    const bIsCodex = this.isOfficialCodexMessageId(b.id)
+    if (aIsCodex && bIsCodex) {
+      const aTurn = this.extractOfficialCodexTurnIdFromMessage(a.id)
+      const bTurn = this.extractOfficialCodexTurnIdFromMessage(b.id)
+      if (aTurn.length > 0 && aTurn === bTurn) {
+        const aIdx = this.extractOfficialCodexItemIndexFromMessage(a.id)
+        const bIdx = this.extractOfficialCodexItemIndexFromMessage(b.id)
+        if (aIdx >= 0 && bIdx >= 0) return aIdx - bIdx
+        if (aIdx >= 0) return -1
+        if (bIdx >= 0) return 1
+        return this.getMessageRoleRank(a) - this.getMessageRoleRank(b)
+      }
+    }
     const timeDiff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     if (timeDiff !== 0) return timeDiff
     return this.getMessageRoleRank(a) - this.getMessageRoleRank(b)
@@ -2460,15 +2514,20 @@ export class SessionStore {
       if (!items || items.length === 0) continue
       const turnBaseTime = this.getOfficialCodexTurnBaseTime(turn, i)
 
-      for (let j = 0; j < items.length; j++) {
-        const item = items[j]
+      // 重排 items：确保后续 assistant（总结）排在工具后面
+      const reorderedItems = this.reorderCodexTurnItems(items)
+
+      for (let j = 0; j < reorderedItems.length; j++) {
+        const item = reorderedItems[j]
+        // j 用于时间戳（决定顺序），originalIdx 用于 ID（保持稳定）
+        const originalIdx = items.indexOf(item) >= 0 ? items.indexOf(item) : j
         const type = this.normalizeOfficialCodexItemType((item['type'] as string) || '')
         const timestamp = this.getOfficialCodexMessageTimestamp(turnBaseTime, j, type)
         if (type === 'userMessage') {
           const text = this.extractOfficialCodexUserText(item)
           if (text.length > 0) {
             messages.push({
-              id: 'official-codex-user-' + turnId + '-' + j,
+              id: 'official-codex-user-' + turnId + '-' + originalIdx,
               type: 'user',
               content: text,
               timestamp
@@ -2478,7 +2537,7 @@ export class SessionStore {
           const text = this.extractOfficialCodexItemText(item)
           if (text.length > 0) {
             messages.push({
-              id: 'official-codex-assistant-' + turnId + '-' + j,
+              id: 'official-codex-assistant-' + turnId + '-' + originalIdx,
               type: 'assistant',
               content: text,
               timestamp
@@ -2488,7 +2547,7 @@ export class SessionStore {
           const thinking = this.extractOfficialCodexThinkingText(item)
           if (thinking.length > 0) {
             messages.push({
-              id: 'official-codex-thinking-' + turnId + '-' + j,
+              id: 'official-codex-thinking-' + turnId + '-' + originalIdx,
               type: 'thinking',
               content: thinking,
               timestamp
@@ -2502,11 +2561,11 @@ export class SessionStore {
             '').trim()
           const toolInput = this.extractOfficialCodexToolInput(item)
           messages.push({
-            id: 'official-codex-tool-' + turnId + '-' + j,
+            id: 'official-codex-tool-' + turnId + '-' + originalIdx,
             type: 'tool_use',
             content: '',
             toolName: this.resolveOfficialCodexToolName(item, toolInput),
-            toolUseId: toolUseId || 'official-codex-tool-' + turnId + '-' + j,
+            toolUseId: toolUseId || 'official-codex-tool-' + turnId + '-' + originalIdx,
             toolInput,
             toolStatus: this.getOfficialCodexToolStatus(item),
             timestamp
@@ -2520,7 +2579,7 @@ export class SessionStore {
           const content = this.extractOfficialCodexItemText(item)
           const isError = item['is_error'] === true || item['isError'] === true
           messages.push({
-            id: 'official-codex-tool-result-' + turnId + '-' + j,
+            id: 'official-codex-tool-result-' + turnId + '-' + originalIdx,
             type: 'tool_result',
             content,
             toolUseId,
@@ -2544,11 +2603,11 @@ export class SessionStore {
                 toolInput['operation'] = kindType
               }
               messages.push({
-                id: 'official-codex-tool-' + turnId + '-' + j + '-' + k,
+                id: 'official-codex-tool-' + turnId + '-' + originalIdx + '-' + k,
                 type: 'tool_use',
                 content: '',
                 toolName: 'Edit',
-                toolUseId: 'official-codex-file-change-' + turnId + '-' + j + '-' + k,
+                toolUseId: 'official-codex-file-change-' + turnId + '-' + originalIdx + '-' + k,
                 toolInput,
                 toolResult: this.formatOfficialCodexFileChangeDiff(path, kindType, diff),
                 toolStatus: this.getOfficialCodexToolStatus(item),
@@ -2559,11 +2618,11 @@ export class SessionStore {
             const toolInput: Record<string, Object> = {}
             toolInput['file_path'] = '文件变更'
             messages.push({
-              id: 'official-codex-tool-' + turnId + '-' + j,
+              id: 'official-codex-tool-' + turnId + '-' + originalIdx,
               type: 'tool_use',
               content: '',
               toolName: 'Edit',
-              toolUseId: 'official-codex-file-change-' + turnId + '-' + j,
+              toolUseId: 'official-codex-file-change-' + turnId + '-' + originalIdx,
               toolInput,
               toolResult: '',
               toolStatus: this.getOfficialCodexToolStatus(item),
@@ -2571,11 +2630,11 @@ export class SessionStore {
             } as Message)
           }
         } else if (type === 'mcp_tool_call') {
-          const toolUseId = ((item['id'] as string) || 'official-codex-mcp-tool-' + turnId + '-' + j).trim()
+          const toolUseId = ((item['id'] as string) || 'official-codex-mcp-tool-' + turnId + '-' + originalIdx).trim()
           const args = this.extractOfficialCodexToolInput(item)
           const result = this.extractOfficialCodexMcpToolResult(item)
           messages.push({
-            id: 'official-codex-tool-' + turnId + '-' + j,
+            id: 'official-codex-tool-' + turnId + '-' + originalIdx,
             type: 'tool_use',
             content: '',
             toolName: this.resolveOfficialCodexToolName(item, args),
@@ -2590,7 +2649,7 @@ export class SessionStore {
           const message = ((item['message'] as string) || '').trim()
           if (message.length > 0) {
             messages.push({
-              id: 'official-codex-error-' + turnId + '-' + j,
+              id: 'official-codex-error-' + turnId + '-' + originalIdx,
               type: 'error',
               content: message,
               timestamp
@@ -2600,6 +2659,52 @@ export class SessionStore {
       }
     }
     return messages
+  }
+
+  /**
+   * 重排 Codex turn 的 items：确保后续 agentMessage（总结）排在工具之后
+   */
+  private reorderCodexTurnItems(items: Array<Record<string, Object>>): Array<Record<string, Object>> {
+    if (!items || items.length <= 1) return items
+
+    let firstToolIdx = -1
+    let assistantCount = 0
+    for (let i = 0; i < items.length; i++) {
+      const type = this.normalizeOfficialCodexItemType((items[i]['type'] as string) || '')
+      if (type === 'tool_use' || type === 'tool_result' || type === 'file_change' || type === 'mcp_tool_call') {
+        if (firstToolIdx < 0) firstToolIdx = i
+      }
+      if (type === 'agentMessage' || type === 'assistantMessage') {
+        assistantCount++
+      }
+    }
+
+    if (firstToolIdx < 0 || assistantCount <= 1) return items
+
+    // 第一个 assistant 保持原位（前言），其余移到末尾（总结）
+    let seenAssistant = 0
+    const deferred: Array<Record<string, Object>> = []
+    const before: Array<Record<string, Object>> = []
+    for (let i = 0; i < items.length; i++) {
+      const type = this.normalizeOfficialCodexItemType((items[i]['type'] as string) || '')
+      if (type === 'agentMessage' || type === 'assistantMessage') {
+        seenAssistant++
+        if (seenAssistant === 1) {
+          before.push(items[i])
+        } else {
+          deferred.push(items[i])
+        }
+      } else {
+        before.push(items[i])
+      }
+    }
+
+    for (let i = 0; i < deferred.length; i++) {
+      before.push(deferred[i])
+    }
+
+    console.info(`[SessionStore] reorderCodexTurnItems: moved ${deferred.length} assistant(s) to end`)
+    return before
   }
 
   private hasOfficialCodexAssistantForTurn(messages: Message[], turnId: string): boolean {
@@ -3214,6 +3319,12 @@ export class SessionStore {
         }
         break
 
+      case 'session_status_changed':
+        if (msg.state) {
+          this.updateSessionStatusFromState(sessionId, msg.state)
+        }
+        break
+
       case 'status':
         if (msg.state) {
           this.updateSessionStatusFromState(sessionId, msg.state)
@@ -3247,9 +3358,8 @@ export class SessionStore {
         break
 
       case 'content_start':
-        if (this.isOfficialCodexSession(sessionId)) {
-          break
-        }
+        // Official Codex 也走标准流式路径，不再 break
+        // AI 回复统一通过 content_start → content_delta → message_complete 处理
         this.updateSessionStatus(sessionId, 'streaming')
         // 启动实况窗
         liveViewService.showThinking(sessionId, this.getSessionAiTool(sessionId))
