@@ -153,6 +153,11 @@ export class SessionStore {
       this.syncSessionStatuses()
     }, 15000)
 
+    // 应用启动时同步所有 Official Codex 会话状态
+    setTimeout(() => {
+      this.syncAllOfficialCodexStatuses()
+    }, 2000)
+
     // 定期清理残留的重复消息（每 60 秒），兜底防线
     this.dedupCleanupTimer = setInterval(() => {
       this.cleanupDuplicateMessages()
@@ -3076,6 +3081,25 @@ export class SessionStore {
     return this.sessionPermissionModes.get(this.currentSessionId) || PermissionMode.DEFAULT
   }
 
+
+  /**
+   * 启动时同步所有 Official Codex 会话的状态
+   * 确保移动端能正确显示桌面端正在进行的工作
+   */
+  async syncAllOfficialCodexStatuses(): Promise<void> {
+    console.info('[SessionStore] syncAllOfficialCodexStatuses: checking all Official Codex sessions')
+    for (const session of this.sessions) {
+      const isCodex = session.officialCodexThreadId || 
+        (session.aiTool || '').toLowerCase().indexOf('codex') >= 0
+      if (!isCodex) continue
+      
+      const threadId = this.officialCodexThreadIds.get(session.id) || session.officialCodexThreadId
+      if (!threadId) continue
+      
+      console.info(`[SessionStore] syncAllOfficialCodexStatuses: checking session ${session.id}, threadId=${threadId}`)
+      void this.refreshOfficialCodexActiveSession(session.id, threadId)
+    }
+  }
   // MARK: - 状态管理
 
   /**
