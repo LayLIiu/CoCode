@@ -3227,7 +3227,7 @@ export class SessionStore {
 
       case 'content_delta':
       case 'thinking':
-        if (this.isOfficialCodexSession(sessionId)) {
+        if (this.isOfficialCodexSession(sessionId) && messageType === 'thinking') {
           break
         }
         // 流式增量更新 Head 缓冲
@@ -3245,7 +3245,7 @@ export class SessionStore {
                 last.content = (last.content || '') + deltaText
               } else {
                 head.push({
-                  id: 'stream-' + Date.now(),
+                  id: msg.id || 'stream-' + Date.now(),
                   type: 'assistant',
                   content: deltaText,
                   isStreaming: true,
