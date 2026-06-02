@@ -352,7 +352,7 @@ export struct ToolUseBubble {
     if (toolName === 'Bash') {
       const cmd = input['command']
       if (typeof cmd === 'string') {
-        return cmd.length > 72 ? cmd.substring(0, 72) + '...' : cmd
+        return cmd.length > 120 ? cmd.substring(0, 72) + '...' : cmd
       }
     } else if (toolName === 'Read' || toolName === 'Write' || toolName === 'Edit') {
       const filePath = input['file_path']
