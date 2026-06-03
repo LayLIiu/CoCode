@@ -225,38 +225,46 @@ struct ImportSessionPage {
 
     this.isImporting = true
 
-    // 将选中的会话添加到本地列表
-    const selectedSessions = this.sessions.filter((s: Session) => this.selectedIds.includes(s.id))
-    const officialCodexSessions = selectedSessions.filter((s: Session) => !!s.officialCodexThreadId)
-    if (officialCodexSessions.length > 0) {
-      await sessionStore.importOfficialCodexThreads(officialCodexSessions)
-    }
-
-    // 合并到本地
-    for (let i = 0; i < selectedSessions.length; i++) {
-      const session = selectedSessions[i]
-      if (session.officialCodexThreadId) {
-        continue
+    try {
+      // 将选中的会话添加到本地列表
+      const selectedSessions = this.sessions.filter((s: Session) => this.selectedIds.includes(s.id))
+      const officialCodexSessions = selectedSessions.filter((s: Session) => !!s.officialCodexThreadId)
+      const normalSessions = selectedSessions.filter((s: Session) => !s.officialCodexThreadId)
+      
+      // 导入 Official Codex 会话
+      if (officialCodexSessions.length > 0) {
+        await sessionStore.importOfficialCodexThreads(officialCodexSessions)
       }
-      // 检查是否已存在
-      let exists = false
-      for (let j = 0; j < sessionStore.sessions.length; j++) {
-        if (sessionStore.sessions[j].id === session.id) {
-          exists = true
-          break
+
+      // 导入普通会话
+      if (normalSessions.length > 0) {
+        for (let i = 0; i < normalSessions.length; i++) {
+          const session = normalSessions[i]
+          // 检查是否已存在
+          let exists = false
+          for (let j = 0; j < sessionStore.sessions.length; j++) {
+            if (sessionStore.sessions[j].id === session.id) {
+              exists = true
+              break
+            }
+          }
+          if (!exists) {
+            sessionStore.sessions.push(session)
+          }
+          // 从已删除列表中移除（恢复会话）
+          await sessionStore.restoreSessionFromDeleted(session.id)
         }
+        // 保存普通会话
+        await sessionStore.saveSessionsToStorage()
       }
-      if (!exists) {
-        sessionStore.sessions.push(session)
-      }
-      // 从已删除列表中移除（恢复会话）
-      await sessionStore.restoreSessionFromDeleted(session.id)
+
+      // 清空选择
+      this.selectedIds = []
+    } catch (e) {
+      console.error(`[ImportSessionPage] Import error: ${e}`)
+    } finally {
+      this.isImporting = false
     }
-
-    // 保存到本地
-    await sessionStore.saveSessionsToStorage()
-
-    this.isImporting = false
 
     // 返回上一页
     router.back()

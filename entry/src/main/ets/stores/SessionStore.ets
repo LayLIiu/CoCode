@@ -829,14 +829,22 @@ export class SessionStore {
       await this.restoreSessionFromDeleted(session.id)
     }
 
+    // 立即保存和通知刷新
     await this.saveOfficialCodexThreadIds()
     await this.saveSessionsToStorage()
+    this.notifySessionsChanged()
+    
+    console.info(`[SessionStore] Imported ${imported.length} Official Codex threads`)
 
+    // 后台同步消息
     for (let i = 0; i < imported.length; i++) {
       const session = imported[i]
       const threadId = session.officialCodexThreadId || ''
       void this.syncOfficialCodexThreadMessages(session.id, threadId)
-        .then(() => this.saveSessionsToStorage())
+        .then(() => {
+          this.saveSessionsToStorage()
+          this.notifySessionsChanged()
+        })
         .catch((e: Error) => console.error(`[SessionStore] Background Official Codex sync error: ${e.message}`))
     }
   }
