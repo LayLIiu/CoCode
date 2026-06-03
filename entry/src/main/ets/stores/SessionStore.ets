@@ -930,14 +930,17 @@ export class SessionStore {
     const threadId = (thread['id'] as string) || ''
     if (threadId.length === 0) return null
 
+    // 兼容本地 API 和远程 API 的字段
+    const name = ((thread['name'] as string) || '').trim()
     const preview = ((thread['preview'] as string) || '').trim()
+    const title = name.length > 0 ? name : preview
     const cwd = ((thread['cwd'] as string) || '').trim()
     const createdAt = this.formatOfficialCodexTime(thread['createdAt'])
     const updatedAt = this.formatOfficialCodexTime(thread['updatedAt'])
 
     return {
       id: 'official-codex-' + threadId,
-      title: preview.length > 0 ? preview : 'Codex Desktop 对话',
+      title: title.length > 0 ? title : 'Codex Desktop 对话',
       projectPath: cwd.length > 0 ? cwd : 'Codex Desktop',
       workDir: cwd,
       workDirExists: true,
