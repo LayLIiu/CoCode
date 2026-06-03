@@ -840,9 +840,27 @@ export class SessionStore {
   async syncOfficialCodexThreadsToLocal(limit: number = 50): Promise<void> {
     try {
       this.warmOfficialCodexControllerIfNeeded()
-      const response = await apiService.listCodexRemoteThreads(limit)
-      const result = response['result'] as Record<string, Object>
-      const data = (result && result['data']) as Array<Record<string, Object>>
+      
+      // 优先使用本地快速 API
+      let data: Array<Record<string, Object>> = []
+      try {
+        const localResponse = await apiService.getLocalCodexThreads(limit)
+        const localThreads = (localResponse['threads'] as Array<Record<string, Object>>) || []
+        if (localThreads.length > 0) {
+          data = localThreads
+          console.info(`[syncOfficialCodexThreadsToLocal] Got ${data.length} threads from local API`)
+        }
+      } catch (e) {
+        console.warn(`[syncOfficialCodexThreadsToLocal] Local API failed, falling back to remote:`, e)
+      }
+      
+      // 如果本地 API 没有数据，降级到远程 API
+      if (data.length === 0) {
+        const response = await apiService.listCodexRemoteThreads(limit)
+        const result = response['result'] as Record<string, Object>
+        data = (result && result['data']) as Array<Record<string, Object>>
+      }
+      
       if (!data || data.length === 0) return
 
       let changed = false

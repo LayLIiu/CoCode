@@ -1813,6 +1813,11 @@ export class APIService {
 
     return result
   }
-}
 
-export const apiService = APIService.getInstance()
+
+  // 快速获取本地线程列表（从 ~/.codex/sessions 读取）
+  async getLocalCodexThreads(limit: number = 80): Promise<Record<string, Object>> {
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/local-threads?limit=' + limit, 'GET', '')
+  }
+
+}
