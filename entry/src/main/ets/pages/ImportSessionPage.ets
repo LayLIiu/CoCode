@@ -130,7 +130,14 @@ struct ImportSessionPage {
   }
 
   private formatOfficialCodexTime(value: Object): string {
-    const raw = Number(value || Date.now())
+    // 处理 undefined、null、空字符串等情况
+    if (value === undefined || value === null || value === '') {
+      return new Date().toISOString()
+    }
+    const raw = Number(value)
+    if (isNaN(raw) || raw <= 0) {
+      return new Date().toISOString()
+    }
     const ms = raw > 1000000000000 ? raw : raw * 1000
     return new Date(ms).toISOString()
   }
