@@ -17,6 +17,7 @@ import router from '@ohos.router'
 struct ImportSessionPage {
   @State sessions: Session[] = []
   @State selectedIds: string[] = []
+  @State expandedProjects: Set<string> = new Set<string>()  // 展开的项目
   @State isLoading: boolean = true
   @State isImporting: boolean = false
   @State tabType: TabType = TabType.CLAUDE
@@ -261,11 +262,11 @@ struct ImportSessionPage {
             .justifyContent(FlexAlign.Center)
           } else {
             List({ space: 0 }) {
-              ForEach(this.getNotImportedSessions(), (session: Session) => {
+              ForEach(this.getSortedProjects(), (projectName: string) => {
                 ListItem() {
-                  this.SessionItemView(session)
+                  this.ProjectGroupView(projectName)
                 }
-              }, (session: Session) => session.id)
+              }, (projectName: string) => projectName)
             }
             .width('100%')
             .layoutWeight(1)
@@ -324,6 +325,73 @@ struct ImportSessionPage {
     }
     .width('100%')
     .height('100%')
+  }
+
+  @Builder
+  ProjectGroupView(projectName: string) {
+    Column() {
+      // 项目标题（可折叠）
+      Row() {
+        SymbolGlyph(this.expandedProjects.has(projectName) ? 
+          $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
+          .fontSize(16)
+          .fontColor([Theme.TextSecondary])
+
+        Text(projectName)
+          .fontSize(Theme.FontBody)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.TextPrimary)
+          .margin({ left: Theme.SpacingSM })
+
+        const sessions = this.getSessionsGroupedByProject().get(projectName) || []
+        Text(`(${sessions.length})`)
+          .fontSize(Theme.FontTiny)
+          .fontColor(Theme.TextSecondary)
+          .margin({ left: Theme.SpacingXS })
+
+        Blank()
+
+        // 全选当前项目
+        const projectSessionIds = (this.getSessionsGroupedByProject().get(projectName) || []).map(s => s.id)
+        const allSelected = projectSessionIds.every(id => this.selectedIds.includes(id))
+        
+        Text(allSelected ? '取消' : '全选')
+          .fontSize(Theme.FontTiny)
+          .fontColor(Theme.PrimaryColor)
+          .onClick(() => {
+            if (allSelected) {
+              // 取消选择当前项目的所有会话
+              this.selectedIds = this.selectedIds.filter(id => !projectSessionIds.includes(id))
+            } else {
+              // 选择当前项目的所有会话
+              const newIds = [...this.selectedIds]
+              for (const id of projectSessionIds) {
+                if (!newIds.includes(id)) {
+                  newIds.push(id)
+                }
+              }
+              this.selectedIds = newIds
+            }
+          })
+      }
+      .width('100%')
+      .padding({ top: Theme.SpacingMD, bottom: Theme.SpacingSM })
+      .onClick(() => {
+        this.toggleProjectExpand(projectName)
+      })
+
+      // 展开的会话列表
+      if (this.expandedProjects.has(projectName)) {
+        Column({ space: Theme.SpacingSM }) {
+          ForEach(this.getSessionsGroupedByProject().get(projectName) || [], (session: Session) => {
+            this.SessionItemView(session)
+          }, (session: Session) => session.id)
+        }
+        .width('100%')
+        .padding({ left: Theme.SpacingLG })
+      }
+    }
+    .width('100%')
   }
 
   @Builder

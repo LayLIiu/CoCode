@@ -175,7 +175,15 @@ export struct SettingsPage {
             this.ConnectionItem()
           }
 
-          // Official Codex 远程控制已移除（现在自动从本地文件加载线程列表）
+          // Official Codex 远程控制
+          ListItem() {
+            this.SettingSection('Official Codex 远程控制')
+          }
+
+          ListItem() {
+            this.OfficialCodexControllerPanel()
+          }
+
           // 模型与权限
           if (this.isLoggedIn) {
             ListItem() {
