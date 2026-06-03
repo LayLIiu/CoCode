@@ -298,13 +298,21 @@ export class SessionStore {
         }
       }
 
-      this.sessions = filteredServerSessions.map(serverSession => {
+      // 合并服务器会话和本地 Official Codex 会话
+      const mergedSessions: Session[] = []
+      const mergedIds = new Set<string>()
+      const mergedOfficialThreadIds = new Set<string>()
+      
+      // 先添加服务器会话
+      for (let i = 0; i < filteredServerSessions.length; i++) {
+        const serverSession = filteredServerSessions[i]
         const localTime = localModifiedMap.get(serverSession.id)
+        
         if (localTime) {
           const localDate = new Date(localTime).getTime()
           const serverDate = new Date(serverSession.modifiedAt).getTime()
           if (localDate > serverDate) {
-            const updatedSession: Session = {
+            mergedSessions.push({
               id: serverSession.id,
               title: serverSession.title,
               projectPath: serverSession.projectPath,
@@ -315,26 +323,37 @@ export class SessionStore {
               messageCount: serverSession.messageCount,
               aiTool: serverSession.aiTool,
               officialCodexThreadId: serverSession.officialCodexThreadId
-            }
-            return updatedSession
+            })
+          } else {
+            mergedSessions.push(serverSession)
           }
+        } else {
+          mergedSessions.push(serverSession)
         }
-        return serverSession
-      })
-
-      const mergedIds = new Set<string>()
-      const mergedOfficialThreadIds = new Set<string>()
-      this.sessions.forEach((session: Session) => {
-        mergedIds.add(session.id)
-        if (session.officialCodexThreadId) mergedOfficialThreadIds.add(session.officialCodexThreadId)
-      })
+        
+        mergedIds.add(serverSession.id)
+        if (serverSession.officialCodexThreadId) {
+          mergedOfficialThreadIds.add(serverSession.officialCodexThreadId)
+        }
+      }
+      
+      // 再添加本地 Official Codex 会话（确保不被覆盖）
       for (let i = 0; i < localOfficialCodexSessions.length; i++) {
         const session = localOfficialCodexSessions[i]
         const threadId = session.officialCodexThreadId || ''
+        // 只有当 id 和 threadId 都不存在时才添加
         if (!mergedIds.has(session.id) && (threadId.length === 0 || !mergedOfficialThreadIds.has(threadId))) {
-          this.sessions.push(session)
+          mergedSessions.push(session)
+          mergedIds.add(session.id)
+          if (threadId) {
+            mergedOfficialThreadIds.add(threadId)
+          }
         }
       }
+      
+      this.sessions = mergedSessions
+      
+      console.info(`[fetchSessions] Merged ${filteredServerSessions.length} server + ${localOfficialCodexSessions.length} local Official Codex = ${this.sessions.length} total`)
 
       // 保存到本地
       await storageService.saveSessions(this.sessions)
@@ -832,9 +851,12 @@ export class SessionStore {
     // 立即保存和通知刷新
     await this.saveOfficialCodexThreadIds()
     await this.saveSessionsToStorage()
+    
+    // 强制触发响应式更新
+    this.sessions = [...this.sessions]
     this.notifySessionsChanged()
     
-    console.info(`[SessionStore] Imported ${imported.length} Official Codex threads`)
+    console.info(`[SessionStore] Imported ${imported.length} Official Codex threads, total sessions: ${this.sessions.length}`)
 
     // 后台同步消息
     for (let i = 0; i < imported.length; i++) {
