@@ -158,6 +158,16 @@ export class SessionStore {
       this.syncAllOfficialCodexStatuses()
     }, 2000)
 
+    // 延迟连接全局 WebSocket（等待 authStore 初始化完成）
+    setTimeout(() => {
+      const serverUrl = authStore.serverUrl
+      if (serverUrl) {
+        console.info(`[SessionStore] Auto-connecting global WS to ${serverUrl}`)
+        wsService.setServerUrl(serverUrl)
+        wsService.connectGlobal()
+      }
+    }, 3000)
+
     // 定期清理残留的重复消息（每 60 秒），兜底防线
     this.dedupCleanupTimer = setInterval(() => {
       this.cleanupDuplicateMessages()
