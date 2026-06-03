@@ -91,7 +91,7 @@ struct ImportSessionPage {
         // 降级到远程 API
         const response = await apiService.listCodexRemoteThreads(50)
         const result = response['result'] as Record<string, Object>
-        data = (result && result['data']) as Array<Record<string, Object>>) || []
+        data = ((result && result['data']) as Array<Record<string, Object>>) || []
       }
       
       if (!data || data.length === 0) return []
