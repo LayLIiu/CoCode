@@ -245,6 +245,14 @@ export class SessionStore {
 
         this.notifySessionsChanged()
         this.warmOfficialCodexControllerIfNeeded()
+        
+        // 后台自动加载 Codex 线程列表（从本地文件快速读取）
+        void this.syncOfficialCodexThreadsToLocal(80).then(() => {
+          console.info('[SessionStore] Auto-synced Codex threads on startup')
+        }).catch((e: Error) => {
+          console.error('[SessionStore] Auto-sync Codex threads error:', e.message)
+        })
+        
         console.info(`[SessionStore] Loaded ${localSessions.length} sessions from local, ${savedStatuses.size} statuses`)
       }
 
