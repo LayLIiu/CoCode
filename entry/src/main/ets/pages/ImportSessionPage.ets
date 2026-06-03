@@ -82,9 +82,18 @@ struct ImportSessionPage {
 
   private async loadOfficialCodexSessions(): Promise<Session[]> {
     try {
-      const response = await apiService.listCodexRemoteThreads(50)
-      const result = response['result'] as Record<string, Object>
-      const data = (result && result['data']) as Array<Record<string, Object>>
+      // 优先使用本地快速 API
+      let data: Array<Record<string, Object>> = []
+      try {
+        const localResponse = await apiService.getLocalCodexThreads(80)
+        data = (localResponse['threads'] as Array<Record<string, Object>>) || []
+      } catch {
+        // 降级到远程 API
+        const response = await apiService.listCodexRemoteThreads(50)
+        const result = response['result'] as Record<string, Object>
+        data = (result && result['data']) as Array<Record<string, Object>>) || []
+      }
+      
       if (!data || data.length === 0) return []
 
       const sessions: Session[] = []
@@ -93,13 +102,16 @@ struct ImportSessionPage {
         const threadId = (thread['id'] as string) || ''
         if (threadId.length === 0) continue
 
+        // 兼容本地 API 的 name 字段和远程 API 的 preview 字段
+        const name = ((thread['name'] as string) || '').trim()
         const preview = ((thread['preview'] as string) || '').trim()
+        const title = name.length > 0 ? name : preview
         const cwd = ((thread['cwd'] as string) || '').trim()
         const createdAt = this.formatOfficialCodexTime(thread['createdAt'])
         const updatedAt = this.formatOfficialCodexTime(thread['updatedAt'])
         sessions.push({
           id: 'official-codex-' + threadId,
-          title: preview.length > 0 ? preview : 'Codex Desktop 对话',
+          title: title.length > 0 ? title : 'Codex Desktop 对话',
           projectPath: cwd.length > 0 ? cwd : 'Codex Desktop',
           workDir: cwd,
           workDirExists: true,

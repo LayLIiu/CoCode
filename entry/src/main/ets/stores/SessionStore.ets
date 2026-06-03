@@ -905,11 +905,11 @@ export class SessionStore {
         changed = true
       }
 
-      if (changed) {
-        await this.saveOfficialCodexThreadIds()
-        await this.saveSessionsToStorage()
-        this.notifySessionsChanged()
-      }
+      // 总是保存和通知，确保界面刷新
+      await this.saveOfficialCodexThreadIds()
+      await this.saveSessionsToStorage()
+      this.notifySessionsChanged()
+      console.info(`[syncOfficialCodexThreadsToLocal] Synced ${data.length} threads, changed=${changed}`)
     } catch (e) {
       console.error(`[SessionStore] Sync Official Codex threads error: ${e}`)
       this.notifySessionsChanged()
