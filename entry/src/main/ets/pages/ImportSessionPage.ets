@@ -159,6 +159,48 @@ struct ImportSessionPage {
     })
   }
 
+  // 按项目分组
+  private getSessionsGroupedByProject(): Map<string, Session[]> {
+    const groups = new Map<string, Session[]>()
+    const sessions = this.getNotImportedSessions()
+    
+    for (let i = 0; i < sessions.length; i++) {
+      const session = sessions[i]
+      const project = session.workDir || session.projectPath || '未知项目'
+      const projectName = project.split('/').pop() || project
+      
+      if (!groups.has(projectName)) {
+        groups.set(projectName, [])
+      }
+      const arr = groups.get(projectName)
+      if (arr) {
+        arr.push(session)
+      }
+    }
+    
+    return groups
+  }
+
+  // 获取排序后的项目列表
+  private getSortedProjects(): string[] {
+    const groups = this.getSessionsGroupedByProject()
+    const projects = Array.from(groups.keys())
+    return projects.sort((a: string, b: string): number => {
+      if (a === '未知项目') return 1
+      if (b === '未知项目') return -1
+      return a.localeCompare(b)
+    })
+  }
+
+  // 切换项目展开状态
+  private toggleProjectExpand(projectName: string): void {
+    if (this.expandedProjects.has(projectName)) {
+      this.expandedProjects.delete(projectName)
+    } else {
+      this.expandedProjects.add(projectName)
+    }
+  }
+
   private toggleSelection(sessionId: string): void {
     if (this.selectedIds.includes(sessionId)) {
       this.selectedIds = this.selectedIds.filter(i => i !== sessionId)
@@ -327,6 +369,42 @@ struct ImportSessionPage {
     .height('100%')
   }
 
+  private getProjectSessionCount(projectName: string): number {
+    const sessions = this.getSessionsGroupedByProject().get(projectName)
+    return sessions ? sessions.length : 0
+  }
+
+  private isProjectAllSelected(projectName: string): boolean {
+    const sessions = this.getSessionsGroupedByProject().get(projectName)
+    if (!sessions || sessions.length === 0) return false
+    return sessions.every((s: Session) => this.selectedIds.includes(s.id))
+  }
+
+  private toggleProjectSelection(projectName: string): void {
+    const sessions = this.getSessionsGroupedByProject().get(projectName)
+    if (!sessions) return
+    
+    const projectIds: string[] = []
+    for (let i = 0; i < sessions.length; i++) {
+      projectIds.push(sessions[i].id)
+    }
+    
+    const allSelected = this.isProjectAllSelected(projectName)
+    if (allSelected) {
+      // 取消选择
+      this.selectedIds = this.selectedIds.filter((id: string) => !projectIds.includes(id))
+    } else {
+      // 全选
+      const newIds: string[] = [...this.selectedIds]
+      for (let i = 0; i < projectIds.length; i++) {
+        if (!newIds.includes(projectIds[i])) {
+          newIds.push(projectIds[i])
+        }
+      }
+      this.selectedIds = newIds
+    }
+  }
+
   @Builder
   ProjectGroupView(projectName: string) {
     Column() {
@@ -343,35 +421,18 @@ struct ImportSessionPage {
           .fontColor(Theme.TextPrimary)
           .margin({ left: Theme.SpacingSM })
 
-        const sessions = this.getSessionsGroupedByProject().get(projectName) || []
-        Text(`(${sessions.length})`)
+        Text(`(${this.getProjectSessionCount(projectName)})`)
           .fontSize(Theme.FontTiny)
           .fontColor(Theme.TextSecondary)
           .margin({ left: Theme.SpacingXS })
 
         Blank()
 
-        // 全选当前项目
-        const projectSessionIds = (this.getSessionsGroupedByProject().get(projectName) || []).map(s => s.id)
-        const allSelected = projectSessionIds.every(id => this.selectedIds.includes(id))
-        
-        Text(allSelected ? '取消' : '全选')
+        Text(this.isProjectAllSelected(projectName) ? '取消' : '全选')
           .fontSize(Theme.FontTiny)
           .fontColor(Theme.PrimaryColor)
           .onClick(() => {
-            if (allSelected) {
-              // 取消选择当前项目的所有会话
-              this.selectedIds = this.selectedIds.filter(id => !projectSessionIds.includes(id))
-            } else {
-              // 选择当前项目的所有会话
-              const newIds = [...this.selectedIds]
-              for (const id of projectSessionIds) {
-                if (!newIds.includes(id)) {
-                  newIds.push(id)
-                }
-              }
-              this.selectedIds = newIds
-            }
+            this.toggleProjectSelection(projectName)
           })
       }
       .width('100%')
