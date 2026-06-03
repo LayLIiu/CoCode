@@ -1820,4 +1820,8 @@ export class APIService {
     return await this.request<Record<string, Object>>('/api/official-codex-remote/local-threads?limit=' + limit, 'GET', '')
   }
 
+
 }
+
+// 单例导出
+export const apiService = new APIService()
