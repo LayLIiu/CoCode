@@ -3810,8 +3810,23 @@ export class SessionStore {
 
       case 'session_status_changed':
         if (msg.sessionId && msg.state) {
-          console.info(`[SessionStore] Session status changed: ${msg.sessionId} -> ${msg.state}`)
-          this.updateSessionStatusFromState(msg.sessionId, msg.state)
+          let targetSessionId = msg.sessionId
+          // 检查是否是 Official Codex 格式的 sessionId (official-codex-{threadId})
+          if (msg.sessionId.startsWith('official-codex-')) {
+            const threadId = msg.sessionId.replace('official-codex-', '')
+            // 从 threadId 找到对应的真实 sessionId
+            for (let i = 0; i < this.sessions.length; i++) {
+              const session = this.sessions[i]
+              if (session.officialCodexThreadId === threadId ||
+                  this.officialCodexThreadIds.get(session.id) === threadId) {
+                targetSessionId = session.id
+                console.info(`[SessionStore] Mapped threadId ${threadId} to sessionId ${targetSessionId} for status update`)
+                break
+              }
+            }
+          }
+          console.info(`[SessionStore] Session status changed: ${targetSessionId} -> ${msg.state}`)
+          this.updateSessionStatusFromState(targetSessionId, msg.state)
         }
         break
 
