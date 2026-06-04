@@ -65,6 +65,7 @@ export struct SettingsPage {
   @State codexControllerWsConnected: boolean = false
   @State codexControllerLoading: boolean = false
   @State codexControllerError: string = ''
+  @State codexAutomationFallbackAvailable: boolean = false
   @State officialCodexThreadCount: number = 0
   @State officialCodexSyncLoading: boolean = false
 
@@ -648,6 +649,9 @@ export struct SettingsPage {
         this.ConnectionMetric('对话', `${this.officialCodexThreadCount}`,
           this.officialCodexThreadCount > 0 ? Theme.SuccessColor : Theme.TextTertiary,
           this.officialCodexThreadCount > 0 ? 'rgba(48, 209, 88, 0.14)' : 'rgba(255, 255, 255, 0.045)')
+        this.ConnectionMetric('兜底', this.codexAutomationFallbackAvailable ? '可用' : '关闭',
+          this.codexAutomationFallbackAvailable ? Theme.SuccessColor : Theme.TextTertiary,
+          this.codexAutomationFallbackAvailable ? 'rgba(48, 209, 88, 0.14)' : 'rgba(255, 255, 255, 0.045)')
         if (this.codexControllerClientId) {
           Text(this.codexControllerClientId.substring(0, 8) + '...')
             .fontSize(Theme.FontTiny)
@@ -1934,6 +1938,7 @@ export struct SettingsPage {
     if (this.codexControllerStatus === '未知') return '点击刷新查询 Official Codex 控制器状态'
     if (this.codexControllerWsConnected) return `控制器已连接，已同步 ${this.officialCodexThreadCount} 个官方对话`
     if (this.codexControllerStatus === '已就绪') return '已授权，点击"恢复 & 连接"建立远程连接'
+    if (this.codexControllerStatus === '未授权' && this.codexAutomationFallbackAvailable) return '官方未授权；已启用本机自动化兜底发送'
     if (this.codexControllerStatus === '未授权' && this.codexControllerError) return this.codexControllerError
     return `状态: ${this.codexControllerStatus}`
   }
@@ -1996,8 +2001,10 @@ export struct SettingsPage {
       let statusText = '未知'
       let clientId = ''
       let errorMsg = ''
+      let fallbackAvailable = false
       try {
         const status = await apiService.getCodexRemoteStatus()
+        fallbackAvailable = (status['automationFallbackAvailable'] as boolean) || false
         const controllerSession = status['controllerSession'] as Record<string, Object> | null
         if (controllerSession) {
           statusText = wsConnected ? '已连接' : '已就绪'
@@ -2015,9 +2022,11 @@ export struct SettingsPage {
       this.codexControllerClientId = clientId
       this.codexControllerWsConnected = wsConnected
       this.codexControllerError = errorMsg
+      this.codexAutomationFallbackAvailable = fallbackAvailable
     } catch (e) {
       console.error(`[Settings] Codex controller status error: ${e}`)
       this.codexControllerStatus = '未授权'
+      this.codexAutomationFallbackAvailable = false
     }
     this.codexControllerLoading = false
   }

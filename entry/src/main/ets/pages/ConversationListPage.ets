@@ -24,10 +24,18 @@ class SessionGroup {
   sessions: Session[] = []
 }
 
+class ProjectSessionGroup {
+  projectName: string = ''
+  sessions: Session[] = []
+  latestModifiedAt: number = 0
+  latestSessionTitle: string = ''
+}
+
 // 会话项组件
 @Component
 struct SessionItemView {
   @Prop session: Session
+  @Prop compactMode: boolean = false
   @Prop @Watch('onRefresh') refreshTrigger: number = 0
   @State currentStatus: SessionStatus = 'idle'
 
@@ -112,6 +120,22 @@ struct SessionItemView {
     }
   }
 
+  private getMascotFrameBackground(): string {
+    switch (this.currentStatus) {
+      case 'thinking':
+      case 'streaming':
+      case 'tool_executing':
+        return 'rgba(10, 132, 255, 0.12)'
+      case 'permission_pending':
+      case 'question_pending':
+        return 'rgba(255, 159, 10, 0.14)'
+      case 'completed':
+        return 'rgba(48, 209, 88, 0.11)'
+      default:
+        return 'rgba(255, 255, 255, 0.045)'
+    }
+  }
+
   private getRelativeTime(): string {
     const modified = new Date(this.session.modifiedAt)
     const modifiedTime = modified.getTime()
@@ -148,90 +172,193 @@ struct SessionItemView {
     })
   }
 
+  private isCompactHighlighted(): boolean {
+    if (sessionStore.currentSessionId === this.session.id) {
+      return true
+    }
+    return this.currentStatus === 'thinking' ||
+      this.currentStatus === 'streaming' ||
+      this.currentStatus === 'tool_executing' ||
+      this.currentStatus === 'permission_pending' ||
+      this.currentStatus === 'question_pending'
+  }
+
+  private isCodexSession(): boolean {
+    if (this.session.officialCodexThreadId) return true
+    return (this.session.aiTool || '').toLowerCase().indexOf('codex') >= 0
+  }
+
+  private getLargeMascotSize(): number {
+    return 38
+  }
+
+  private getLargeCardTopPadding(): number {
+    return 14
+  }
+
+  private getLargeCardBottomPadding(): number {
+    return 14
+  }
+
+  private getLargeCardBottomMargin(): number {
+    return Theme.SpacingSM
+  }
+
   build() {
-    Column() {
-      Row() {
-        Row()
-          .width(3)
-          .height(46)
-          .borderRadius(2)
-          .backgroundColor(this.getStatusColor())
-          .opacity(this.currentStatus === 'idle' ? 0.28 : 1)
-          .margin({ right: Theme.SpacingMD })
-
-        PixelMascot({
-          mascotSize: 38,
-          status: this.getMascotStatus(),
-          bodyColor: getMascotColorForSession(this.session.id),
-          mascotType: getMascotTypeForProvider(this.session.aiTool || '')
-        })
-
-        Column({ space: 6 }) {
-          Text(this.session.title)
-            .fontSize(Theme.FontBody)
-            .fontColor(Theme.TextPrimary)
-            .fontWeight(FontWeight.Medium)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-          Row({ space: 6 }) {
-            SymbolGlyph($r('sys.symbol.folder'))
-              .fontSize(12)
-              .fontColor([this.session.workDirExists ? Theme.TextTertiary : Theme.AccentOrange])
-
-            Text(this.session.projectPath || this.session.workDir || '未设置工作目录')
-              .fontSize(Theme.FontTiny)
-              .fontColor(this.session.workDirExists ? Theme.TextSecondary : Theme.AccentOrange)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .layoutWeight(1)
-          }
-          .width('100%')
+    if (this.compactMode) {
+      Row({ space: 10 }) {
+        Column() {
+          PixelMascot({
+            mascotSize: 30,
+            status: this.getMascotStatus(),
+            bodyColor: getMascotColorForSession(this.session.id),
+            mascotType: getMascotTypeForProvider(this.session.aiTool || '')
+          })
         }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-        .margin({ left: Theme.SpacingMD })
+        .width(36)
+        .height(36)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+        .backgroundColor(this.getMascotFrameBackground())
+        .border({ width: 0.5, color: this.getStatusBorderColor() })
+        .borderRadius(12)
 
-        Column({ space: 8 }) {
-          Text(this.getSessionStatusText())
-            .fontSize(11)
-            .fontColor(this.getStatusColor())
-            .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-            .backgroundColor(this.getStatusBackground())
-            .borderRadius(8)
+        Text(this.session.title)
+          .fontSize(Theme.FontBody)
+          .fontColor(Theme.TextPrimary)
+          .fontWeight(this.isCompactHighlighted() ? FontWeight.Medium : FontWeight.Regular)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
 
-          Row({ space: 6 }) {
-            Text(`${this.session.messageCount}`)
-              .fontSize(Theme.FontTiny)
-              .fontColor(Theme.TextTertiary)
-
-            Text(this.getRelativeTime())
-              .fontSize(Theme.FontTiny)
-              .fontColor(Theme.TextTertiary)
+        Row({ space: 6 }) {
+          if (this.isCompactHighlighted()) {
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(11)
+              .fontColor([Theme.TextTertiary])
           }
+
+          Text(this.getRelativeTime())
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextTertiary)
         }
-        .alignItems(HorizontalAlign.End)
       }
       .width('100%')
-      .padding({ left: Theme.SpacingMD, right: Theme.SpacingMD, top: 14, bottom: 14 })
+      .height(54)
+      .padding({ left: 16, right: 16 })
+      .backgroundColor(this.isCompactHighlighted() ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.02)')
+      .borderRadius(16)
+      .onClick(() => {
+        this.openSession()
+      })
+    } else {
+      Column() {
+        Row() {
+          if (!this.isCodexSession()) {
+            Row()
+              .width(3)
+              .height(46)
+              .borderRadius(2)
+              .backgroundColor(this.getStatusColor())
+              .opacity(this.currentStatus === 'idle' ? 0.28 : 1)
+              .margin({ right: Theme.SpacingMD })
+          }
+
+          Column() {
+            PixelMascot({
+              mascotSize: this.getLargeMascotSize(),
+              status: this.getMascotStatus(),
+              bodyColor: getMascotColorForSession(this.session.id),
+              mascotType: getMascotTypeForProvider(this.session.aiTool || '')
+            })
+          }
+          .width(42)
+          .height(42)
+          .justifyContent(FlexAlign.Center)
+          .alignItems(HorizontalAlign.Center)
+          .backgroundColor(Color.Transparent)
+          .border({
+            width: 0,
+            color: Color.Transparent
+          })
+          .borderRadius(0)
+
+          Column({ space: 6 }) {
+            Text(this.session.title)
+              .fontSize(Theme.FontBody)
+              .fontColor(Theme.TextPrimary)
+              .fontWeight(FontWeight.Medium)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+            Row({ space: 6 }) {
+              SymbolGlyph($r('sys.symbol.folder'))
+                .fontSize(12)
+                .fontColor([this.session.workDirExists ? Theme.TextTertiary : Theme.AccentOrange])
+
+              Text(this.session.projectPath || this.session.workDir || '未设置工作目录')
+                .fontSize(Theme.FontTiny)
+                .fontColor(this.session.workDirExists ? Theme.TextSecondary : Theme.AccentOrange)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .layoutWeight(1)
+            }
+            .width('100%')
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+          .margin({ left: Theme.SpacingMD })
+
+          Column({ space: 8 }) {
+            Text(this.getSessionStatusText())
+              .fontSize(11)
+              .fontColor(this.getStatusColor())
+              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+              .backgroundColor(this.getStatusBackground())
+              .borderRadius(8)
+
+            Row({ space: 6 }) {
+              Text(`${this.session.messageCount}`)
+                .fontSize(Theme.FontTiny)
+                .fontColor(Theme.TextTertiary)
+
+              Text(this.getRelativeTime())
+                .fontSize(Theme.FontTiny)
+                .fontColor(Theme.TextTertiary)
+            }
+          }
+          .alignItems(HorizontalAlign.End)
+        }
+        .width('100%')
+        .padding({
+          left: Theme.SpacingMD,
+          right: Theme.SpacingMD,
+          top: this.getLargeCardTopPadding(),
+          bottom: this.getLargeCardBottomPadding()
+        })
+      }
+      .width('100%')
+      .backgroundColor('rgba(28, 28, 30, 0.82)')
+      .border({ width: 0.5, color: this.getStatusBorderColor() })
+      .borderRadius(Theme.RadiusMedium)
+      .margin({ bottom: this.getLargeCardBottomMargin() })
+      .onClick(() => {
+        this.openSession()
+      })
     }
-    .width('100%')
-    .backgroundColor('rgba(28, 28, 30, 0.82)')
-    .border({ width: 0.5, color: this.getStatusBorderColor() })
-    .borderRadius(Theme.RadiusMedium)
-    .margin({ bottom: Theme.SpacingSM })
-    .onClick(() => {
-      this.openSession()
-    })
   }
 }
 
 @Component
 export struct ConversationListPage {
+  private static readonly CODEX_PROJECT_EXPANDED_KEY: string = 'codex_project_expanded_groups'
+
   @Prop tabType: TabType = TabType.CLAUDE
   @Prop pageTitle: string = Constants.TITLE_CLAUDE
   @State searchText: string = ''
   @State sessions: Session[] = []
+  @State expandedCodexProjects: Set<string> = new Set<string>()
+  @State codexExpandedStateReady: boolean = false
   @State isLoading: boolean = false
   @State isSyncingOfficialCodex: boolean = false
   @State refreshTrigger: number = 0
@@ -246,13 +373,6 @@ export struct ConversationListPage {
   private sessionsChangedListener: () => void = () => {}
   private statusChangedListener: (sessionId: string, status: SessionStatus) => void = () => {}
   private lastOfficialCodexSyncAt: number = 0
-
-  private subIcon: HdsNavigationBadgeIconOptions = {
-    content: {
-      icon: $r('sys.symbol.arrow_down_circle'),
-      action: () => { this.importSessions() }
-    }
-  }
 
   private menus: Array<HdsNavigationBadgeIconOptions> = [
     {
@@ -283,6 +403,8 @@ export struct ConversationListPage {
 
     this.statusChangedListener = (sessionId: string, status: SessionStatus) => {
       console.info(`[ConversationListPage] Status changed: ${sessionId} -> ${status}`)
+      // 状态变化时也需要刷新 sessions 数组，确保排序重新计算
+      this.sessions = [...(sessionStore.sessions || [])]
       this.refreshTrigger = Date.now()
     }
     sessionStore.addStatusChangedListener(this.statusChangedListener)
@@ -297,6 +419,7 @@ export struct ConversationListPage {
     }
 
     this.loadRecentDirs()
+    void this.loadCodexProjectExpandState()
     this.syncOfficialCodexThreadsIfNeeded()
   }
 
@@ -313,13 +436,34 @@ export struct ConversationListPage {
   private refreshSessionsFromStore(): void {
     this.sessions = [...(sessionStore.sessions || [])]
     this.isLoading = sessionStore.isLoading
+    this.ensureExpandedCodexProjects()
     this.refreshTrigger = Date.now()
   }
 
   private syncOfficialCodexThreadsIfNeeded(): void {
-    // 启动时已经在 SessionStore 中自动加载了 Codex 线程
-    // 这里只需要刷新界面显示
     this.refreshSessionsFromStore()
+
+    if (this.tabType !== TabType.CODEX || this.isSyncingOfficialCodex) {
+      return
+    }
+
+    const now = Date.now()
+    if (now - this.lastOfficialCodexSyncAt < 30000 && this.getFilteredSessions().length > 0) {
+      return
+    }
+
+    this.isSyncingOfficialCodex = true
+    this.lastOfficialCodexSyncAt = now
+    void sessionStore.syncOfficialCodexThreadsToLocal(50)
+      .then(() => {
+        this.refreshSessionsFromStore()
+      })
+      .catch((e: Error) => {
+        console.error(`[ConversationListPage] Sync Official Codex threads error: ${e.message}`)
+      })
+      .finally(() => {
+        this.isSyncingOfficialCodex = false
+      })
   }
 
   aboutToDisappear(): void {
@@ -382,6 +526,24 @@ export struct ConversationListPage {
     })
   }
 
+  private getSubIcon(): HdsNavigationBadgeIconOptions {
+    if (this.tabType === TabType.CODEX) {
+      return {
+        content: {
+          icon: $r('sys.symbol.arrow_clockwise'),
+          action: () => { this.syncOfficialCodexThreadsIfNeeded() }
+        }
+      }
+    }
+
+    return {
+      content: {
+        icon: $r('sys.symbol.arrow_down_circle'),
+        action: () => { this.importSessions() }
+      }
+    }
+  }
+
   // 根据 Tab 类型判断会话是否属于该 Tab
   private isSessionForTab(session: Session): boolean {
     const providerId = session.aiTool || ''
@@ -410,6 +572,10 @@ export struct ConversationListPage {
 
     let filtered: Session[] = []
     for (let i = 0; i < this.sessions.length; i++) {
+      if (sessionStore.isSessionArchived(this.sessions[i].id) ||
+        (!!this.sessions[i].officialCodexThreadId && sessionStore.isOfficialCodexThreadArchived(this.sessions[i].officialCodexThreadId || ''))) {
+        continue
+      }
       if (this.isSessionForTab(this.sessions[i])) {
         filtered.push(this.sessions[i])
       }
@@ -429,17 +595,6 @@ export struct ConversationListPage {
         (s.workDir && s.workDir.toLowerCase().includes(lowerSearch))) {
         result.push(s)
         continue
-      }
-      // 匹配消息内容
-      const messages = sessionStore.messages.get(s.id)
-      if (messages) {
-        for (let j = 0; j < messages.length; j++) {
-          const msg = messages[j]
-          if (msg.content && msg.content.toLowerCase().includes(lowerSearch)) {
-            result.push(s)
-            break
-          }
-        }
       }
     }
     return result
@@ -467,6 +622,51 @@ export struct ConversationListPage {
     } else {
       return DateGroup.EARLIER
     }
+  }
+
+  private getSessionSortTimestamp(session: Session): number {
+    const modifiedAt = new Date(session.modifiedAt).getTime()
+    if (modifiedAt === modifiedAt && modifiedAt > 0) {
+      return modifiedAt
+    }
+    const createdAt = new Date(session.createdAt).getTime()
+    if (createdAt === createdAt && createdAt > 0) {
+      return createdAt
+    }
+    return 0
+  }
+
+  private getSessionSortPriority(session: Session): number {
+    const status = sessionStore.getSessionStatus(session.id)
+    if (status === 'thinking' || status === 'streaming' || status === 'tool_executing') {
+      return 4
+    }
+    if (status === 'permission_pending' || status === 'question_pending') {
+      return 3
+    }
+    if (status === 'completed') {
+      return 2
+    }
+    return 1
+  }
+
+  private compareSessionsForList(a: Session, b: Session): number {
+    const priorityDiff = this.getSessionSortPriority(b) - this.getSessionSortPriority(a)
+    if (priorityDiff !== 0) {
+      return priorityDiff
+    }
+    return this.getSessionSortTimestamp(b) - this.getSessionSortTimestamp(a)
+  }
+
+  private getRelativeSessionTimeFromMs(timestampMs: number): string {
+    if (timestampMs <= 0) return ''
+    const diff = Date.now() - timestampMs
+    if (diff < 60 * 1000) return '刚刚更新'
+    if (diff < 60 * 60 * 1000) return `${Math.floor(diff / 60000)}分钟前`
+    if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / 3600000)}小时前`
+    if (diff < 7 * 24 * 60 * 60 * 1000) return `${Math.floor(diff / 86400000)}天前`
+    const modified = new Date(timestampMs)
+    return `${modified.getMonth() + 1}/${modified.getDate()}`
   }
 
   private getGroupedSessionArray(): SessionGroup[] {
@@ -498,9 +698,7 @@ export struct ConversationListPage {
       sorted.push(filtered[i])
     }
 
-    sorted.sort((a, b) => {
-      return new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
-    })
+    sorted.sort((a, b) => this.compareSessionsForList(a, b))
 
     for (let i = 0; i < sorted.length; i++) {
       const session = sorted[i]
@@ -530,6 +728,187 @@ export struct ConversationListPage {
     }
 
     return result
+  }
+
+  private getSessionProjectName(session: Session): string {
+    const rawProject = (session.workDir && session.workDir.length > 0) ? session.workDir : session.projectPath
+    if (!rawProject || rawProject.length === 0 || rawProject === 'Codex Desktop') {
+      return '未知项目'
+    }
+
+    const parts = rawProject.split('/').filter((part: string) => part.length > 0)
+    if (parts.length === 0) {
+      return rawProject
+    }
+    return parts[parts.length - 1]
+  }
+
+  private getProjectGroupPriority(group: ProjectSessionGroup): number {
+    // 检查分组内是否有活跃线程
+    for (let i = 0; i < group.sessions.length; i++) {
+      const status = sessionStore.getSessionStatus(group.sessions[i].id)
+      if (status === 'thinking' || status === 'streaming' || status === 'tool_executing') {
+        return 4  // 最高优先级：有正在运行的线程
+      }
+      if (status === 'permission_pending' || status === 'question_pending') {
+        return 3  // 次高优先级：有等待权限的线程
+      }
+      if (status === 'completed') {
+        return 2  // 刚完成的线程
+      }
+    }
+    return 1  // 默认优先级
+  }
+
+  private getCodexProjectGroups(): ProjectSessionGroup[] {
+    const groups = new Map<string, ProjectSessionGroup>()
+    const sessions = this.getFilteredSessions()
+
+    for (let i = 0; i < sessions.length; i++) {
+      const session = sessions[i]
+      const projectName = this.getSessionProjectName(session)
+      let group = groups.get(projectName)
+      if (!group) {
+        group = new ProjectSessionGroup()
+        group.projectName = projectName
+        groups.set(projectName, group)
+      }
+      group.sessions.push(session)
+
+      const modifiedAt = this.getSessionSortTimestamp(session)
+      if (modifiedAt > group.latestModifiedAt) {
+        group.latestModifiedAt = modifiedAt
+        group.latestSessionTitle = session.title
+      }
+    }
+
+    const result = Array.from(groups.values())
+    // 先按活跃状态优先级排序，再按时间排序
+    result.sort((a: ProjectSessionGroup, b: ProjectSessionGroup) => {
+      // 未知项目放最后
+      if (a.projectName === '未知项目') return 1
+      if (b.projectName === '未知项目') return -1
+      // 按活跃优先级排序
+      const priorityDiff = this.getProjectGroupPriority(b) - this.getProjectGroupPriority(a)
+      if (priorityDiff !== 0) {
+        return priorityDiff
+      }
+      // 同优先级按时间排序
+      return b.latestModifiedAt - a.latestModifiedAt
+    })
+
+    for (let i = 0; i < result.length; i++) {
+      result[i].sessions.sort((a: Session, b: Session) => {
+        return this.compareSessionsForList(a, b)
+      })
+      if (result[i].sessions.length > 0) {
+        result[i].latestSessionTitle = result[i].sessions[0].title
+        result[i].latestModifiedAt = this.getSessionSortTimestamp(result[i].sessions[0])
+      }
+    }
+
+    return result
+  }
+
+  private ensureExpandedCodexProjects(): void {
+    if (this.tabType !== TabType.CODEX) {
+      return
+    }
+
+    if (!this.codexExpandedStateReady) {
+      return
+    }
+
+    if (this.expandedCodexProjects.size > 0) {
+      return
+    }
+
+    const groups = this.getCodexProjectGroups()
+    if (groups.length <= 0) {
+      return
+    }
+
+    const nextExpanded = new Set<string>()
+    for (let i = 0; i < groups.length; i++) {
+      nextExpanded.add(groups[i].projectName)
+    }
+    this.expandedCodexProjects = nextExpanded
+    void this.saveCodexProjectExpandState()
+  }
+
+  private isCodexProjectExpanded(projectName: string): boolean {
+    return this.expandedCodexProjects.has(projectName)
+  }
+
+  private toggleCodexProjectExpanded(projectName: string): void {
+    const nextExpanded = new Set<string>(this.expandedCodexProjects)
+    if (nextExpanded.has(projectName)) {
+      nextExpanded.delete(projectName)
+    } else {
+      nextExpanded.add(projectName)
+    }
+    this.expandedCodexProjects = nextExpanded
+    void this.saveCodexProjectExpandState()
+  }
+
+  private async loadCodexProjectExpandState(): Promise<void> {
+    if (this.tabType !== TabType.CODEX) {
+      this.codexExpandedStateReady = true
+      return
+    }
+
+    try {
+      const raw = await storageService.loadString(ConversationListPage.CODEX_PROJECT_EXPANDED_KEY, '')
+      const groups = this.getCodexProjectGroups()
+      if (raw.trim().length <= 0) {
+        const expanded = new Set<string>()
+        for (let i = 0; i < groups.length; i++) {
+          expanded.add(groups[i].projectName)
+        }
+        this.expandedCodexProjects = expanded
+      } else {
+        const parsed = JSON.parse(raw) as string[]
+        const expanded = new Set<string>()
+        for (let i = 0; i < parsed.length; i++) {
+          const name = (parsed[i] || '').trim()
+          if (name.length > 0) {
+            expanded.add(name)
+          }
+        }
+        for (let i = 0; i < groups.length; i++) {
+          const projectName = groups[i].projectName
+          if (!expanded.has(projectName) && raw.trim().length <= 0) {
+            expanded.add(projectName)
+          }
+        }
+        this.expandedCodexProjects = expanded
+      }
+    } catch (e) {
+      console.error(`[ConversationListPage] loadCodexProjectExpandState error: ${e}`)
+      const groups = this.getCodexProjectGroups()
+      const expanded = new Set<string>()
+      for (let i = 0; i < groups.length; i++) {
+        expanded.add(groups[i].projectName)
+      }
+      this.expandedCodexProjects = expanded
+    } finally {
+      this.codexExpandedStateReady = true
+      this.ensureExpandedCodexProjects()
+      this.refreshTrigger = Date.now()
+    }
+  }
+
+  private async saveCodexProjectExpandState(): Promise<void> {
+    if (this.tabType !== TabType.CODEX) {
+      return
+    }
+
+    try {
+      const values = Array.from(this.expandedCodexProjects.values())
+      await storageService.saveString(ConversationListPage.CODEX_PROJECT_EXPANDED_KEY, JSON.stringify(values))
+    } catch (e) {
+      console.error(`[ConversationListPage] saveCodexProjectExpandState error: ${e}`)
+    }
   }
 
   private getCopyableConversationId(session: Session): string {
@@ -567,6 +946,20 @@ export struct ConversationListPage {
       })
 
       Button() {
+        SymbolGlyph($r('sys.symbol.archivebox'))
+          .fontSize(19)
+          .fontColor([Color.White])
+      }
+      .width(50)
+      .height(50)
+      .borderRadius(25)
+      .backgroundColor(Theme.AccentOrange)
+      .onClick(async () => {
+        await sessionStore.archiveSession(session.id)
+        toastManager.success('已归档')
+      })
+
+      Button() {
         SymbolGlyph($r('sys.symbol.trash'))
           .fontSize(20)
           .fontColor([Color.White])
@@ -598,24 +991,49 @@ export struct ConversationListPage {
               this.LoadingState()
             }
           } else if (this.hasFilteredSessions()) {
-            ForEach(this.getGroupedSessionArray(), (group: SessionGroup) => {
-              ListItemGroup({
-                header: this.GroupHeader(group.groupName)
-              }) {
-                ForEach(group.sessions, (session: Session) => {
-                  ListItem() {
-                    SessionItemView({
-                      session: session,
-                      refreshTrigger: this.refreshTrigger
-                    })
+            if (this.tabType === TabType.CODEX) {
+              ForEach(this.getCodexProjectGroups(), (group: ProjectSessionGroup) => {
+                ListItemGroup({
+                  header: this.ProjectHeader(group, this.isCodexProjectExpanded(group.projectName))
+                }) {
+                  if (this.isCodexProjectExpanded(group.projectName)) {
+                    ForEach(group.sessions, (session: Session) => {
+                      ListItem() {
+                        SessionItemView({
+                          session: session,
+                          compactMode: false,
+                          refreshTrigger: this.refreshTrigger
+                        })
+                      }
+                      .swipeAction({
+                        end: this.SwipeActions(session),
+                        edgeEffect: SwipeEdgeEffect.Spring
+                      })
+                    }, (session: Session) => session.id)
                   }
-                  .swipeAction({
-                    end: this.SwipeActions(session),
-                    edgeEffect: SwipeEdgeEffect.Spring
-                  })
-                }, (session: Session) => session.id)
-              }
-            }, (group: SessionGroup) => group.groupName)
+                }
+              }, (group: ProjectSessionGroup) => group.projectName)
+            } else {
+              ForEach(this.getGroupedSessionArray(), (group: SessionGroup) => {
+                ListItemGroup({
+                  header: this.GroupHeader(group.groupName)
+                }) {
+                  ForEach(group.sessions, (session: Session) => {
+                    ListItem() {
+                      SessionItemView({
+                        session: session,
+                        compactMode: false,
+                        refreshTrigger: this.refreshTrigger
+                      })
+                    }
+                    .swipeAction({
+                      end: this.SwipeActions(session),
+                      edgeEffect: SwipeEdgeEffect.Spring
+                    })
+                  }, (session: Session) => session.id)
+                }
+              }, (group: SessionGroup) => group.groupName)
+            }
           } else {
             ListItem() {
               this.EmptyState()
@@ -633,7 +1051,7 @@ export struct ConversationListPage {
           title: {
             mainTitle: this.pageTitle,
           },
-          subIcon: this.subIcon,
+          subIcon: this.getSubIcon(),
           menu: { value: this.menus },
         },
         style: {
@@ -693,6 +1111,37 @@ export struct ConversationListPage {
   }
 
   @Builder
+  ProjectHeader(group: ProjectSessionGroup, expanded: boolean) {
+    Row({ space: 8 }) {
+      SymbolGlyph(expanded ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
+        .fontSize(12)
+        .fontColor([Theme.TextTertiary])
+
+      SymbolGlyph($r('sys.symbol.folder'))
+        .fontSize(14)
+        .fontColor([Theme.TextSecondary])
+
+      Text(group.projectName)
+        .fontSize(15)
+        .fontColor(Theme.TextSecondary)
+        .fontWeight(FontWeight.Medium)
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+      // 显示线程数量
+      Text(`${group.sessions.length} 条`)
+        .fontSize(12)
+        .fontColor(Theme.TextTertiary)
+    }
+    .width('100%')
+    .padding({ top: 14, bottom: 10, left: 4, right: 4 })
+    .onClick(() => {
+      this.toggleCodexProjectExpanded(group.projectName)
+    })
+  }
+
+  @Builder
   LoadingState() {
     ConversationListSkeleton()
   }
@@ -726,7 +1175,7 @@ export struct ConversationListPage {
   }
 
   private getEmptySubtitle(): string {
-    if (this.tabType === TabType.CODEX) return '点击左上角导入，或等待后台同步 Codex Desktop 对话'
+    if (this.tabType === TabType.CODEX) return '正在自动加载 Codex Desktop 对话'
     return '点击右上角 + 开始新对话'
   }
 

@@ -1467,7 +1467,7 @@ export class APIService {
       reasoningEffort: reasoningEffort || null,
       serviceTier: serviceTier || null
     })
-    return await this.request<Record<string, Object>>('/api/official-codex-remote/send', 'POST', body)
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/send', 'POST', body, 70000)
   }
   // MARK: - Official Codex Remote Control API
 
@@ -1490,7 +1490,7 @@ export class APIService {
    */
   async restoreCodexControllerSession(autoConnect: boolean = false): Promise<Record<string, Object>> {
     const body = JSON.stringify({ autoConnect })
-    return await this.request<Record<string, Object>>('/api/official-codex-remote/restore', 'POST', body, 10000)
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/restore', 'POST', body, 25000)
   }
 
   /**
@@ -1504,7 +1504,7 @@ export class APIService {
    * 连接 controller WebSocket
    */
   async connectCodexController(): Promise<Record<string, Object>> {
-    return await this.request<Record<string, Object>>('/api/official-codex-remote/connect', 'POST', '', 10000)
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/connect', 'POST', '', 25000)
   }
 
   /**
@@ -1531,6 +1531,19 @@ export class APIService {
       'GET',
       '',
       90000
+    )
+  }
+
+  /**
+   * 从本地 Codex session 文件读取线程历史，作为 Official turns API 的兜底
+   */
+  async getLocalCodexThreadMessages(threadId: string, limit: number = 400): Promise<Record<string, Object>> {
+    const encoded = encodeURIComponent(threadId)
+    return await this.request<Record<string, Object>>(
+      `/api/official-codex-remote/thread/${encoded}/local-messages?limit=${limit}`,
+      'GET',
+      '',
+      12000
     )
   }
 
@@ -1814,10 +1827,24 @@ export class APIService {
     return result
   }
 
+  // 获取 Codex 线程上下文容量信息
+  async getCodexThreadContext(threadId: string): Promise<Record<string, Object>> {
+    const encoded = encodeURIComponent(threadId)
+    return await this.request<Record<string, Object>>(
+      `/api/official-codex-remote/thread/${encoded}/context`,
+      'GET',
+      '',
+      8000
+    )
+  }
 
   // 快速获取本地线程列表（从 ~/.codex/sessions 读取）
-  async getLocalCodexThreads(limit: number = 80): Promise<Record<string, Object>> {
-    return await this.request<Record<string, Object>>('/api/official-codex-remote/local-threads?limit=' + limit, 'GET', '')
+  async getLocalCodexThreads(limit: number = 120, maxAgeDays: number = 15): Promise<Record<string, Object>> {
+    return await this.request<Record<string, Object>>(
+      `/api/official-codex-remote/local-threads?limit=${limit}&maxAgeDays=${maxAgeDays}`,
+      'GET',
+      ''
+    )
   }
 
 

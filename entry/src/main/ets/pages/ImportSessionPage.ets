@@ -86,7 +86,7 @@ struct ImportSessionPage {
       // 优先使用本地快速 API
       let data: Array<Record<string, Object>> = []
       try {
-        const localResponse = await apiService.getLocalCodexThreads(80)
+        const localResponse = await apiService.getLocalCodexThreads(120, 15)
         data = (localResponse['threads'] as Array<Record<string, Object>>) || []
       } catch {
         // 降级到远程 API
@@ -153,8 +153,10 @@ struct ImportSessionPage {
     })
 
     return this.sessions.filter((s: Session) => {
-      if (existingIds.has(s.id)) return false
-      if (s.officialCodexThreadId && existingOfficialThreadIds.has(s.officialCodexThreadId)) return false
+      const isArchived = sessionStore.isSessionArchived(s.id)
+      const isDeleted = sessionStore.isSessionLocallyDeleted(s.id)
+      if (existingIds.has(s.id) && !isArchived && !isDeleted) return false
+      if (s.officialCodexThreadId && existingOfficialThreadIds.has(s.officialCodexThreadId) && !isArchived && !isDeleted) return false
       return true
     })
   }
@@ -234,6 +236,13 @@ struct ImportSessionPage {
       // 导入 Official Codex 会话
       if (officialCodexSessions.length > 0) {
         await sessionStore.importOfficialCodexThreads(officialCodexSessions)
+        for (let i = 0; i < officialCodexSessions.length; i++) {
+          await sessionStore.unarchiveSession(
+            officialCodexSessions[i].id,
+            officialCodexSessions[i].officialCodexThreadId || ''
+          )
+          await sessionStore.restoreSessionFromDeleted(officialCodexSessions[i].id)
+        }
       }
 
       // 导入普通会话
@@ -253,6 +262,7 @@ struct ImportSessionPage {
           }
           // 从已删除列表中移除（恢复会话）
           await sessionStore.restoreSessionFromDeleted(session.id)
+          await sessionStore.unarchiveSession(session.id, session.officialCodexThreadId || '')
         }
         // 保存普通会话
         await sessionStore.saveSessionsToStorage()

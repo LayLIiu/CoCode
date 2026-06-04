@@ -22,7 +22,6 @@ import { toastManager } from '../services/ToastManager'
 import { notificationHelper } from '../services/NotificationHelper'
 import { fileService, FileInfo } from '../services/FileService'
 import { downloadService } from '../services/DownloadService'
-import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
 
 import { StatusIcon, WorkStatus } from '../components/StatusIcon'
 import { DotMatrixBackground } from '../components/DotMatrixBackground'
@@ -135,7 +134,13 @@ struct ChatDetailPage {
 
   // 流式文本本地缓冲（与 iOS 端一致）
   @State streamingThinking: string = ''
+  @State streamingAssistant: string = ''
+  @State typewriterMessageId: string = ''
+  @State typewriterText: string = ''
   private inThinkingBlock: boolean = false
+  private typewriterTimer: number = -1
+  private typewriterFullText: string = ''
+  private typewriterIndex: number = 0
 
   // 消息去重
   private recentlySentMessages: Set<string> = new Set()
@@ -150,7 +155,8 @@ struct ChatDetailPage {
   @State translateError: string = ''
 
   // 工具组折叠状态
-  @State toolGroupExpanded: boolean = true
+  @State expandedToolGroupIds: Set<string> = new Set()
+  @State expandedProcessBundleIds: Set<string> = new Set()
 
   // 强制重绘计数器（ArkTS @State 不追踪嵌套对象属性变更）
   @State messageUpdateCounter: number = 0
@@ -205,10 +211,18 @@ struct ChatDetailPage {
   private hasPlayedCompleteSound: boolean = false
 
   // 分页加载
-  @State displayedMessageCount: number = 50
+  @State displayedMessageCount: number = 40
   @State isLoadingMore: boolean = false
   @State isMessagesLoaded: boolean = false
   @State isListReady: boolean = false
+  private visibleMessagesCache: Message[] = []
+  private reversedVisibleMessagesCache: Message[] = []
+  private reversedRenderableMessagesCache: Message[] = []
+  private visibleMessagesTotalCount: number = 0
+  private visibleMessagesCacheKey: string = ''
+  private toolGroupCache: Map<string, Message[]> = new Map()
+  private toolGroupFirstIds: Set<string> = new Set()
+  private processBundleCache: Map<string, Message[]> = new Map()
 
   // 标题栏动态模糊（滚动时背景渐变透明）
   @State scrollOffset: number = 0
@@ -291,31 +305,8 @@ struct ChatDetailPage {
 
   // 更新输入栏收缩进度
   private updateInputCollapseProgress(yOffset: number): void {
-    // 键盘弹出时不执行收缩动画
-    if (this.isKeyboardVisible) {
-      return
-    }
-
-    // 如果不在查看历史模式，不更新收缩进度
-    if (!this.userIsViewingHistory) {
-      return
-    }
-
-    // 累积滚动距离
-    this.inputCollapseAccumulatedOffset += yOffset
-
-    // 限制累积值范围
-    if (this.inputCollapseAccumulatedOffset < 0) {
-      this.inputCollapseAccumulatedOffset = 0
-    } else if (this.inputCollapseAccumulatedOffset > this.inputCollapseThreshold) {
-      this.inputCollapseAccumulatedOffset = this.inputCollapseThreshold
-    }
-
-    // 计算进度 0-1
-    const newProgress = this.inputCollapseAccumulatedOffset / this.inputCollapseThreshold
-    if (newProgress !== this.animationProgress) {
-      this.animationProgress = newProgress
-    }
+    yOffset
+    return
   }
 
   // 重置输入栏收缩进度（回到底部时调用）
@@ -326,41 +317,17 @@ struct ChatDetailPage {
 
   // 获取收缩时的整体缩放比例
   private getCollapseScale(): number {
-    // 键盘弹出时保持正常大小
-    if (this.isKeyboardVisible) {
-      return 1.0
-    }
-    // 阶段1 (0-0.5): scale 从 1.0 降到 0.85
-    // 阶段2 (0.5-1): scale 从 0.85 降到 0.7
-    if (this.animationProgress <= this.buttonFadeThreshold) {
-      return 1.0 - (this.animationProgress / this.buttonFadeThreshold) * 0.15
-    } else {
-      return 0.85 - ((this.animationProgress - this.buttonFadeThreshold) / this.buttonFadeThreshold) * 0.15
-    }
+    return 1.0
   }
 
   // 获取按钮透明度
   private getButtonOpacity(): number {
-    // 键盘弹出时发送按钮保持可见
-    if (this.isKeyboardVisible) {
-      return 1.0
-    }
-    // 阶段1: 完全显示
-    // 阶段2: 逐渐淡出
-    if (this.animationProgress <= this.buttonFadeThreshold) {
-      return 1.0
-    } else {
-      return 1.0 - ((this.animationProgress - this.buttonFadeThreshold) / this.buttonFadeThreshold)
-    }
+    return 1.0
   }
 
   // 判断按钮是否应该显示
   private shouldShowButtons(): boolean {
-    // 键盘弹出时发送按钮要显示
-    if (this.isKeyboardVisible) {
-      return true
-    }
-    return this.animationProgress < 0.95
+    return true
   }
 
   // 斜杠命令列表
@@ -406,7 +373,7 @@ struct ChatDetailPage {
 
     // 定时拉取上下文使用率
     setTimeout(() => { if (!this.isDestroyed) this.fetchContextUsage() }, 1000)
-    this.contextPollTimer = setInterval(() => { if (!this.isDestroyed) this.fetchContextUsage() }, 15000)
+    this.contextPollTimer = setInterval(() => { if (!this.isDestroyed) this.fetchContextUsage() }, 30000)
 
     const draft = sessionStore.inputDrafts.get(this.sessionId)
     if (draft) {
@@ -425,6 +392,9 @@ struct ChatDetailPage {
     }
     // 清理流式缓冲，防止页面重新进入时残留 Head 被刷入 Tail 导致重复
     sessionStore.streamHeads.delete(this.sessionId)
+    this.streamingThinking = ''
+    this.streamingAssistant = ''
+    this.stopAssistantTypewriter()
     this.stopWorkTimer()
     if (this.touchTimer >= 0) {
       clearTimeout(this.touchTimer)
@@ -475,15 +445,54 @@ struct ChatDetailPage {
 
   private async fetchContextUsage(): Promise<void> {
     if (!this.sessionId) return
-    try {
-      const res = await apiService.getInspection(this.sessionId)
-      if (res) {
-        if (res.percentage > 0) this.contextUsage = res.percentage
-        if (res.model) this.contextModel = res.model
-        this.contextTotal = res.totalTokens
-        this.contextMax = res.maxTokens
+
+    // 检查是否是 Codex 会话
+    const session = sessionStore.sessions.find(s => s.id === this.sessionId)
+    const threadId = session?.officialCodexThreadId || sessionStore.getOfficialCodexThreadId(this.sessionId)
+
+    console.info(`[ChatDetailPage] fetchContextUsage: sessionId=${this.sessionId}, threadId=${threadId}`)
+
+    if (threadId) {
+      // Codex 会话：使用新的 context API
+      try {
+        const res = await apiService.getCodexThreadContext(threadId)
+        console.info(`[ChatDetailPage] getCodexThreadContext response: ${JSON.stringify(res)}`)
+        if (res && res['ok']) {
+          const context = res['context'] as Record<string, Object> | undefined
+          if (context) {
+            const available = context['available']
+            console.info(`[ChatDetailPage] context available=${available}, context=${JSON.stringify(context)}`)
+            if (available === true) {
+              const usedTokens = context['usedTokens'] as number
+              const windowTokens = context['windowTokens'] as number
+              const percent = context['percent'] as number
+              if (windowTokens > 0) {
+                this.contextMax = windowTokens
+                this.contextTotal = usedTokens || 0
+                this.contextUsage = percent || 0
+              }
+              const modelDisplayName = context['modelDisplayName'] as string
+              if (modelDisplayName) {
+                this.contextModel = modelDisplayName
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.error(`[ChatDetailPage] getCodexThreadContext error: ${e}`)
       }
-    } catch (e) { /* ignore */ }
+    } else {
+      // Claude 会话：使用 inspection 接口
+      try {
+        const res = await apiService.getInspection(this.sessionId)
+        if (res) {
+          if (res.percentage > 0) this.contextUsage = res.percentage
+          if (res.model) this.contextModel = res.model
+          this.contextTotal = res.totalTokens
+          this.contextMax = res.maxTokens
+        }
+      } catch (e) { /* ignore */ }
+    }
   }
 
   private getRouterParams(): void {
@@ -727,8 +736,9 @@ struct ChatDetailPage {
     const msgs = sessionStore.getDedupedMessages(this.sessionId)
     this.messages = [...msgs]
     this.lastMessagesSignature = this.buildMessagesSignature(msgs)
-    // 初始显示最后100条
-    this.displayedMessageCount = Math.min(100, this.messages.length)
+    // 初始只显示最近一小段，长对话上滑时再分批加载，避免首次渲染过重
+    this.displayedMessageCount = Math.min(40, this.messages.length)
+    this.refreshVisibleMessagesCache(msgs)
     // 倒序列表默认就在最新消息位置，无需scrollTo
     this.isMessagesLoaded = true
     this.isListReady = true
@@ -742,18 +752,31 @@ struct ChatDetailPage {
         const nextSignature = this.buildMessagesSignature(msgs)
         if (nextSignature === this.lastMessagesSignature) return
         this.lastMessagesSignature = nextSignature
+        const previousMessageCount = this.messages.length
+        const previousLastMessageId = previousMessageCount > 0 ? this.messages[previousMessageCount - 1].id : ''
         // 展开为新数组，确保 ArkTS @State 能检测到引用变化并触发重绘
         this.messages = [...msgs]
         this.messageUpdateCounter++
-        // 自动更新分页数，确保新消息不被分页截断
-        this.displayedMessageCount = Math.max(this.displayedMessageCount, msgs.length)
+        // 只补进新增消息，避免一条新回复把全部历史都拉进渲染窗口导致滚动卡顿
+        if (previousMessageCount > 0 && msgs.length > previousMessageCount) {
+          const delta = msgs.length - previousMessageCount
+          this.displayedMessageCount = Math.min(msgs.length, this.displayedMessageCount + delta)
+        } else if (previousMessageCount === 0) {
+          this.displayedMessageCount = Math.min(40, msgs.length)
+        }
+        this.refreshVisibleMessagesCache(msgs)
         // 更新最新消息 ID（用于条件过渡动画）
         if (msgs.length > 0) {
           this.latestMessageId = msgs[msgs.length - 1].id
+          this.maybeStartAssistantTypewriter(msgs[msgs.length - 1], previousLastMessageId)
         }
         // 兜底检测：消息已包含 assistant 回复但状态仍卡在工作状态
         if (msgs.length > 0) {
           const lastMsg = msgs[msgs.length - 1]
+          if (lastMsg.type === 'assistant' && this.streamingAssistant &&
+            this.isAssistantStreamingHandoffComplete(lastMsg.content || '')) {
+            this.streamingAssistant = ''
+          }
           if (lastMsg.type === 'assistant' && lastMsg.content && lastMsg.content.length > 0) {
             if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
                 this.chatStatus === 'tool_executing') {
@@ -784,6 +807,281 @@ struct ChatDetailPage {
         ':' + (message.isStreaming ? '1' : '0')
     }
     return signature
+  }
+
+  private refreshVisibleMessagesCache(sourceMessages?: Message[]): void {
+    const allMessages = sourceMessages && sourceMessages.length > 0
+      ? sourceMessages
+      : sessionStore.getDedupedMessages(this.sessionId)
+    const filtered = allMessages.filter(m =>
+      !(m.type === 'tool_use' && m.parentToolUseId) &&
+      !(this.isCodexDocumentFlow() && m.type === 'thinking'))
+    this.visibleMessagesTotalCount = filtered.length
+
+    const baseSignature = sourceMessages
+      ? this.lastMessagesSignature
+      : this.buildMessagesSignature(allMessages)
+    const cacheKey = baseSignature + '|display:' + this.displayedMessageCount
+    if (cacheKey === this.visibleMessagesCacheKey) {
+      return
+    }
+
+    const visible = filtered.length <= this.displayedMessageCount
+      ? filtered
+      : filtered.slice(filtered.length - this.displayedMessageCount)
+
+    this.visibleMessagesCache = visible
+    this.reversedVisibleMessagesCache = [...visible].reverse()
+    this.visibleMessagesCacheKey = cacheKey
+    this.rebuildToolGroupCache(visible)
+    this.rebuildRenderableMessagesCache()
+  }
+
+  private rebuildToolGroupCache(messages: Message[]): void {
+    this.toolGroupCache.clear()
+    this.toolGroupFirstIds.clear()
+
+    let index = 0
+    while (index < messages.length) {
+      const message = messages[index]
+      if (!this.isStandaloneToolGroupMessage(message)) {
+        index++
+        continue
+      }
+
+      const group: Message[] = []
+      let cursor = index
+      while (cursor < messages.length) {
+        const current = messages[cursor]
+        if (!this.isStandaloneToolGroupMessage(current)) {
+          break
+        }
+        group.push(current)
+        cursor++
+      }
+
+      if (group.length > 0) {
+        const firstReversed = group[group.length - 1]
+        this.toolGroupFirstIds.add(firstReversed.id)
+        for (let i = 0; i < group.length; i++) {
+          this.toolGroupCache.set(group[i].id, group)
+        }
+      }
+
+      index = cursor
+    }
+  }
+
+  private isStandaloneToolGroupMessage(message: Message): boolean {
+    if (message.type !== 'tool_use' && message.type !== 'tool_result') return false
+    if (message.parentToolUseId) return false
+    if (message.toolName === 'Agent' || message.toolName === 'AskUserQuestion') return false
+    return true
+  }
+
+  private rebuildRenderableMessagesCache(): void {
+    this.processBundleCache.clear()
+
+    if (this.isCodexDocumentFlow()) {
+      const chronological = this.buildCodexProcessRenderableMessages(this.visibleMessagesCache)
+      this.reversedRenderableMessagesCache = [...chronological].reverse()
+      return
+    }
+
+    const result: Message[] = []
+    for (let i = 0; i < this.reversedVisibleMessagesCache.length; i++) {
+      const message = this.reversedVisibleMessagesCache[i]
+      if (this.isStandaloneToolGroupMessage(message) && !this.toolGroupFirstIds.has(message.id)) {
+        continue
+      }
+      result.push(message)
+    }
+    this.reversedRenderableMessagesCache = result
+  }
+
+  private buildCodexProcessRenderableMessages(messages: Message[]): Message[] {
+    const result: Message[] = []
+    let index = 0
+    while (index < messages.length) {
+      const message = messages[index]
+      if (message.type !== 'user') {
+        this.appendRenderableMessage(result, message)
+        index++
+        continue
+      }
+
+      const turn: Message[] = [message]
+      let cursor = index + 1
+      while (cursor < messages.length && messages[cursor].type !== 'user') {
+        turn.push(messages[cursor])
+        cursor++
+      }
+      this.appendCodexTurnRenderableMessages(result, turn, cursor >= messages.length)
+      index = cursor
+    }
+    return result
+  }
+
+  private appendCodexTurnRenderableMessages(result: Message[], turn: Message[], isLatestTurn: boolean): void {
+    if (turn.length <= 1) {
+      result.push(turn[0])
+      if (this.shouldShowRunningProcessBundle(isLatestTurn)) {
+        result.push(this.createProcessBundleMessage(turn[0], turn[0], [], true))
+      }
+      return
+    }
+
+    let finalAssistantIndex = -1
+    for (let i = turn.length - 1; i >= 1; i--) {
+      const message = turn[i]
+      if (message.type === 'assistant' && (message.content || '').trim().length > 0) {
+        finalAssistantIndex = i
+        break
+      }
+    }
+
+    if (finalAssistantIndex <= 1 || !this.shouldFoldCodexTurn(turn, finalAssistantIndex, isLatestTurn)) {
+      if (this.shouldShowRunningProcessBundle(isLatestTurn)) {
+        result.push(turn[0])
+        result.push(this.createProcessBundleMessage(turn[0], turn[turn.length - 1], turn.slice(1), true))
+      } else {
+        for (let i = 0; i < turn.length; i++) {
+          this.appendRenderableMessage(result, turn[i])
+        }
+      }
+      return
+    }
+
+    const processMessages = turn.slice(1, finalAssistantIndex)
+    result.push(turn[0])
+    const processMessage = this.createProcessBundleMessage(turn[0], turn[finalAssistantIndex], processMessages, false)
+    result.push(processMessage)
+    result.push(turn[finalAssistantIndex])
+
+    for (let i = finalAssistantIndex + 1; i < turn.length; i++) {
+      this.appendRenderableMessage(result, turn[i])
+    }
+  }
+
+  private shouldFoldCodexTurn(turn: Message[], finalAssistantIndex: number, isLatestTurn: boolean): boolean {
+    if (finalAssistantIndex !== turn.length - 1) return false
+    if (!isLatestTurn) return true
+    return this.chatStatus === 'completed' || this.chatStatus === 'idle'
+  }
+
+  private shouldShowRunningProcessBundle(isLatestTurn: boolean): boolean {
+    if (!isLatestTurn) return false
+    return this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
+      this.chatStatus === 'tool_executing' || this.chatStatus === 'permission_pending' ||
+      this.chatStatus === 'question_pending'
+  }
+
+  private appendRenderableMessage(result: Message[], message: Message): void {
+    if (this.isStandaloneToolGroupMessage(message) && !this.toolGroupFirstIds.has(message.id)) {
+      return
+    }
+    result.push(message)
+  }
+
+  private createProcessBundleMessage(userMessage: Message, finalAssistant: Message, processMessages: Message[],
+    isRunning: boolean): Message {
+    const id = 'process-bundle-' + userMessage.id + '-' + finalAssistant.id
+    this.processBundleCache.set(id, processMessages)
+    return {
+      id,
+      type: 'system',
+      content: '',
+      timestamp: finalAssistant.timestamp,
+      toolStatus: isRunning ? 'running' : 'completed'
+    }
+  }
+
+  private isProcessBundleMessage(message: Message): boolean {
+    return message.type === 'system' && message.id.startsWith('process-bundle-')
+  }
+
+  private collectProcessBundle(message: Message): Message[] {
+    const cached = this.processBundleCache.get(message.id)
+    return cached && cached.length > 0 ? cached : []
+  }
+
+  private isProcessBundleExpanded(message: Message): boolean {
+    if (message.toolStatus === 'running') return true
+    return this.expandedProcessBundleIds.has(message.id)
+  }
+
+  private toggleProcessBundle(id: string): void {
+    const next = new Set(this.expandedProcessBundleIds)
+    if (next.has(id)) {
+      next.delete(id)
+    } else {
+      next.add(id)
+    }
+    this.expandedProcessBundleIds = next
+  }
+
+  private isFirstProcessToolInChronologicalGroup(messages: Message[], index: number): boolean {
+    if (index < 0 || index >= messages.length) return false
+    const current = messages[index]
+    if (!this.isStandaloneToolGroupMessage(current)) return false
+    if (index === 0) return true
+    return !this.isStandaloneToolGroupMessage(messages[index - 1])
+  }
+
+  private getProcessBundleLabel(message: Message, messages: Message[]): string {
+    const elapsed = message.toolStatus === 'running'
+      ? this.elapsedSeconds
+      : this.getToolGroupElapsedSeconds(messages)
+    const elapsedLabel = elapsed > 0 ? '已处理 ' + this.formatElapsed(elapsed) : '已处理'
+    if (message.toolStatus === 'running') {
+      const runningSummary = this.getRunningProcessSummary(messages)
+      if (runningSummary.length > 0) return elapsedLabel + ' · ' + runningSummary
+    }
+    return elapsedLabel
+  }
+
+  private getRunningProcessSummary(messages: Message[]): string {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i]
+      if (message.type === 'tool_use' && message.toolStatus === 'running') {
+        return this.getRunningToolSummary(message)
+      }
+    }
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i]
+      if (message.type === 'tool_use') {
+        return this.getRunningToolSummary(message)
+      }
+    }
+    return ''
+  }
+
+  private getRunningToolSummary(message: Message): string {
+    const toolName = message.toolName || ''
+    const input = message.toolInput || {}
+    const filePath = this.getToolFilePath(message)
+    const fileName = filePath.length > 0 ? this.getDisplayFileName(filePath) : ''
+    const query = this.getToolSearchQuery(input)
+    if (toolName === 'Read') return fileName.length > 0 ? '正在读取 ' + fileName : '正在读取文件'
+    if (toolName === 'Grep' || toolName === 'Glob') {
+      return query.length > 0 ? '正在搜索 ' + query : '正在搜索'
+    }
+    if (toolName === 'Bash') {
+      const cmd = this.getBashCommand(message)
+      return cmd.length > 0 ? '正在运行 ' + this.truncateInlineSummary(cmd, 72) : '正在运行命令'
+    }
+    if (toolName === 'Edit') return fileName.length > 0 ? '正在修改 ' + fileName : '正在修改文件'
+    if (toolName === 'Write') return fileName.length > 0 ? '正在写入 ' + fileName : '正在写入文件'
+    if (toolName === 'WebFetch') return query.length > 0 ? '正在获取 ' + query : '正在获取页面'
+    if (toolName === 'WebSearch') return query.length > 0 ? '正在网页搜索 ' + query : '正在网页搜索'
+    if (toolName.length > 0) return '正在调用 ' + toolName
+    return '正在执行操作'
+  }
+
+  private truncateProcessAssistantText(content: string): string {
+    const normalized = content.trim()
+    if (normalized.length <= 220) return normalized
+    return normalized.substring(0, 220) + '...'
   }
 
   private statusChangedListener = (sid: string, status: SessionStatus) => {
@@ -1011,8 +1309,12 @@ struct ChatDetailPage {
         if (this.chatStatus === 'idle' || this.chatStatus === 'completed') {
           this.startWorkTimer()
         }
-        // 回复内容改为生成完成后直接弹出气泡，不流式显示
-        // 文本缓冲仍在 SessionStore.streamHeads 中积累，message_complete 时刷入 tail
+        if (msg.blockType === 'text') {
+          this.streamingAssistant = ''
+          if (!this.userIsViewingHistory && !this.isUserTouchingList) {
+            this.scrollToBottom()
+          }
+        }
         break
 
       case 'content_delta':
@@ -1020,8 +1322,12 @@ struct ChatDetailPage {
         if (this.chatStatus === 'idle' || this.chatStatus === 'completed') {
           this.startWorkTimer()
         }
-        // 回复内容不流式显示，SessionStore.streamHeads 在后台积累
-        // 等待 message_complete → flushHeadToTail → 完整 MessageBubble 出现
+        if (msg.text) {
+          this.streamingAssistant += msg.text
+          if (!this.userIsViewingHistory && !this.isUserTouchingList) {
+            this.scrollToBottom()
+          }
+        }
         break
 
       case 'thinking':
@@ -1048,6 +1354,7 @@ struct ChatDetailPage {
       case 'tool_use_complete':
         // 流式缓冲已由 SessionStore.flushHeadToTail 持久化，这里只需要清理本地的 thinking @State
         this.streamingThinking = ''
+        this.streamingAssistant = ''
         this.inThinkingBlock = false
         break
 
@@ -1058,6 +1365,7 @@ struct ChatDetailPage {
       case 'message_complete':
         // 流式缓冲已由 SessionStore.flushHeadToTail 持久化，这里只需要清理本地的 thinking @State
         this.streamingThinking = ''
+        this.streamingAssistant = ''
         this.inThinkingBlock = false
         // 状态由 SessionStore 更新，这里只停止计时器和更新 token
         this.stopWorkTimer()
@@ -1075,6 +1383,7 @@ struct ChatDetailPage {
       case 'permission_request':
         // 流式缓冲已由 SessionStore.flushHeadToTail 持久化，这里只需要清理本地的 thinking @State
         this.streamingThinking = ''
+        this.streamingAssistant = ''
         // 状态由 SessionStore 更新
         // 重置 AskUserQuestion 相关状态
         this.questionHasSubmitted = false
@@ -1088,6 +1397,7 @@ struct ChatDetailPage {
       case 'questions':
         // 流式缓冲已由 SessionStore.flushHeadToTail 持久化，这里只需要清理本地的 thinking @State
         this.streamingThinking = ''
+        this.streamingAssistant = ''
         // 状态由 SessionStore 更新
         this.vibrateAlert()
         break
@@ -1197,6 +1507,17 @@ struct ChatDetailPage {
   private getSessionProjectText(): string {
     const session = sessionStore.sessions.find((s: Session) => s.id === this.sessionId)
     return session?.projectPath || session?.workDir || '当前会话'
+  }
+
+  private getSessionProviderId(): string {
+    const session = sessionStore.sessions.find((s: Session) => s.id === this.sessionId)
+    return session?.aiTool || ''
+  }
+
+  private isCodexDocumentFlow(): boolean {
+    const session = sessionStore.sessions.find((s: Session) => s.id === this.sessionId)
+    if (session?.officialCodexThreadId) return true
+    return (session?.aiTool || '').toLowerCase().indexOf('codex') >= 0
   }
 
   private getSessionProviderText(): string {
@@ -1334,28 +1655,52 @@ struct ChatDetailPage {
     return `${hours}时${remainMins}分`
   }
 
+  private getMessageTimeMs(message: Message): number {
+    const value = new Date(message.timestamp).getTime()
+    return Number.isFinite(value) ? value : 0
+  }
+
+  private getToolGroupElapsedSeconds(messages: Message[]): number {
+    if (messages.length <= 0) return 0
+    let start = 0
+    let end = 0
+    for (let i = 0; i < messages.length; i++) {
+      const time = this.getMessageTimeMs(messages[i])
+      if (time <= 0) continue
+      if (start <= 0 || time < start) start = time
+      if (time > end) end = time
+    }
+    if (start <= 0) return 0
+    if (!this.isToolGroupComplete(messages) && this.elapsedSeconds > 0) {
+      return this.elapsedSeconds
+    }
+    if (end <= start) return 0
+    return Math.max(1, Math.floor((end - start) / 1000))
+  }
+
+  private getToolGroupProcessLabel(messages: Message[]): string {
+    const elapsed = this.getToolGroupElapsedSeconds(messages)
+    const elapsedText = elapsed > 0 ? this.formatElapsed(elapsed) : ''
+    if (!this.isToolGroupComplete(messages)) {
+      return elapsedText.length > 0 ? '已处理 ' + elapsedText : '正在处理'
+    }
+    return elapsedText.length > 0 ? '过程已折叠 · ' + elapsedText : '过程已折叠'
+  }
+
   private getBottomSpacerHeight(): number {
     const inputAreaHeight = 120
-    // 吉祥物气泡高度（需要额外留白）
-    const indicatorHeight = this.shouldShowStreamingIndicator() ? 30 : 0
     const tasks = this.taskItems
     if (tasks.length === 0 || sessionStore.taskBarDismissed) {
-      return inputAreaHeight + indicatorHeight
+      return inputAreaHeight
     }
     // 折叠状态：分隔线 + 标题行(~44) + 间距 + 输入框
     const collapsedHeight = 57
     if (!sessionStore.taskBarExpanded) {
-      return inputAreaHeight + collapsedHeight + indicatorHeight
+      return inputAreaHeight + collapsedHeight
     }
     // 展开状态：折叠高度 + 任务列表行数
     const expandedHeight = Math.min(tasks.length * 50, 200)
-    return inputAreaHeight + collapsedHeight + expandedHeight + indicatorHeight
-  }
-
-  private shouldShowStreamingIndicator(): boolean {
-    return this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
-      this.chatStatus === 'tool_executing' || this.chatStatus === 'completed' ||
-      this.chatStatus === 'permission_pending' || this.chatStatus === 'question_pending'
+    return inputAreaHeight + collapsedHeight + expandedHeight
   }
 
   @Builder
@@ -1812,25 +2157,32 @@ struct ChatDetailPage {
           .rotate({ angle: 180 })
 
           // 流式思考实时渲染（回复内容不流式显示，生成完后直接弹完整气泡）
-          if (this.streamingThinking) {
+          if (this.streamingThinking && !this.isCodexDocumentFlow()) {
             ListItem() {
               this.StreamingThinkingBubble()
             }
             .rotate({ angle: 180 })
           }
 
-          // 消息倒序排列（最新在前=视觉底部），工具消息合组
-          ForEach([...this.getVisibleMessages()].reverse(), (message: Message) => {
+          if (this.shouldRenderStreamingAssistant()) {
             ListItem() {
-              if (message.type === 'tool_use' && (message.toolName === 'Agent' || message.toolName === 'AskUserQuestion')) {
+              this.MessageBubble(this.getStreamingAssistantMessage())
+            }
+            .rotate({ angle: 180 })
+          }
+
+          // 消息倒序排列（最新在前=视觉底部），工具消息合组
+          ForEach(this.getReversedRenderableMessages(), (message: Message) => {
+            ListItem() {
+              if (this.isProcessBundleMessage(message)) {
+                this.ProcessBundleBubble(message, this.collectProcessBundle(message))
+              } else if (message.type === 'tool_use' && (message.toolName === 'Agent' || message.toolName === 'AskUserQuestion')) {
                 // Agent / AskUserQuestion 有特殊渲染，不参与合组
                 this.MessageBubble(message)
               } else if ((message.type === 'tool_use' || message.type === 'tool_result') &&
                 !message.parentToolUseId) {
-                // 工具组：仅在组内第一条渲染 ToolGroupBubble，其余跳过
-                if (this.isFirstToolInReverseGroup(message)) {
-                  this.ToolGroupBubble(this.collectToolGroup(message))
-                }
+                // 工具组：渲染缓存中已经过滤掉组内重复项
+                this.ToolGroupBubble(this.collectToolGroup(message))
               } else {
                 this.MessageBubble(message)
               }
@@ -1840,15 +2192,11 @@ struct ChatDetailPage {
           }, (message: Message) => {
             // 生成稳定且唯一的 key，防止重复渲染
             if (message.toolUseId && message.type === 'tool_use') {
-              return 'tool_' + message.toolUseId + '_' +
-                (message.toolResult || '').length + '_' +
-                (message.toolStatus || '') + '_' +
+              return 'tool_' + message.toolUseId + '_' + (message.toolStatus || '') + '_' +
                 (message.isStreaming ? 'streaming' : 'done')
             }
             if (message.toolUseId && message.type === 'tool_result') {
-              return 'result_' + message.toolUseId + '_' +
-                (message.toolResult || message.content || '').length + '_' +
-                (message.toolStatus || '')
+              return 'result_' + message.toolUseId + '_' + (message.toolStatus || '')
             }
             if (message.type === 'permission_request') {
               return message.id + '_' + (message.isPermissionHandled ? 'done' : 'pending')
@@ -1856,10 +2204,11 @@ struct ChatDetailPage {
             if (message.type === 'question') {
               return message.id + '_' + (message.isQuestionAnswered ? 'done' : 'pending')
             }
+            if (this.isProcessBundleMessage(message)) {
+              return message.id + '_' + (this.expandedProcessBundleIds.has(message.id) ? 'open' : 'closed')
+            }
             if (message.id && !message.id.startsWith('stream-') && !message.id.startsWith('thinking-')) {
-              return message.id + '_' + (message.content || '').length + '_' +
-                (message.toolResult || '').length + '_' +
-                (message.toolStatus || '') + '_' +
+              return message.id + '_' + (message.toolStatus || '') + '_' +
                 (message.isStreaming ? 'streaming' : 'done')
             }
             return message.type + '_' + (message.content || message.toolResult || '').substring(0, 30)
@@ -1936,7 +2285,7 @@ struct ChatDetailPage {
         })
         .onDidScroll((xOffset: number, yOffset: number) => {
           // 翻转后滚动方向反转
-          if (-yOffset !== this.scrollOffset) {
+          if (Math.abs((-yOffset) - this.scrollOffset) >= 4) {
             this.scrollOffset = -yOffset
           }
           // 更新输入栏收缩进度
@@ -2017,18 +2366,6 @@ struct ChatDetailPage {
 
       // 底部悬浮区域：任务面板 + 最新消息按钮 + 输入框
       Column({ space: 0 }) {
-        // 吉祥物 + 用时（固定左下角，不随消息列表滚动）
-        if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
-          this.chatStatus === 'tool_executing' || this.chatStatus === 'completed' ||
-          this.chatStatus === 'permission_pending' ||
-          this.chatStatus === 'question_pending') {
-          Row() {
-            this.StreamingIndicator()
-          }
-          .width('100%')
-          .padding({ left: 0 })
-        }
-
         // 任务面板
         this.TaskBarView()
 
@@ -2174,86 +2511,6 @@ struct ChatDetailPage {
     }
   }
 
-  @Builder
-  StreamingIndicatorContent() {
-    Row({ space: 6 }) {
-      // 像素吉祥物 — 根据工作状态实时变化
-      PixelMascot({
-        mascotSize: 27,
-        status: this.getMascotStatus(),
-        bodyColor: getMascotColorForSession(this.sessionId),
-        mascotType: getMascotTypeForProvider(this.getSessionProviderId())
-      })
-
-      // 状态文字
-      Text(this.getStatusText())
-        .fontSize(11)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(Theme.TextSecondary)
-
-      // 已用时间
-      if (this.elapsedSeconds > 0) {
-        Text(this.formatElapsed(this.elapsedSeconds))
-          .fontSize(10)
-          .fontColor(Theme.TextTertiary)
-      }
-
-      // Token 数
-      if (this.tokenUsage > 0) {
-        Text(`· ↓ ${this.tokenUsage}`)
-          .fontSize(10)
-          .fontColor(Theme.TextTertiary)
-      }
-    }
-    .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-    .translate({ x: -10 })
-  }
-
-  @Builder
-  StreamingIndicator() {
-    Row() {
-      Stack() {
-        HdsTabs() {
-          TabContent()
-            .tabBar(this.StreamingIndicatorContent())
-        }
-        .width(120 + 32 * 2)
-        .height(40 + 16 * 2)
-        .padding({
-          left: 32,
-          right: 32,
-          top: 16,
-          bottom: 16
-        })
-        .barWidth(120)
-        .barHeight(40)
-        .barOverlap(true)
-        .barPosition(BarPosition.End)
-        .scrollable(false)
-        .animationDuration(0)
-        .barFloatingStyle({
-          gradientMask: {
-            maskColor: 'rgba(0,0,0,0)'
-          },
-          barBottomMargin: 0,
-          systemMaterialEffect: {
-            materialType: hdsMaterial.MaterialType.IMMERSIVE,
-            materialLevel: hdsMaterial.MaterialLevel.EXQUISITE
-          }
-        })
-        .backgroundColor(Color.Transparent)
-        .border({ width: 0 })
-        .shadow({ radius: 0 })
-      }
-      .clip(false)
-      .translate({ x: -35, y: 30 })
-
-      Blank()
-    }
-    .width('100%')
-    .margin({ bottom: Theme.SpacingXS })
-  }
-
   // 流式思考气泡是否展开
   private isStreamingThinkingExpanded(): boolean {
     return this.expandedThinkingIds.has('streaming-thinking')
@@ -2289,46 +2546,20 @@ struct ChatDetailPage {
     return message.id === this.latestMessageId
   }
 
-  // 映射 chatStatus 到 MascotStatus
-  private getMascotStatus(): MascotStatus {
-    switch (this.chatStatus) {
-      case 'thinking':
-      case 'streaming':
-      case 'tool_executing':
-        return MascotStatus.PROCESSING
-      case 'permission_pending':
-      case 'question_pending':
-        return MascotStatus.WAITING_APPROVAL
-      case 'completed':
-        return MascotStatus.COMPLETED
-      default:
-        return MascotStatus.IDLE
-    }
-  }
-
-  private getSessionProviderId(): string {
-    const session = sessionStore.sessions.find((s: Session) => s.id === this.sessionId)
-    return session?.aiTool || ''
-  }
-
   // 获取可见消息（分页 + 展示层内容去重），过滤掉 Agent 子工具（由 AgentToolUseBubble 嵌套渲染）
   private getVisibleMessages(): Message[] {
-    const renderTick = this.messageUpdateCounter
-    // 始终以 Store 的去重视图为准，避免页面本地状态和同步后的 Store 原始数组短暂不一致。
-    const dedupedMessages = sessionStore.getDedupedMessages(this.sessionId)
-    const allMessages = dedupedMessages.length > 0 ? dedupedMessages : this.messages
-    // 过滤：排除有 parentToolUseId 的子工具，它们在 Agent 卡片内嵌套渲染
-    const filtered = allMessages.filter(m => !(m.type === 'tool_use' && m.parentToolUseId))
-    // DEBUG: 统计 tool_use 消息
-    const toolCount = filtered.filter(m => m.type === 'tool_use').length
-    console.info(`[ChatDetailPage] getVisibleMessages: tick=${renderTick}, total=${allMessages.length}, filtered=${filtered.length}, tool_use=${toolCount}, displayedMessageCount=${this.displayedMessageCount}`)
-    if (filtered.length <= this.displayedMessageCount) {
-      return filtered
-    }
-    const sliced = filtered.slice(filtered.length - this.displayedMessageCount)
-    const slicedToolCount = sliced.filter(m => m.type === 'tool_use').length
-    console.info(`[ChatDetailPage] getVisibleMessages: SLICED to ${sliced.length}, tool_use=${slicedToolCount}`)
-    return sliced
+    this.refreshVisibleMessagesCache()
+    return this.visibleMessagesCache
+  }
+
+  private getReversedVisibleMessages(): Message[] {
+    this.refreshVisibleMessagesCache()
+    return this.reversedVisibleMessagesCache
+  }
+
+  private getReversedRenderableMessages(): Message[] {
+    this.refreshVisibleMessagesCache()
+    return this.reversedRenderableMessagesCache
   }
 
   /**
@@ -2338,30 +2569,8 @@ struct ChatDetailPage {
    * Agent / AskUserQuestion 有特殊渲染，不参与合组。
    */
   private isFirstToolInReverseGroup(message: Message): boolean {
-    if (message.type !== 'tool_use' && message.type !== 'tool_result') return false
-    if (message.parentToolUseId) return false
-    if (message.toolName === 'Agent' || message.toolName === 'AskUserQuestion') return false
-    const reversed = [...this.getVisibleMessages()].reverse()
-    let idx = reversed.indexOf(message)
-    // 引用不匹配时用 ID 回退（组件重建后引用会变）
-    if (idx < 0) {
-      for (let i = 0; i < reversed.length; i++) {
-        if (reversed[i].id === message.id) { idx = i; break }
-      }
-    }
-    if (idx <= 0) {
-      console.info(`[ChatDetailPage] isFirstToolInReverseGroup=true id=${message.id} toolName=${message.toolName} idx=${idx}`)
-      return true
-    }
-    const prev = reversed[idx - 1]
-    // Agent / AskUserQuestion 会打断连续的工具组
-    if (prev.toolName === 'Agent' || prev.toolName === 'AskUserQuestion') {
-      console.info(`[ChatDetailPage] isFirstToolInReverseGroup=true(id=${message.id}) prev is Agent`)
-      return true
-    }
-    const result = prev.type !== 'tool_use' && prev.type !== 'tool_result'
-    console.info(`[ChatDetailPage] isFirstToolInReverseGroup=${result} id=${message.id} idx=${idx} prevType=${prev.type}`)
-    return result
+    this.refreshVisibleMessagesCache()
+    return this.toolGroupFirstIds.has(message.id)
   }
 
   /**
@@ -2370,66 +2579,24 @@ struct ChatDetailPage {
    * 先向后找到组起点，再向前收集全部，解决逆序渲染时 first 是组内最后一条的问题。
    */
   private collectToolGroup(anyToolInGroup: Message): Message[] {
-    const group: Message[] = []
-    // 必须使用当前可见的去重消息源；直接读取 sessionStore.messages 会绕过展示层去重，
-    // 页面重进后 Claude 的本地流式消息和服务端历史消息可能在工具组里重复出现。
-    const allMessages = this.getVisibleMessages()
-    // 先用引用匹配，失败后用 ID 回退（组件重建后引用会变）
-    let startIdx = allMessages.indexOf(anyToolInGroup)
-    if (startIdx < 0) {
-      startIdx = 0
-      for (let i = 0; i < allMessages.length; i++) {
-        if (allMessages[i].id === anyToolInGroup.id) {
-          startIdx = i
-          break
-        }
-      }
+    this.refreshVisibleMessagesCache()
+    const cached = this.toolGroupCache.get(anyToolInGroup.id)
+    if (cached && cached.length > 0) {
+      return cached
     }
-    // 仍找不到 → 只返回自身
-    if (startIdx >= allMessages.length || allMessages[startIdx].id !== anyToolInGroup.id) {
-      console.warn(`[ChatDetailPage] collectToolGroup: message not found in store, returning self only. id=${anyToolInGroup.id}`)
-      return [anyToolInGroup]
-    }
-
-    // 向后找组的起点（第一个 tool 消息）
-    let groupStart = startIdx
-    for (let i = startIdx - 1; i >= 0; i--) {
-      const m = allMessages[i]
-      if ((m.type === 'tool_use' || m.type === 'tool_result') &&
-        !m.parentToolUseId &&
-        m.toolName !== 'Agent' &&
-        m.toolName !== 'AskUserQuestion') {
-        groupStart = i
-      } else {
-        break
-      }
-    }
-
-    // 从起点向前收集全部工具消息
-    for (let i = groupStart; i < allMessages.length; i++) {
-      const m = allMessages[i]
-      if ((m.type === 'tool_use' || m.type === 'tool_result') &&
-        !m.parentToolUseId &&
-        m.toolName !== 'Agent' &&
-        m.toolName !== 'AskUserQuestion') {
-        group.push(m)
-      } else {
-        break
-      }
-    }
-    console.info(`[ChatDetailPage] collectToolGroup: startIdx=${startIdx} groupStart=${groupStart} totalMsgs=${allMessages.length} groupSize=${group.length} toolNames=[${group.filter(m=>m.type==='tool_use').map(m=>m.toolName).join(',')}]`)
-    return group
+    return [anyToolInGroup]
   }
 
   private hasMoreMessages(): boolean {
-    return this.messages.length > this.displayedMessageCount
+    this.refreshVisibleMessagesCache()
+    return this.visibleMessagesTotalCount > this.displayedMessageCount
   }
 
   // 计算 List 总项数（用于 onScrollIndex）
   private getListItemCount(): number {
     let count = 2 // 顶部留白 + 底部占位
-    count += this.getVisibleMessages().length
-    if (this.streamingThinking) count++
+    count += this.getReversedRenderableMessages().length
+    if (this.streamingThinking && !this.isCodexDocumentFlow()) count++
     if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
       this.chatStatus === 'tool_executing' || this.chatStatus === 'permission_pending' ||
       this.chatStatus === 'question_pending') count++
@@ -2441,9 +2608,10 @@ struct ChatDetailPage {
     if (this.isLoadingMore) return
     this.isLoadingMore = true
     setTimeout(() => {
-      const increment = 100
+      const increment = 40
       const newCount = Math.min(this.displayedMessageCount + increment, this.messages.length)
       this.displayedMessageCount = newCount
+      this.refreshVisibleMessagesCache(this.messages)
       this.isLoadingMore = false
     }, 100)
   }
@@ -2459,7 +2627,7 @@ struct ChatDetailPage {
         if (message.type === 'user') {
           this.UserBubble(message)
         } else if (message.type === 'assistant') {
-          this.AssistantBubble(message)
+          this.AssistantBubble(this.getAssistantDisplayMessage(message))
         } else if (message.type === 'thinking') {
           this.ThinkingBubble(message)
         } else if (message.type === 'tool_use') {
@@ -2487,7 +2655,7 @@ struct ChatDetailPage {
           this.TaskSummaryBubble(message)
         }
 
-        if (message.type !== 'user') {
+        if (message.type !== 'user' && !this.isCodexDocumentFlow()) {
           Blank().layoutWeight(1)
         }
       }
@@ -2497,132 +2665,284 @@ struct ChatDetailPage {
     .margin({ bottom: Theme.SpacingMD })
   }
 
+  private getStreamingAssistantMessage(): Message {
+    return {
+      id: 'streaming-assistant',
+      type: 'assistant',
+      content: this.streamingAssistant,
+      timestamp: new Date().toISOString(),
+      isStreaming: true
+    }
+  }
+
+  private shouldRenderStreamingAssistant(): boolean {
+    if (!this.streamingAssistant) return false
+    if (this.messages.length <= 0) return true
+    const lastMsg = this.messages[this.messages.length - 1]
+    if (lastMsg.type !== 'assistant' || !lastMsg.content) return true
+    return !this.isAssistantStreamingHandoffComplete(lastMsg.content)
+  }
+
+  private isAssistantStreamingHandoffComplete(finalContent: string): boolean {
+    const streaming = this.streamingAssistant.trim()
+    const finalText = finalContent.trim()
+    if (!streaming || !finalText) return false
+    if (streaming === finalText) return true
+    if (finalText.includes(streaming)) return true
+    if (streaming.length >= 24 && this.isOverlappingAssistantText(streaming, finalText)) {
+      return true
+    }
+    return false
+  }
+
+  private isOverlappingAssistantText(left: string, right: string): boolean {
+    const shorter = left.length <= right.length ? left : right
+    const longer = left.length <= right.length ? right : left
+    if (shorter.length < 24) return false
+    return longer.includes(shorter)
+  }
+
+  private maybeStartAssistantTypewriter(message: Message, previousLastMessageId: string): void {
+    if (message.type !== 'assistant') return
+    if (message.isStreaming) return
+    const content = message.content || ''
+    if (content.trim().length <= 0) return
+    if (message.id === previousLastMessageId) return
+    if (this.streamingAssistant && this.isAssistantStreamingHandoffComplete(content)) return
+    if (!this.isCodexDocumentFlow()) return
+    this.startAssistantTypewriter(message.id, content)
+  }
+
+  private startAssistantTypewriter(messageId: string, content: string): void {
+    this.stopAssistantTypewriter()
+    this.typewriterMessageId = messageId
+    this.typewriterFullText = content
+    this.typewriterIndex = 0
+    this.typewriterText = ''
+
+    this.typewriterTimer = setInterval(() => {
+      if (this.isDestroyed) {
+        this.stopAssistantTypewriter()
+        return
+      }
+      const step = this.getTypewriterStep(this.typewriterFullText.length)
+      this.typewriterIndex = Math.min(this.typewriterFullText.length, this.typewriterIndex + step)
+      this.typewriterText = this.typewriterFullText.substring(0, this.typewriterIndex)
+      if (!this.userIsViewingHistory && !this.isUserTouchingList) {
+        this.scrollToBottom()
+      }
+      if (this.typewriterIndex >= this.typewriterFullText.length) {
+        this.stopAssistantTypewriter(false)
+      }
+    }, 18)
+  }
+
+  private getTypewriterStep(totalLength: number): number {
+    if (totalLength > 2400) return 12
+    if (totalLength > 1200) return 8
+    if (totalLength > 600) return 5
+    return 3
+  }
+
+  private stopAssistantTypewriter(clearText: boolean = true): void {
+    if (this.typewriterTimer !== -1) {
+      clearInterval(this.typewriterTimer)
+      this.typewriterTimer = -1
+    }
+    this.typewriterFullText = ''
+    this.typewriterIndex = 0
+    if (clearText) {
+      this.typewriterMessageId = ''
+      this.typewriterText = ''
+    }
+  }
+
+  private getAssistantDisplayMessage(message: Message): Message {
+    if (message.id !== this.typewriterMessageId || this.typewriterText.length <= 0) return message
+    return {
+      id: message.id,
+      type: message.type,
+      content: this.typewriterText,
+      timestamp: message.timestamp,
+      isStreaming: this.typewriterText.length < (message.content || '').length
+    }
+  }
+
   @Builder
   UserBubble(message: Message) {
-    Column({ space: 4 }) {
-      Text(message.content)
-        .fontSize(15)
-        .fontColor(Theme.TextPrimary)
-        .lineHeight(22)
+    if (this.isCodexDocumentFlow()) {
+      Column({ space: 4 }) {
+        Text(message.content)
+          .fontSize(15)
+          .fontColor(Theme.TextPrimary)
+          .lineHeight(22)
 
-      if (this.activeCopyMessageId === message.id) {
-        Row({ space: 4 }) {
-          // 复制按钮
-          Row({ space: 4 }) {
-            SymbolGlyph($r('sys.symbol.doc_text'))
-              .fontSize(11)
-              .fontColor([Theme.TextPrimary])
-            Text('复制')
-              .fontSize(11)
-              .fontColor(Theme.TextPrimary)
-          }
-          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-          .backgroundColor(Theme.GlassBackground)
-          .borderRadius(10)
-          .border({ width: 0.5, color: Theme.GlassBorder })
-          .onClick(() => {
-            this.copyToClipboard(message.content)
-            this.activeCopyMessageId = ''
-          })
-
-          // 翻译按钮
-          Row({ space: 4 }) {
-            SymbolGlyph($r('sys.symbol.character'))
-              .fontSize(11)
-              .fontColor([Theme.AccentBlue])
-            Text('翻译')
-              .fontSize(11)
-              .fontColor(Theme.AccentBlue)
-          }
-          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-          .backgroundColor(Theme.GlassBackground)
-          .borderRadius(10)
-          .border({ width: 0.5, color: Theme.GlassBorder })
-          .onClick(() => {
-            this.activeCopyMessageId = ''
-            this.translateMessageContent(message.content)
-          })
+        if (this.activeCopyMessageId === message.id) {
+          this.MessageQuickActions(message)
         }
       }
+      .constraintSize({ maxWidth: '82%' })
+      .padding({ left: 14, right: 14, top: 11, bottom: 11 })
+      .backgroundColor('#28282C')
+      .borderRadius(10)
+      .border({ width: 0.5, color: 'rgba(255,255,255,0.11)' })
+      .gesture(
+        LongPressGesture()
+          .onAction(() => {
+            if (this.activeCopyMessageId === message.id) {
+              this.activeCopyMessageId = ''
+            } else {
+              this.activeCopyMessageId = message.id
+            }
+          })
+      )
+    } else {
+      Column({ space: 4 }) {
+        Text(message.content)
+          .fontSize(15)
+          .fontColor(Theme.TextPrimary)
+          .lineHeight(22)
+
+        if (this.activeCopyMessageId === message.id) {
+          this.MessageQuickActions(message)
+        }
+      }
+      .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+      .backgroundColor('#3A3A3C')
+      .borderRadius(18)
+      .gesture(
+        LongPressGesture()
+          .onAction(() => {
+            if (this.activeCopyMessageId === message.id) {
+              this.activeCopyMessageId = ''
+            } else {
+              this.activeCopyMessageId = message.id
+            }
+          })
+      )
     }
-    .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-    .backgroundColor('#3A3A3C')
-    .borderRadius(18)
-    .gesture(
-      LongPressGesture()
-        .onAction(() => {
-          if (this.activeCopyMessageId === message.id) {
-            this.activeCopyMessageId = ''
-          } else {
-            this.activeCopyMessageId = message.id
-          }
-        })
-    )
   }
 
   @Builder
   AssistantBubble(message: Message) {
-    Column({ space: 4 }) {
-      if (this.shouldHideContent(message.content)) {
-        // 隐藏工具调用 JSON
-      } else {
-        MarkdownRenderer({ content: message.content, onLinkClick: (url: string) => { this.openExternalLink(url) } })
-      }
+    if (this.isCodexDocumentFlow()) {
+      Column({ space: 8 }) {
+        if (this.shouldHideContent(message.content)) {
+          // 隐藏工具调用 JSON
+        } else {
+          MarkdownRenderer({ content: message.content, onLinkClick: (url: string) => { this.openExternalLink(url) } })
+        }
 
-      if (this.activeCopyMessageId === message.id) {
-        Row({ space: 4 }) {
-          // 复制按钮
-          Row({ space: 4 }) {
-            SymbolGlyph($r('sys.symbol.doc_text'))
-              .fontSize(11)
-              .fontColor([Theme.TextPrimary])
-            Text('复制')
-              .fontSize(11)
-              .fontColor(Theme.TextPrimary)
-          }
-          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-          .backgroundColor(Theme.GlassBackground)
-          .borderRadius(10)
-          .border({ width: 0.5, color: Theme.GlassBorder })
-          .onClick(() => {
-            this.copyToClipboard(message.content)
-            this.activeCopyMessageId = ''
-          })
-
-          // 翻译按钮
-          Row({ space: 4 }) {
-            SymbolGlyph($r('sys.symbol.character'))
-              .fontSize(11)
-              .fontColor([Theme.AccentBlue])
-            Text('翻译')
-              .fontSize(11)
-              .fontColor(Theme.AccentBlue)
-          }
-          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-          .backgroundColor(Theme.GlassBackground)
-          .borderRadius(10)
-          .border({ width: 0.5, color: Theme.GlassBorder })
-          .onClick(() => {
-            this.activeCopyMessageId = ''
-            this.translateMessageContent(message.content)
-          })
+        if (this.activeCopyMessageId === message.id) {
+          this.MessageQuickActions(message)
         }
       }
-    }
-    .width('100%')
-    .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-    .backgroundColor('#2C2C2E')
-    .borderRadius(18)
-    .gesture(
-      LongPressGesture()
-        .onAction(() => {
-          if (this.activeCopyMessageId === message.id) {
-            this.activeCopyMessageId = ''
-          } else {
-            this.activeCopyMessageId = message.id
+      .width('100%')
+      .padding({ left: 2, right: 4, top: 2, bottom: 2 })
+      .gesture(
+        LongPressGesture()
+          .onAction(() => {
+            if (this.activeCopyMessageId === message.id) {
+              this.activeCopyMessageId = ''
+            } else {
+              this.activeCopyMessageId = message.id
+            }
+          })
+      )
+    } else {
+      Column({ space: 4 }) {
+        if (message.isStreaming) {
+          Row({ space: 6 }) {
+            SymbolGlyph($r('sys.symbol.clock'))
+              .fontSize(10)
+              .fontColor([Theme.TextTertiary])
+            Text('正在生成')
+              .fontSize(10)
+              .fontColor(Theme.TextTertiary)
           }
-        })
-    )
+          .padding({ bottom: 4 })
+        }
+
+        if (this.shouldHideContent(message.content)) {
+          // 隐藏工具调用 JSON
+        } else {
+          MarkdownRenderer({ content: message.content, onLinkClick: (url: string) => { this.openExternalLink(url) } })
+        }
+
+        if (message.isStreaming) {
+          Row({ space: 0 }) {
+            Column()
+              .width(2)
+              .height(14)
+              .backgroundColor(Theme.TextTertiary)
+              .borderRadius(1)
+          }
+        }
+
+        if (this.activeCopyMessageId === message.id) {
+          this.MessageQuickActions(message)
+        }
+      }
+      .width('100%')
+      .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+      .backgroundColor(message.isStreaming ? '#303035' : '#2C2C2E')
+      .borderRadius(18)
+      .border(message.isStreaming ? {
+        width: 0.5,
+        color: 'rgba(255,255,255,0.12)'
+      } : {
+        width: 0
+      })
+      .gesture(
+        LongPressGesture()
+          .onAction(() => {
+            if (this.activeCopyMessageId === message.id) {
+              this.activeCopyMessageId = ''
+            } else {
+              this.activeCopyMessageId = message.id
+            }
+          })
+      )
+    }
+  }
+
+  @Builder
+  MessageQuickActions(message: Message) {
+    Row({ space: 4 }) {
+      Row({ space: 4 }) {
+        SymbolGlyph($r('sys.symbol.doc_text'))
+          .fontSize(11)
+          .fontColor([Theme.TextPrimary])
+        Text('复制')
+          .fontSize(11)
+          .fontColor(Theme.TextPrimary)
+      }
+      .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+      .backgroundColor(Theme.GlassBackground)
+      .borderRadius(10)
+      .border({ width: 0.5, color: Theme.GlassBorder })
+      .onClick(() => {
+        this.copyToClipboard(message.content)
+        this.activeCopyMessageId = ''
+      })
+
+      Row({ space: 4 }) {
+        SymbolGlyph($r('sys.symbol.character'))
+          .fontSize(11)
+          .fontColor([Theme.AccentBlue])
+        Text('翻译')
+          .fontSize(11)
+          .fontColor(Theme.AccentBlue)
+      }
+      .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+      .backgroundColor(Theme.GlassBackground)
+      .borderRadius(10)
+      .border({ width: 0.5, color: Theme.GlassBorder })
+      .onClick(() => {
+        this.activeCopyMessageId = ''
+        this.translateMessageContent(message.content)
+      })
+    }
   }
 
   // 流式思考气泡（实时渲染 thinking 输出）
@@ -2890,6 +3210,83 @@ struct ChatDetailPage {
     return 'RESULT'
   }
 
+  private getToolStatusLabel(status?: string): string {
+    if (status === 'completed') return '完成'
+    if (status === 'failed') return '失败'
+    if (status === 'running') return '正在执行'
+    if (status === 'pending') return '等待中'
+    return '处理中'
+  }
+
+  private getToolStatusBadgeColor(status?: string): string {
+    if (status === 'completed') return Theme.SuccessColor
+    if (status === 'failed') return Theme.ErrorColor
+    if (status === 'running') return Theme.AccentBlue
+    return Theme.TextTertiary
+  }
+
+  private getToolStatusBadgeBackground(status?: string): string {
+    if (status === 'completed') return 'rgba(52,199,89,0.12)'
+    if (status === 'failed') return 'rgba(255,69,58,0.12)'
+    if (status === 'running') return 'rgba(10,132,255,0.14)'
+    return 'rgba(255,255,255,0.06)'
+  }
+
+  private getToolActionSummary(message: Message): string {
+    const toolName = message.toolName || ''
+    const input = message.toolInput || {}
+    const detail = this.getToolInputSummary(toolName, input)
+    if (toolName === 'Bash') return detail.length > 0 ? detail : '运行 shell 命令'
+    if (toolName === 'Read') return detail.length > 0 ? detail : '读取文件内容'
+    if (toolName === 'Write') return detail.length > 0 ? detail : '写入文件'
+    if (toolName === 'Edit') return detail.length > 0 ? detail : '编辑文件'
+    if (toolName === 'Glob') return detail.length > 0 ? detail : '查找文件'
+    if (toolName === 'Grep') return detail.length > 0 ? detail : '搜索文本'
+    if (toolName === 'WebSearch') return detail.length > 0 ? detail : '网页搜索'
+    if (toolName === 'WebFetch') return detail.length > 0 ? detail : '获取网页内容'
+    if (detail.length > 0) return detail
+    if (message.toolStatus === 'failed') return '执行失败'
+    if (message.toolStatus === 'running') return '正在运行'
+    return '调用工具'
+  }
+
+  private getToolMetaText(message: Message): string {
+    const parts: string[] = []
+    if (message.toolName === 'Edit' || message.toolName === 'Write') {
+      const statsText = this.getSingleToolDiffStatsText(message)
+      if (statsText.length > 0) parts.push(statsText)
+    }
+    const lineText = this.getToolResultLineCount(message)
+    if (lineText.length > 0) parts.push(lineText)
+    return parts.join(' · ')
+  }
+
+  private getSingleToolDiffStatsText(message: Message): string {
+    const stats = this.countDiffLines(message.toolResult || '')
+    if (stats.added <= 0 && stats.removed <= 0) return ''
+    if (stats.added > 0 && stats.removed > 0) return '+' + stats.added + ' -' + stats.removed
+    if (stats.added > 0) return '+' + stats.added + ' 行'
+    return '-' + stats.removed + ' 行'
+  }
+
+  private getToolBlockPreview(message: Message): string {
+    if (message.toolName === 'Bash' && this.getBashCommand(message).length > 0) {
+      return '$ ' + this.getBashCommand(message)
+    }
+    if (message.toolInput) {
+      const inputText = this.formatToolInput(message.toolInput)
+      if (inputText.length > 0) return inputText
+    }
+    return ''
+  }
+
+  private getLimitedToolOutput(message: Message): string {
+    if (!message.toolResult) return ''
+    const result = message.toolResult.trim()
+    if (result.length <= 1200) return result
+    return result.substring(0, 1200) + '\n... 已截断，桌面端可查看完整输出'
+  }
+
   @Builder
   ToolUseBubble(message: Message) {
     Column({ space: 0 }) {
@@ -3023,85 +3420,298 @@ struct ChatDetailPage {
    * 工具组折叠容器 — 将连续的 tool_use/tool_result 合并为一个可折叠气泡
    */
   @Builder
-  ToolGroupBubble(messages: Message[]) {
+  ProcessBundleBubble(message: Message, processMessages: Message[]) {
     Column({ space: 0 }) {
-      // Header: 图标 + 动词摘要 + 进度状态 + 箭头
-      Row({ space: 8 }) {
-        SymbolGlyph($r('sys.symbol.hammer_fill'))
-          .fontSize(12)
-          .fontColor([Theme.AccentBlue])
-
-        Text(this.getToolGroupSummary(messages))
-          .fontSize(12)
-          .fontColor(Theme.TextPrimary)
+      Row({ space: 6 }) {
+        Text(this.getProcessBundleLabel(message, processMessages))
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.TextSecondary)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1)
 
-        // 状态指示
-        if (this.toolGroupExpanded) {
-          // 已完成统计
-          Text(this.getToolGroupCountText(messages))
-            .fontSize(10)
-            .fontColor(Theme.TextTertiary)
-            .maxLines(1)
-        } else {
-          // 折叠时显示完整度标记
-          Text('已完成')
-            .fontSize(10)
-            .fontColor(Theme.SuccessColor)
-            .opacity(this.isToolGroupComplete(messages) ? 1 : 0)
-        }
-
-        SymbolGlyph(this.toolGroupExpanded
-          ? $r('sys.symbol.chevron_up')
-          : $r('sys.symbol.chevron_down'))
-          .fontSize(10)
-          .fontColor([Theme.TextSecondary])
+        SymbolGlyph(this.isProcessBundleExpanded(message)
+          ? $r('sys.symbol.chevron_down')
+          : $r('sys.symbol.chevron_right'))
+          .fontSize(11)
+          .fontColor([Theme.TextTertiary])
       }
       .width('100%')
-      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+      .padding({ left: 2, right: 2, top: 8, bottom: 10 })
+      .onClick(() => {
+        this.toggleProcessBundle(message.id)
+      })
 
-      // 展开内容
-      if (this.toolGroupExpanded) {
-        Divider().color('rgba(255,255,255,0.1)').width('100%')
+      Divider()
+        .color('rgba(255,255,255,0.09)')
+        .width('100%')
 
-        Column({ space: 0 }) {
-          ForEach(messages, (msg: Message) => {
-            if (msg.type === 'tool_use') {
-              this.ToolUseBubble(msg)
-            } else if (msg.type === 'tool_result') {
-              this.ToolResultBubble(msg)
+      if (this.isProcessBundleExpanded(message)) {
+        Column({ space: 14 }) {
+          ForEach(processMessages, (processMsg: Message, idx: number) => {
+            if (processMsg.type === 'assistant' && (processMsg.content || '').trim().length > 0) {
+              this.ProcessAssistantSnippet(processMsg)
+            } else if (this.isStandaloneToolGroupMessage(processMsg) &&
+              this.isFirstProcessToolInChronologicalGroup(processMessages, idx)) {
+              this.ProcessToolGroupInline(this.collectToolGroup(processMsg))
+            } else if (processMsg.type === 'permission_request') {
+              this.PermissionBubble(processMsg)
+            } else if (processMsg.type === 'question') {
+              this.QuestionBubble(processMsg)
             }
-          }, (msg: Message) => msg.id + '_' + (msg.toolStatus || '') + '_' +
-            (msg.toolResult || msg.content || '').length)
+          }, (processMsg: Message, idx: number) => processMsg.id + '_' + idx + '_' + (processMsg.toolStatus || ''))
         }
         .width('100%')
+        .padding({ top: 14, bottom: 4 })
       }
     }
     .width('100%')
-    .backgroundColor('#2C2C2E')
-    .borderRadius(10)
-    .border({ width: 0.5, color: 'rgba(255,255,255,0.12)' })
-    .margin({ bottom: Theme.SpacingMD })
-    .onClick(() => {
-      this.toolGroupExpanded = !this.toolGroupExpanded
-    })
+    .margin({ bottom: this.isProcessBundleExpanded(message) ? Theme.SpacingLG : Theme.SpacingMD })
+  }
+
+  @Builder
+  ProcessAssistantSnippet(message: Message) {
+    Text(this.truncateProcessAssistantText(message.content || ''))
+      .fontSize(14)
+      .fontColor(Theme.TextPrimary)
+      .lineHeight(22)
+      .width('100%')
+  }
+
+  @Builder
+  ProcessToolGroupInline(messages: Message[]) {
+    Column({ space: 8 }) {
+      this.ToolProcessSummaryRow(messages)
+
+      ForEach(this.getGroupedToolUses(messages), (msg: Message) => {
+        this.CompactToolRow(msg)
+      }, (msg: Message) => msg.id + '_' + (msg.toolStatus || '') + '_' + (msg.toolName || ''))
+    }
+    .width('100%')
+  }
+
+  @Builder
+  ToolGroupBubble(messages: Message[]) {
+    Column({ space: 0 }) {
+      Row({ space: 6 }) {
+        Text(this.getToolGroupProcessLabel(messages))
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.TextSecondary)
+
+        SymbolGlyph(this.isToolGroupExpanded(messages)
+          ? $r('sys.symbol.chevron_down')
+          : $r('sys.symbol.chevron_right'))
+          .fontSize(11)
+          .fontColor([Theme.TextTertiary])
+
+        Blank().layoutWeight(1)
+      }
+      .width('100%')
+      .padding({ left: 2, right: 2, top: 8, bottom: 10 })
+      .onClick(() => {
+        this.toggleToolGroup(messages)
+      })
+
+      Divider()
+        .color('rgba(255,255,255,0.09)')
+        .width('100%')
+
+      if (this.isToolGroupExpanded(messages)) {
+        Column({ space: 8 }) {
+          this.ToolProcessSummaryRow(messages)
+
+          ForEach(this.getGroupedToolUses(messages), (msg: Message) => {
+            this.CompactToolRow(msg)
+          }, (msg: Message) => msg.id + '_' + (msg.toolStatus || '') + '_' + (msg.toolName || ''))
+        }
+        .width('100%')
+        .padding({ top: 12, bottom: 4 })
+      }
+    }
+    .width('100%')
+    .margin({ bottom: this.isToolGroupExpanded(messages) ? Theme.SpacingLG : Theme.SpacingMD })
+  }
+
+  @Builder
+  ToolProcessSummaryRow(messages: Message[]) {
+    Row({ space: 8 }) {
+      SymbolGlyph(this.getToolGroupSymbol(messages))
+        .fontSize(14)
+        .fontColor([Theme.TextTertiary])
+
+      Text(this.getToolGroupSummary(messages))
+        .fontSize(13)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(Theme.TextSecondary)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
+
+      SymbolGlyph($r('sys.symbol.chevron_down'))
+        .fontSize(10)
+        .fontColor([Theme.TextTertiary])
+    }
+    .width('100%')
+  }
+
+  @Builder
+  CompactToolRow(message: Message) {
+    Row({ space: 8 }) {
+      Text(this.getToolProcessDetail(message))
+        .fontSize(12)
+        .fontColor(Theme.TextTertiary)
+        .maxLines(2)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
+
+      if (message.toolStatus === 'running') {
+        LoadingProgress()
+          .width(10)
+          .height(10)
+          .color(Theme.TextTertiary)
+      } else if (message.toolStatus === 'failed') {
+        Text('失败')
+          .fontSize(11)
+          .fontColor(Theme.ErrorColor)
+      }
+    }
+    .width('100%')
+    .padding({ left: 22, right: 2, top: 1, bottom: 1 })
   }
 
   // MARK: - 工具组辅助方法
+
+  private getGroupedToolUses(messages: Message[]): Message[] {
+    const result: Message[] = []
+    for (let i = 0; i < messages.length; i++) {
+      const message = messages[i]
+      if (message.type === 'tool_use') {
+        result.push(message)
+      }
+    }
+    return result
+  }
+
+  private getToolGroupId(messages: Message[]): string {
+    if (messages.length <= 0) return 'empty-tool-group'
+    const first = messages[0]
+    const last = messages[messages.length - 1]
+    return 'tool-group-' + first.id + '-' + last.id
+  }
+
+  private isToolGroupExpanded(messages: Message[]): boolean {
+    if (!this.isToolGroupComplete(messages)) return true
+    return this.expandedToolGroupIds.has(this.getToolGroupId(messages))
+  }
+
+  private toggleToolGroup(messages: Message[]): void {
+    const id = this.getToolGroupId(messages)
+    const next = new Set(this.expandedToolGroupIds)
+    if (next.has(id)) {
+      next.delete(id)
+    } else {
+      next.add(id)
+    }
+    this.expandedToolGroupIds = next
+  }
+
+  private getCompactToolName(message: Message): string {
+    const name = message.toolName || 'Tool'
+    if (name.length > 0) return name
+    return getToolIcon(name).label
+  }
+
+  private getCompactToolDetail(message: Message): string {
+    const toolName = message.toolName || ''
+    const input = message.toolInput || {}
+    const summary = this.getToolInputSummary(toolName, input)
+    if (summary.length > 0) return summary
+    if (message.toolStatus === 'failed') return '执行失败'
+    if (message.toolStatus === 'running') return '正在运行'
+    return ''
+  }
+
+  private getToolGroupSymbol(messages: Message[]): Resource {
+    let hasSearch = false
+    let hasEdit = false
+    let hasCommand = false
+    for (let i = 0; i < messages.length; i++) {
+      const name = messages[i].toolName || ''
+      if (name === 'Grep' || name === 'Glob' || name === 'Read') hasSearch = true
+      if (name === 'Edit' || name === 'Write') hasEdit = true
+      if (name === 'Bash') hasCommand = true
+    }
+    if (hasEdit) return $r('sys.symbol.square_and_pencil')
+    if (hasCommand && !hasSearch) return $r('sys.symbol.gearshape')
+    if (hasSearch) return $r('sys.symbol.magnifyingglass')
+    return $r('sys.symbol.gearshape')
+  }
+
+  private getToolProcessDetail(message: Message): string {
+    const toolName = message.toolName || ''
+    const input = message.toolInput || {}
+    const filePath = this.getToolFilePath(message)
+    const fileName = filePath.length > 0 ? this.getDisplayFileName(filePath) : ''
+
+    if (toolName === 'Read') {
+      return fileName.length > 0 ? 'Read ' + fileName : 'Read file'
+    }
+    if (toolName === 'Grep') {
+      const query = this.getToolSearchQuery(input)
+      const where = fileName.length > 0 ? ' in ' + fileName : ''
+      return query.length > 0 ? 'Searched for ' + query + where : 'Searched content' + where
+    }
+    if (toolName === 'Glob') {
+      const query = this.getToolSearchQuery(input)
+      return query.length > 0 ? 'Searched files matching ' + query : 'Searched files'
+    }
+    if (toolName === 'Bash') {
+      const cmd = this.getBashCommand(message)
+      return cmd.length > 0 ? 'Ran ' + this.truncateInlineSummary(cmd, 110) : 'Ran command'
+    }
+    if (toolName === 'Edit') {
+      const stats = this.getSingleToolDiffStatsText(message)
+      const suffix = stats.length > 0 ? ' ' + stats : ''
+      return fileName.length > 0 ? 'Edited ' + fileName + suffix : 'Edited file' + suffix
+    }
+    if (toolName === 'Write') {
+      const stats = this.getSingleToolDiffStatsText(message)
+      const suffix = stats.length > 0 ? ' ' + stats : ''
+      return fileName.length > 0 ? 'Wrote ' + fileName + suffix : 'Wrote file' + suffix
+    }
+    const detail = this.getToolActionSummary(message)
+    return detail.length > 0 ? this.getCompactToolName(message) + ' ' + detail : this.getCompactToolName(message)
+  }
+
+  private getDisplayFileName(path: string): string {
+    const normalized = path.trim()
+    if (normalized.length <= 0) return ''
+    const parts = normalized.split('/')
+    return parts.length > 0 ? parts[parts.length - 1] : normalized
+  }
+
+  private getToolSearchQuery(input: Record<string, Object>): string {
+    const value = input['pattern'] || input['query'] || input['regex'] || input['glob'] || input['search'] || input['needle']
+    if (typeof value !== 'string') return ''
+    return this.truncateInlineSummary(value, 110)
+  }
 
   /**
    * 工具组折叠态摘要文字（如 "调用 3 个工具 · 执行 2 个命令"）
    */
   private getToolVerb(name: string, count: number): string {
-    if (name === 'Read') return count === 1 ? '读取 1 个文件' : '读取 ' + count + ' 个文件'
-    if (name === 'Write') return count === 1 ? '写入 1 个文件' : '写入 ' + count + ' 个文件'
-    if (name === 'Edit') return count === 1 ? '编辑 1 个文件' : '编辑 ' + count + ' 个文件'
-    if (name === 'Bash') return count === 1 ? '执行 1 条命令' : '执行 ' + count + ' 条命令'
-    if (name === 'Grep') return count === 1 ? '搜索 1 处' : '搜索 ' + count + ' 处'
-    if (name === 'Glob') return '查找文件'
-    if (name === 'WebFetch') return count === 1 ? '获取 1 个页面' : '获取 ' + count + ' 个页面'
-    if (name === 'Agent') return count === 1 ? '派遣 1 个代理' : '派遣 ' + count + ' 个代理'
-    return name + ' ' + count
+    if (name === 'Read') return count + ' 个文件'
+    if (name === 'Write') return count + ' 个文件'
+    if (name === 'Edit') return count + ' 个文件'
+    if (name === 'Bash') return count + ' 条命令'
+    if (name === 'Grep') return count + ' 次搜索'
+    if (name === 'Glob') return count + ' 次查找'
+    if (name === 'WebSearch') return count + ' 次网页搜索'
+    if (name === 'WebFetch') return count + ' 个页面'
+    if (name === 'Agent') return count + ' 个代理'
+    return name + ' ' + count + ' 次'
   }
 
   private getToolGroupSummary(messages: Message[]): string {
@@ -3116,6 +3726,35 @@ struct ChatDetailPage {
     const keys = Object.keys(typeCounts)
     if (keys.length === 0) return '调用工具'
 
+    const readCount = typeCounts['Read'] !== undefined ? typeCounts['Read'] : 0
+    const grepCount = typeCounts['Grep'] !== undefined ? typeCounts['Grep'] : 0
+    const globCount = typeCounts['Glob'] !== undefined ? typeCounts['Glob'] : 0
+    const editCount = typeCounts['Edit'] !== undefined ? typeCounts['Edit'] : 0
+    const writeCount = typeCounts['Write'] !== undefined ? typeCounts['Write'] : 0
+    const bashCount = typeCounts['Bash'] !== undefined ? typeCounts['Bash'] : 0
+
+    const hasOnlyExplore = keys.length === 1 && readCount > 0 ||
+      keys.length === 2 && readCount > 0 && (grepCount > 0 || globCount > 0) ||
+      keys.length === 2 && grepCount > 0 && globCount > 0 ||
+      keys.length === 3 && readCount > 0 && grepCount > 0 && globCount > 0
+    if (hasOnlyExplore) {
+      const parts: string[] = []
+      if (readCount > 0) parts.push(readCount + ' 个文件')
+      if (grepCount > 0) parts.push(grepCount + ' 次搜索')
+      if (globCount > 0) parts.push(globCount + ' 次查找')
+      return '已探索 ' + parts.join(' ')
+    }
+
+    if (keys.length === 1 && bashCount > 0) {
+      return '已运行 ' + bashCount + ' 条命令'
+    }
+
+    if ((editCount > 0 || writeCount > 0) && keys.length <= 2 && bashCount <= 0) {
+      const changedCount = editCount + writeCount
+      const diffStats = this.getToolGroupDiffStatsText(messages)
+      return '已编辑 ' + changedCount + ' 个文件' + (diffStats.length > 0 ? ' ' + diffStats : '')
+    }
+
     const parts: string[] = []
     for (let i = 0; i < keys.length; i++) {
       const name = keys[i]
@@ -3126,7 +3765,7 @@ struct ChatDetailPage {
     if (diffStats.length > 0) {
       parts.push(diffStats)
     }
-    return parts.join('，')
+    return '已处理 ' + parts.join(' ')
   }
 
   private getToolGroupDiffStatsText(messages: Message[]): string {
@@ -3172,6 +3811,53 @@ struct ChatDetailPage {
     }
     if (doneCount === toolCount) return '已完成'
     return doneCount + '/' + toolCount
+  }
+
+  private getToolGroupStatusLabel(messages: Message[]): string {
+    let toolCount = 0
+    let doneCount = 0
+    let failedCount = 0
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i]
+      if (m.type !== 'tool_use') continue
+      toolCount++
+      if (m.toolStatus === 'completed') doneCount++
+      if (m.toolStatus === 'failed') failedCount++
+    }
+
+    if (failedCount > 0) {
+      return failedCount + ' 失败'
+    }
+    if (doneCount === toolCount && toolCount > 0) {
+      return '已完成'
+    }
+    if (toolCount <= 0) {
+      return '处理中'
+    }
+    return doneCount + '/' + toolCount
+  }
+
+  private getToolGroupStatusColor(messages: Message[]): string {
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i]
+      if (m.type === 'tool_use' && m.toolStatus === 'failed') {
+        return Theme.ErrorColor
+      }
+    }
+    return this.isToolGroupComplete(messages) ? Theme.SuccessColor : Theme.TextTertiary
+  }
+
+  private getToolGroupStatusBackground(messages: Message[]): string {
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i]
+      if (m.type === 'tool_use' && m.toolStatus === 'failed') {
+        return 'rgba(255,69,58,0.12)'
+      }
+    }
+    if (this.isToolGroupComplete(messages)) {
+      return 'rgba(52,199,89,0.12)'
+    }
+    return 'rgba(255,255,255,0.06)'
   }
 
   // MARK: - Agent 派遣消息
