@@ -29,8 +29,8 @@ export class SessionStore {
   private static instance: SessionStore
   private static readonly OFFICIAL_CODEX_RECENT_DAYS = 15
   private static readonly OFFICIAL_CODEX_LIST_LIMIT = 50
-  private static readonly OFFICIAL_CODEX_SEND_TIMEOUT_MS = 75000
-  private static readonly OFFICIAL_CODEX_SEND_STALE_MS = 90000
+  private static readonly OFFICIAL_CODEX_SEND_TIMEOUT_MS = 30000
+  private static readonly OFFICIAL_CODEX_SEND_STALE_MS = 45000
 
   // 会话列表
   sessions: Session[] = []
@@ -72,6 +72,7 @@ export class SessionStore {
   private officialCodexThreadRuntime: Map<string, OfficialCodexThreadRuntimeSnapshot> = new Map()
   private officialCodexSendQueues: Map<string, Promise<void>> = new Map()
   private officialCodexSendStartedAt: Map<string, number> = new Map()
+  private officialCodexSendBusyWarnedAt: Map<string, number> = new Map()
   private officialCodexActiveTurns: Map<string, string> = new Map()
   private officialCodexLocalPollingSessions: Set<string> = new Set()
   private syncingOfficialCodexLatest: Set<string> = new Set()
@@ -968,8 +969,37 @@ export class SessionStore {
 
   // 保存会话到本地存储
   async saveSessionsToStorage(): Promise<void> {
+    this.pruneArchivedSessions()
     await storageService.saveSessions(this.sessions)
     this.notifySessionsChanged()
+  }
+
+  private pruneArchivedSessions(): void {
+    if (this.sessions.length <= 0) return
+    const kept: Session[] = []
+    let removed = 0
+    for (let i = 0; i < this.sessions.length; i++) {
+      const session = this.sessions[i]
+      const threadId = session.officialCodexThreadId || this.officialCodexThreadIds.get(session.id) || ''
+      if (this.isSessionArchivedByIdentity(session.id, threadId)) {
+        removed++
+        this.sessionStatuses.delete(session.id)
+        this.pendingPermissions.delete(session.id)
+        this.streamHeads.delete(session.id)
+        this.sessionTasks.delete(session.id)
+        this.officialCodexRecentActivityAt.delete(session.id)
+        this.officialCodexActiveTurns.delete(session.id)
+        this.officialCodexTerminalAt.delete(session.id)
+        this.officialCodexLocalPollingSessions.delete(session.id)
+        this.clearOfficialCodexSendLock(session.id)
+        continue
+      }
+      kept.push(session)
+    }
+    if (removed > 0) {
+      this.sessions = kept
+      console.info(`[SessionStore] Pruned ${removed} archived session(s)`)
+    }
   }
 
   async importOfficialCodexThreads(sessions: Session[]): Promise<void> {
@@ -2355,13 +2385,17 @@ export class SessionStore {
     const session = this.sessions.find(s => s.id === sessionId)
 
     if (this.shouldUseOfficialCodexRemote(session, attachments) && this.hasActiveOfficialCodexSend(sessionId)) {
-      const errMsg: Message = {
-        id: 'official-codex-send-busy-' + Date.now(),
-        type: 'error',
-        content: '上一条消息正在发送中。若长时间无响应，请稍后再试，我会自动恢复连接。',
-        timestamp: new Date().toISOString()
+      const lastWarnedAt = this.officialCodexSendBusyWarnedAt.get(sessionId) || 0
+      if (Date.now() - lastWarnedAt > 10000) {
+        this.officialCodexSendBusyWarnedAt.set(sessionId, Date.now())
+        const notice: Message = {
+          id: 'official-codex-send-busy-' + Date.now(),
+          type: 'system_notification',
+          content: '上一条消息还在提交到 Codex Desktop，我会自动恢复连接。',
+          timestamp: new Date().toISOString()
+        }
+        this.addMessage(sessionId, notice)
       }
-      this.addMessage(sessionId, errMsg)
       return false
     }
 
@@ -2409,6 +2443,7 @@ export class SessionStore {
   private clearOfficialCodexSendLock(sessionId: string): void {
     this.officialCodexSendQueues.delete(sessionId)
     this.officialCodexSendStartedAt.delete(sessionId)
+    this.officialCodexSendBusyWarnedAt.delete(sessionId)
   }
 
   private timeoutAfter(ms: number, message: string): Promise<Record<string, Object>> {
@@ -2508,6 +2543,15 @@ export class SessionStore {
 
     return new Promise((resolve) => {
       setTimeout(() => {
+        // 关键修复：如果已经有 terminal cooldown 且没有活跃 turn，立即停止轮询
+        // 防止已完成的会话被 polling 循环反复恢复为 thinking
+        if (this.hasOfficialCodexTerminalCooldown(sessionId) && !this.hasOfficialCodexActiveTurn(sessionId)) {
+          this.officialCodexLocalPollingSessions.delete(sessionId)
+          this.updateSessionStatus(sessionId, 'completed')
+          resolve()
+          return
+        }
+
         const beforeSignature = this.buildMessagesSignatureForPolling(sessionId)
         this.syncOfficialCodexThreadMessagesFromLocal(sessionId, threadId)
           .then((changed: boolean) => {
@@ -2518,7 +2562,10 @@ export class SessionStore {
             if (hasChanged) {
               this.markOfficialCodexActivity(sessionId)
               this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
-            } else if (nextStableTicks >= 45 && this.isLocalOfficialCodexTurnLikelyComplete(sessionId)) {
+            } else if (nextStableTicks >= 45 &&
+              this.isLocalOfficialCodexTurnLikelyComplete(sessionId) &&
+              (!this.hasOfficialCodexActiveTurn(sessionId) ||
+                (!this.isOfficialCodexThreadRuntimeActive(threadId) && nextStableTicks >= 120))) {
               this.officialCodexActiveTurns.delete(sessionId)
               this.officialCodexLocalPollingSessions.delete(sessionId)
               this.updateSessionStatus(sessionId, 'completed')
@@ -2545,6 +2592,13 @@ export class SessionStore {
             ).then(() => resolve())
           })
           .catch(() => {
+            // 如果已经有 terminal cooldown，不再恢复 thinking
+            if (this.hasOfficialCodexTerminalCooldown(sessionId) && !this.hasOfficialCodexActiveTurn(sessionId)) {
+              this.officialCodexLocalPollingSessions.delete(sessionId)
+              this.updateSessionStatus(sessionId, 'idle')
+              resolve()
+              return
+            }
             this.updateSessionStatus(sessionId, 'thinking')
             this.pollOfficialCodexLocalThread(
               sessionId,
@@ -2689,6 +2743,12 @@ export class SessionStore {
   private handleOfficialCodexLocalDrivenMessage(sessionId: string, messageType: string): void {
     const threadId: string = this.getOfficialCodexThreadId(sessionId)
     if (threadId.length <= 0) return
+
+    // 如果已经有 terminal cooldown 且没有活跃 turn，忽略迟到的消息
+    if (this.hasOfficialCodexTerminalCooldown(sessionId) && !this.hasOfficialCodexActiveTurn(sessionId)) {
+      console.info(`[SessionStore] Ignoring late local-driven message ${messageType} for ${sessionId} after terminal status`)
+      return
+    }
 
     this.markOfficialCodexActivity(sessionId)
 
@@ -2843,7 +2903,8 @@ export class SessionStore {
 
     try {
       const changed = await this.syncOfficialCodexThreadMessagesFromLocal(sessionId, threadId)
-      if (this.hasOfficialCodexActiveTurn(sessionId) || this.hasRecentOfficialCodexActivity(sessionId, 120000)) {
+      // 修复：只有真正有活跃 turn 时才恢复 thinking，hasRecentOfficialCodexActivity 不再单独恢复
+      if (this.hasOfficialCodexActiveTurn(sessionId)) {
         this.updateSessionStatus(sessionId, 'thinking')
         void this.pollOfficialCodexLocalThread(sessionId, threadId, 0, changed ? 0 : 1, this.buildMessagesSignatureForPolling(sessionId))
         return
@@ -3789,8 +3850,8 @@ export class SessionStore {
 
     for (let i = 0; i < this.sessions.length; i++) {
       const session = this.sessions[i]
-      if (this.isSessionArchived(session.id)) continue
       const threadId = this.officialCodexThreadIds.get(session.id) || session.officialCodexThreadId || ''
+      if (this.isSessionArchivedByIdentity(session.id, threadId)) continue
       if (threadId.length <= 0) continue
 
       const status = this.sessionStatuses.get(session.id) || 'idle'
@@ -3834,7 +3895,8 @@ export class SessionStore {
   syncSessionStatuses(): void {
     const now = Date.now()
     for (const session of this.sessions) {
-      if (this.isSessionArchivedByIdentity(session.id, session.officialCodexThreadId || '')) continue
+      const archivedThreadId = this.officialCodexThreadIds.get(session.id) || session.officialCodexThreadId || ''
+      if (this.isSessionArchivedByIdentity(session.id, archivedThreadId)) continue
       const status = this.sessionStatuses.get(session.id)
       if (!status || status === 'idle') continue
 
@@ -3947,6 +4009,21 @@ export class SessionStore {
     if (previous === status) {
       return
     }
+
+    // 关键防振荡：如果之前是 completed/idle 且在 terminal cooldown 期间，
+    // 不允许通过 polling 或本地推断把它改回活跃状态，除非有真正的活跃 turn
+    const shouldBlockOscillation = !!(session?.officialCodexThreadId ||
+      this.officialCodexThreadIds.get(sessionId) ||
+      ((session?.aiTool || '').toLowerCase().indexOf('codex') >= 0))
+    if (shouldBlockOscillation &&
+      (previous === 'completed' || previous === 'idle') &&
+      (status === 'thinking' || status === 'streaming' || status === 'tool_executing') &&
+      this.hasOfficialCodexTerminalCooldown(sessionId, 120000) &&
+      !this.hasOfficialCodexActiveTurn(sessionId)) {
+      console.info(`[SessionStore] Blocking status oscillation: ${sessionId} ${previous}->${status} blocked by terminal cooldown`)
+      return
+    }
+
     if (status === 'thinking' || status === 'streaming' || status === 'tool_executing' ||
       status === 'permission_pending' || status === 'question_pending') {
       this.officialCodexTerminalAt.delete(sessionId)
@@ -3965,12 +4042,12 @@ export class SessionStore {
       storageService.saveSessionStatuses(this.sessionStatuses)
     }
 
-    const isOfficialCodexSession = !!(session?.officialCodexThreadId ||
+    const isOfficialCodexStatusSession = !!(session?.officialCodexThreadId ||
       this.officialCodexThreadIds.get(sessionId) ||
       ((session?.aiTool || '').toLowerCase().indexOf('codex') >= 0))
 
     // 非 Official Codex 会话继续保留旧的 completed -> idle 回落逻辑
-    if (status === 'completed' && !isOfficialCodexSession) {
+    if (status === 'completed' && !isOfficialCodexStatusSession) {
       // 清除之前的 timer
       const oldTimer = this.completedTimers.get(sessionId)
       if (oldTimer !== undefined) {
