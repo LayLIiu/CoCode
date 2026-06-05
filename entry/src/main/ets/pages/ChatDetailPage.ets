@@ -773,10 +773,6 @@ struct ChatDetailPage {
         // 兜底检测：消息已包含 assistant 回复但状态仍卡在工作状态
         if (msgs.length > 0) {
           const lastMsg = msgs[msgs.length - 1]
-          if (lastMsg.type === 'assistant' && this.streamingAssistant &&
-            this.isAssistantStreamingHandoffComplete(lastMsg.content || '')) {
-            this.streamingAssistant = ''
-          }
           if (lastMsg.type === 'assistant' && lastMsg.content && lastMsg.content.length > 0) {
             if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
                 this.chatStatus === 'tool_executing') {
@@ -1309,12 +1305,7 @@ struct ChatDetailPage {
         if (this.chatStatus === 'idle' || this.chatStatus === 'completed') {
           this.startWorkTimer()
         }
-        if (msg.blockType === 'text') {
-          this.streamingAssistant = ''
-          if (!this.userIsViewingHistory && !this.isUserTouchingList) {
-            this.scrollToBottom()
-          }
-        }
+        // 关闭逐字显示：不再更新 streamingAssistant
         break
 
       case 'content_delta':
@@ -1322,12 +1313,7 @@ struct ChatDetailPage {
         if (this.chatStatus === 'idle' || this.chatStatus === 'completed') {
           this.startWorkTimer()
         }
-        if (msg.text) {
-          this.streamingAssistant += msg.text
-          if (!this.userIsViewingHistory && !this.isUserTouchingList) {
-            this.scrollToBottom()
-          }
-        }
+        // 关闭逐字显示：不再逐字更新 streamingAssistant
         break
 
       case 'thinking':
@@ -2156,7 +2142,7 @@ struct ChatDetailPage {
           }
           .rotate({ angle: 180 })
 
-          // 流式思考实时渲染（回复内容不流式显示，生成完后直接弹完整气泡）
+          // 流式思考实时渲染（关闭逐字显示，只在思考中时显示简短提示）
           if (this.streamingThinking && !this.isCodexDocumentFlow()) {
             ListItem() {
               this.StreamingThinkingBubble()
@@ -2164,12 +2150,7 @@ struct ChatDetailPage {
             .rotate({ angle: 180 })
           }
 
-          if (this.shouldRenderStreamingAssistant()) {
-            ListItem() {
-              this.MessageBubble(this.getStreamingAssistantMessage())
-            }
-            .rotate({ angle: 180 })
-          }
+          // 关闭逐字流式显示：不再渲染 streamingAssistant 气泡
 
           // 消息倒序排列（最新在前=视觉底部），工具消息合组
           ForEach(this.getReversedRenderableMessages(), (message: Message) => {
@@ -2703,14 +2684,7 @@ struct ChatDetailPage {
   }
 
   private maybeStartAssistantTypewriter(message: Message, previousLastMessageId: string): void {
-    if (message.type !== 'assistant') return
-    if (message.isStreaming) return
-    const content = message.content || ''
-    if (content.trim().length <= 0) return
-    if (message.id === previousLastMessageId) return
-    if (this.streamingAssistant && this.isAssistantStreamingHandoffComplete(content)) return
-    if (!this.isCodexDocumentFlow()) return
-    this.startAssistantTypewriter(message.id, content)
+    // 关闭逐字打字机效果：直接显示完整消息
   }
 
   private startAssistantTypewriter(messageId: string, content: string): void {

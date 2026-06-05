@@ -25,14 +25,17 @@ export struct MainPage {
 
   private statusListener: (sessionId: string, status: SessionStatus) => void = () => {}
   private sessionsListener: () => void = () => {}
+  // 防抖：避免 activeSessionList 频繁变化导致 TabBar 结构闪烁
+  private activeSessionsDebounceTimer: number = -1
+  private pendingActiveSessions: Session[] = []
 
   aboutToAppear(): void {
     this.updateActiveSessions()
     this.statusListener = (sessionId: string, status: SessionStatus) => {
-      this.updateActiveSessions()
+      this.scheduleUpdateActiveSessions()
     }
     this.sessionsListener = () => {
-      this.updateActiveSessions()
+      this.scheduleUpdateActiveSessions()
     }
     sessionStore.addStatusChangedListener(this.statusListener)
     sessionStore.addSessionsChangedListener(this.sessionsListener)
@@ -41,6 +44,22 @@ export struct MainPage {
   aboutToDisappear(): void {
     sessionStore.removeStatusChangedListener(this.statusListener)
     sessionStore.removeSessionsChangedListener(this.sessionsListener)
+    if (this.activeSessionsDebounceTimer >= 0) {
+      clearTimeout(this.activeSessionsDebounceTimer)
+      this.activeSessionsDebounceTimer = -1
+    }
+  }
+
+  private scheduleUpdateActiveSessions(): void {
+    this.pendingActiveSessions = sessionStore.getActiveSessions()
+    if (this.activeSessionsDebounceTimer >= 0) {
+      return
+    }
+    this.activeSessionsDebounceTimer = setTimeout(() => {
+      this.activeSessionsDebounceTimer = -1
+      this.activeSessionList = this.pendingActiveSessions
+      this.refreshTrigger = Date.now()
+    }, 500)
   }
 
   private updateActiveSessions(): void {

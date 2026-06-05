@@ -12,6 +12,13 @@ import { liveViewService, getAiDisplayName } from '../services/LiveViewService'
 import { authStore } from './AuthStore'
 import { appState } from './AppState'
 
+// 流式消息内部缓冲区类型
+class StreamingBuffer {
+  assistant: string = ''
+  thinking: string = ''
+  blockType: string = ''
+}
+
 class OfficialCodexThreadRuntimeSnapshot {
   active: boolean = false
   status: string = ''
@@ -110,6 +117,9 @@ export class SessionStore {
   // Official Codex 全局心跳（无论停留在哪个页面，都自动同步运行中的对话）
   private officialCodexHeartbeatTimer: number = -1
 
+  // 流式消息内部缓冲区（关闭逐字显示后，只在这里累积，等 message_complete 一次性刷入）
+  private streamingBuffers: Map<string, StreamingBuffer> = new Map()
+
   // 串行化保存队列（防止并发写入竞态导致数据丢失）
   private saveQueues: Map<string, Promise<void>> = new Map()
 
@@ -172,9 +182,15 @@ export class SessionStore {
     // 加载本地缓存的会话数据
     this.loadLocalData()
 
-    // 定期检查过期的工作状态（每 15 秒），防止 WS 断开后状态卡住
+    // 统一定时器：先清理过期状态，再同步活跃会话（避免两个定时器交替导致状态振荡）
+    // 每 15 秒执行一次，合并了原来的 staleStatusTimer + officialCodexHeartbeatTimer
     this.staleStatusTimer = setInterval(() => {
+      // 第一步：清理过期的工作状态
       this.syncSessionStatuses()
+      // 第二步：前台时同步 Official Codex 活跃会话（在清理之后执行，避免清理后被恢复）
+      if (appState.isInForeground) {
+        void this.syncTrackedOfficialCodexSessions()
+      }
     }, 15000)
 
     // 应用启动时同步所有 Official Codex 会话状态
@@ -182,12 +198,7 @@ export class SessionStore {
       this.syncAllOfficialCodexStatuses()
     }, 2000)
 
-    // 前台期间持续追踪 Official Codex 运行状态和新消息。
-    // 只追踪当前/活跃会话，不扫所有历史线程，避免移动端列表和滑动卡顿。
-    this.officialCodexHeartbeatTimer = setInterval(() => {
-      if (!appState.isInForeground) return
-      void this.syncTrackedOfficialCodexSessions()
-    }, 15000)
+    // officialCodexHeartbeatTimer 不再独立运行，已合并到 staleStatusTimer
 
     // 延迟连接全局 WebSocket（等待 authStore 初始化完成）
     setTimeout(() => {
@@ -1418,6 +1429,7 @@ export class SessionStore {
       }
     }
 
+    this.flushStreamingBuffer(sessionId)
     this.flushHeadToTail(sessionId)
     this.updateSessionStatus(sessionId, 'permission_pending')
     this.pendingPermissions.set(sessionId, pending)
@@ -1949,6 +1961,39 @@ export class SessionStore {
   }
 
   // MARK: - Head/Tail 流式缓冲
+
+  /** 将流式缓冲区内容一次性刷入 streamHeads（整条消息显示，不逐字追加） */
+  private flushStreamingBuffer(sessionId: string): void {
+    const buffer = this.streamingBuffers.get(sessionId)
+    if (!buffer) return
+    this.streamingBuffers.delete(sessionId)
+
+    const head: Message[] = []
+    if (buffer.thinking.trim().length > 0) {
+      head.push({
+        id: 'thinking-' + Date.now(),
+        type: 'thinking',
+        content: buffer.thinking,
+        isStreaming: false,
+        timestamp: new Date().toISOString(),
+      })
+    }
+    if (buffer.assistant.trim().length > 0) {
+      head.push({
+        id: 'stream-' + Date.now(),
+        type: 'assistant',
+        content: buffer.assistant,
+        isStreaming: false,
+        timestamp: new Date().toISOString(),
+      })
+    }
+
+    if (head.length > 0) {
+      let existing = this.streamHeads.get(sessionId) || []
+      existing = existing.concat(head)
+      this.streamHeads.set(sessionId, existing)
+    }
+  }
 
   /** 将流式 Head 缓冲刷新到 Tail (messages) */
   flushHeadToTail(sessionId: string): void {
@@ -2608,6 +2653,7 @@ export class SessionStore {
 
     if (status === 'completed' || status === 'idle') {
       // turn 完成：标记流式消息为非流式，更新状态，然后从 API 拉取完整消息
+      this.flushStreamingBuffer(sessionId)
       this.flushHeadToTail(sessionId)
       this.updateSessionStatusFromState(sessionId, status)
       setTimeout(() => {
@@ -3752,7 +3798,6 @@ export class SessionStore {
         status === 'permission_pending' || status === 'question_pending'
       const isCurrent = this.currentSessionId === session.id
       const isRuntimeActive = this.isOfficialCodexThreadRuntimeActive(threadId)
-      const isRecentlyActive = this.hasRecentOfficialCodexActivity(session.id, 120000)
       const hasActiveTurn = this.hasOfficialCodexActiveTurn(session.id)
       const hasTerminalCooldown = this.hasOfficialCodexTerminalCooldown(session.id)
 
@@ -3760,7 +3805,9 @@ export class SessionStore {
         continue
       }
 
-      if (isCurrent || isActiveStatus || isRuntimeActive || isRecentlyActive || hasActiveTurn) {
+      // 只有真正活跃的会话才进入候选列表：活跃 turn / 活跃状态 / 运行时活跃 / 当前会话
+      // 移除 isRecentlyActive 条件，避免对已完成会话反复检查导致状态振荡
+      if (isCurrent || isActiveStatus || isRuntimeActive || hasActiveTurn) {
         candidates.push(session)
       }
     }
@@ -3817,8 +3864,9 @@ export class SessionStore {
       if (session.officialCodexThreadId || (session.aiTool || '').toLowerCase().indexOf('codex') >= 0) {
         const threadId = this.officialCodexThreadIds.get(session.id) || session.officialCodexThreadId || ''
         if (threadId.length > 0) {
-          if (this.hasRecentOfficialCodexActivity(session.id, 120000) ||
-            this.hasOfficialCodexActiveTurn(session.id) ||
+          // 修复：只有真正有活跃 turn 或 terminal cooldown 才跳过清理
+          // hasRecentOfficialCodexActivity 不再单独作为跳过条件，避免已完成会话状态无法回落
+          if (this.hasOfficialCodexActiveTurn(session.id) ||
             this.hasOfficialCodexTerminalCooldown(session.id)) {
             continue
           }
@@ -3843,7 +3891,10 @@ export class SessionStore {
         this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
       }
 
-      if (this.hasOfficialCodexActiveTurn(sessionId) || this.hasRecentOfficialCodexActivity(sessionId, 120000)) {
+      // 关键修复：只有真正有活跃 turn 时才设为 thinking 并启动轮询
+      // hasRecentOfficialCodexActivity 不再单独作为恢复 thinking 的条件，避免状态振荡
+      const hasActiveTurn = this.hasOfficialCodexActiveTurn(sessionId)
+      if (hasActiveTurn) {
         this.updateSessionStatus(sessionId, changed ? this.getLocalOfficialCodexPollingStatus(sessionId) : 'thinking')
         void this.pollOfficialCodexLocalThread(sessionId, threadId, 0, changed ? 0 : 1, this.buildMessagesSignatureForPolling(sessionId))
       } else if (this.hasOfficialCodexTerminalCooldown(sessionId)) {
@@ -3858,7 +3909,7 @@ export class SessionStore {
       const supplemented = await this.supplementOfficialCodexMessagesFromLocal(sessionId, threadId, true)
       if (this.hasOfficialCodexTerminalCooldown(sessionId) && !this.hasOfficialCodexActiveTurn(sessionId)) {
         this.updateSessionStatus(sessionId, supplemented ? 'completed' : 'idle')
-      } else if (this.hasRecentOfficialCodexActivity(sessionId, 120000) || this.hasOfficialCodexActiveTurn(sessionId)) {
+      } else if (this.hasOfficialCodexActiveTurn(sessionId)) {
         this.updateSessionStatus(sessionId, 'thinking')
       } else if (supplemented) {
         this.updateSessionStatus(sessionId, 'completed')
@@ -4129,50 +4180,32 @@ export class SessionStore {
         if (this.isOfficialCodexSession(sessionId) && messageType === 'thinking') {
           break
         }
-        // 流式增量更新 Head 缓冲
+        // 关闭逐字流式显示：只在内部缓冲区累积，不往 streamHeads 追加
+        // 最终在 message_complete / flushHeadToTail 时一次性显示完整消息
         {
           const deltaText = typeof msg.text === 'string' ? msg.text as string : ''
           if (deltaText) {
-            let head = this.streamHeads.get(sessionId)
-            if (!head) {
-              head = []
+            let buffer = this.streamingBuffers.get(sessionId)
+            if (!buffer) {
+              buffer = new StreamingBuffer()
             }
 
             if (messageType === 'content_delta') {
-              if (head.length > 0 && head[head.length - 1].type === 'assistant') {
-                const last = head[head.length - 1]
-                last.content = (last.content || '') + deltaText
-              } else {
-                head.push({
-                  id: 'stream-' + (msg.id || String(Date.now())),
-                  type: 'assistant',
-                  content: deltaText,
-                  isStreaming: true,
-                  timestamp: new Date().toISOString(),
-                })
-              }
+              buffer.assistant += deltaText
+              buffer.blockType = 'text'
             } else { // thinking
-              if (head.length > 0 && head[head.length - 1].type === 'thinking') {
-                const last = head[head.length - 1]
-                last.content = (last.content || '') + deltaText
-              } else {
-                head.push({
-                  id: 'thinking-' + Date.now(),
-                  type: 'thinking',
-                  content: deltaText,
-                  isStreaming: true,
-                  timestamp: new Date().toISOString(),
-                })
-              }
+              buffer.thinking += deltaText
+              buffer.blockType = 'thinking'
             }
 
-            this.streamHeads.set(sessionId, head)
+            this.streamingBuffers.set(sessionId, buffer)
           }
         }
         break
 
       case 'tool_use_complete':
-        // 非流式事件：先将 Head 刷新到 Tail
+        // 非流式事件：先将缓冲区刷入，再将 Head 刷新到 Tail
+        this.flushStreamingBuffer(sessionId)
         this.flushHeadToTail(sessionId)
         this.updateSessionStatus(sessionId, 'tool_executing')
 
@@ -4225,7 +4258,8 @@ export class SessionStore {
         break
 
       case 'tool_result':
-        // 非流式事件：先将 Head 刷新到 Tail
+        // 非流式事件：先将缓冲区刷入，再将 Head 刷新到 Tail
+        this.flushStreamingBuffer(sessionId)
         this.flushHeadToTail(sessionId)
         if (msg.toolUseId && msg.content !== undefined && msg.content !== null) {
           this.updateToolResult(sessionId, msg.toolUseId, msg.content, msg.isError === true)
@@ -4236,6 +4270,8 @@ export class SessionStore {
 
       case 'message_complete':
         console.info(`[SessionStore] Message complete for ${sessionId}`)
+        // 将流式缓冲区内容一次性刷入 messages（整条消息显示）
+        this.flushStreamingBuffer(sessionId)
         // 最终化：将 Head 刷新到 Tail 并清空 Head
         this.flushHeadToTail(sessionId)
         this.updateSessionStatus(sessionId, 'completed')
@@ -4289,7 +4325,8 @@ export class SessionStore {
         break
 
       case 'permission_request':
-        // 非流式事件：先将 Head 刷新到 Tail
+        // 非流式事件：先将缓冲区刷入，再将 Head 刷新到 Tail
+        this.flushStreamingBuffer(sessionId)
         this.flushHeadToTail(sessionId)
         this.updateSessionStatus(sessionId, 'permission_pending')
 
@@ -4323,7 +4360,8 @@ export class SessionStore {
 
       case 'question':
       case 'questions':
-        // 非流式事件：先将 Head 刷新到 Tail
+        // 非流式事件：先将缓冲区刷入，再将 Head 刷新到 Tail
+        this.flushStreamingBuffer(sessionId)
         this.flushHeadToTail(sessionId)
         this.updateSessionStatus(sessionId, 'question_pending')
 
@@ -4860,10 +4898,7 @@ export class SessionStore {
       this.dedupCleanupTimer = -1
     }
 
-    if (this.officialCodexHeartbeatTimer >= 0) {
-      clearInterval(this.officialCodexHeartbeatTimer)
-      this.officialCodexHeartbeatTimer = -1
-    }
+    // officialCodexHeartbeatTimer 已合并到 staleStatusTimer，无需单独清理
 
     if (this.sessionsChangedNotifyTimer >= 0) {
       clearTimeout(this.sessionsChangedNotifyTimer)
