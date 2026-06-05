@@ -1613,8 +1613,9 @@ export class SessionStore {
         let removedDupCount = 0
         for (let i = 0; i < merged.length; i++) {
           const m = merged[i]
+          const hasStableId = this.isStableMessageId(m.id)
           // 优先按 ID 去重
-          if (m.id && !m.id.startsWith('stream-') && !m.id.startsWith('thinking-')) {
+          if (m.id && hasStableId) {
             if (seenIds.has(m.id)) {
               removedDupCount++
               console.warn(`[SessionStore] Removing dup after sync (by ID): #${removedDupCount} id=${m.id} type=${m.type}`)
@@ -1622,10 +1623,28 @@ export class SessionStore {
             }
             seenIds.add(m.id)
           }
-          // 再按内容去重
+          // 语义内容去重：即使有稳定 ID 的消息也要参与，
+          // 以捕获"本地临时 ID + 服务器稳定 ID"表示同一条消息的情况。
+          // 当两条消息语义键相同但 ID 不同时，优先保留稳定 ID 的那条。
           const key = this.messageSemanticKey(m)
           if (seenKeys.has(key)) {
             removedDupCount++
+            // 如果当前消息有稳定 ID 而已有消息没有，用稳定 ID 版本替换
+            if (hasStableId) {
+              let replaced = false
+              for (let j = 0; j < deduped.length; j++) {
+                if (this.messageSemanticKey(deduped[j]) === key && !this.isStableMessageId(deduped[j].id)) {
+                  console.info(`[SessionStore] Replacing transient ${deduped[j].id} with stable ${m.id} (same semantic key)`)
+                  deduped[j] = m
+                  replaced = true
+                  removedDupCount-- // 替换不算额外删除
+                  break
+                }
+              }
+              if (replaced) {
+                continue
+              }
+            }
             console.warn(`[SessionStore] Removing dup after sync (by content): #${removedDupCount} key=${key.substring(0, 100)} type=${m.type} id=${m.id}`)
             continue
           }
@@ -2122,9 +2141,37 @@ export class SessionStore {
         seenById.add(msg.id)
       }
 
-      // 有稳定 ID 的历史消息用 ID 保真。不要再按内容去重，
-      // 否则相同文本的两次真实对话会互相覆盖。
+      // 有稳定 ID 的历史消息用 ID 保真，但仍需做语义交叉去重：
+      // 当内存中同时存在"临时 ID 版本"和"稳定 ID 版本"的同一消息时，
+      // 优先保留稳定 ID 版本。两条都有稳定 ID 且内容相同的真实对话不会被误删。
       if (hasStableId) {
+        const semanticKey = this.messageSemanticKey(msg)
+        if (seenByContent.has(semanticKey) || seenByTool.has(semanticKey)) {
+          // 语义键已存在，检查是否可以替换已有的临时 ID 版本
+          let replaced = false
+          for (let j = 0; j < result.length; j++) {
+            const existingKey = this.messageSemanticKey(result[j])
+            if (existingKey === semanticKey && !this.isStableMessageId(result[j].id)) {
+              console.info(`[SessionStore] deduplicateMessages: replace transient ${result[j].id} with stable ${msg.id}`)
+              result[j] = msg
+              replaced = true
+              break
+            }
+          }
+          if (replaced) {
+            seenById.add(msg.id)
+            continue
+          }
+          // 两条都有稳定 ID 但语义相同，保留先出现的（ID 保真）
+          console.info(`[SessionStore] deduplicateMessages: skip stable ID dup ${msg.id} (semantic match)`)
+          continue
+        }
+        // 登记语义键，供后续临时 ID 消息匹配
+        if (msg.type === 'tool_use' && msg.toolName) {
+          seenByTool.add(semanticKey)
+        } else {
+          seenByContent.add(semanticKey)
+        }
         result.push(msg)
         continue
       }
@@ -2272,47 +2319,111 @@ export class SessionStore {
 
     const result: Message[] = []
     const seen = new Set<string>()
+    const seenById = new Set<string>()
     let dupCount = 0
 
     for (let i = 0; i < source.length; i++) {
       const msg = source[i]
       const hasStableId = this.isStableMessageId(msg.id)
-      const key = hasStableId ? msg.type + ':id:' + msg.id : this.messageSemanticKey(msg)
-      if (seen.has(key)) {
+      // 第一道：按稳定 ID 去重
+      if (hasStableId) {
+        if (seenById.has(msg.id)) {
+          dupCount++
+          console.info(`[SessionStore] getDedupedMessages #${dupCount}: skip by ID type=${msg.type} id=${msg.id}`)
+          continue
+        }
+        seenById.add(msg.id)
+      }
+      // 第二道：按语义键去重（所有消息都参与，包括稳定 ID 的）
+      const semanticKey = this.messageSemanticKey(msg)
+      if (seen.has(semanticKey)) {
         dupCount++
-        console.info(`[SessionStore] getDedupedMessages #${dupCount}: skip type=${msg.type} id=${msg.id} key=${key.substring(0, 80)}`)
+        // 如果当前消息有稳定 ID 而已有消息没有，用稳定 ID 版本替换
+        if (hasStableId) {
+          let replaced = false
+          for (let j = 0; j < result.length; j++) {
+            if (this.messageSemanticKey(result[j]) === semanticKey && !this.isStableMessageId(result[j].id)) {
+              console.info(`[SessionStore] getDedupedMessages: replace transient ${result[j].id} with stable ${msg.id}`)
+              result[j] = msg
+              replaced = true
+              dupCount-- // 替换不算额外删除
+              break
+            }
+          }
+          if (replaced) {
+            seen.add(semanticKey)
+            continue
+          }
+        }
+        console.info(`[SessionStore] getDedupedMessages #${dupCount}: skip by semantic type=${msg.type} id=${msg.id} key=${semanticKey.substring(0, 80)}`)
         continue
       }
-      seen.add(key)
+      seen.add(semanticKey)
       result.push(msg)
     }
 
-    // 第二道去重：用规整化内容去重
+    // 第二道去重：用规整化内容去重（包括稳定 ID 消息也参与内容交叉去重）
     const normalizedSeen = new Set<string>()
     const finalResult: Message[] = []
     let normDupCount = 0
 
     for (let i = 0; i < result.length; i++) {
       const msg = result[i]
-      let normKey: string
       const hasStableId = this.isStableMessageId(msg.id)
+      let normKey: string
 
       if (hasStableId) {
+        // 稳定 ID 消息：同时按 ID 和内容去重
+        // 先按 ID 去重（同一 ID 不应出现两次）
         normKey = msg.type + ':id:' + msg.id
+        if (normalizedSeen.has(normKey)) {
+          normDupCount++
+          console.info(`[SessionStore] getDedupedMessages normDup #${normDupCount}: skip by stable ID type=${msg.type} id=${msg.id}`)
+          continue
+        }
+        normalizedSeen.add(normKey)
+        // 再按语义内容去重：如果内容与临时 ID 消息重复，替换临时 ID 版本
+        const contentKey = this.messageSemanticKey(msg)
+        if (normalizedSeen.has(contentKey)) {
+          normDupCount++
+          // 检查是否可以替换已有的临时 ID 版本
+          let replaced = false
+          for (let j = 0; j < finalResult.length; j++) {
+            if (this.messageSemanticKey(finalResult[j]) === contentKey && !this.isStableMessageId(finalResult[j].id)) {
+              console.info(`[SessionStore] getDedupedMessages normDup: replace transient ${finalResult[j].id} with stable ${msg.id}`)
+              finalResult[j] = msg
+              replaced = true
+              normDupCount-- // 替换不算额外删除
+              break
+            }
+          }
+          if (replaced) {
+            continue
+          }
+          console.info(`[SessionStore] getDedupedMessages normDup #${normDupCount}: skip by content type=${msg.type} id=${msg.id}`)
+          continue
+        }
+        normalizedSeen.add(contentKey)
       } else if (msg.type === 'tool_use' && msg.toolName) {
         normKey = this.messageSemanticKey(msg)
+        if (normalizedSeen.has(normKey)) {
+          normDupCount++
+          console.info(`[SessionStore] getDedupedMessages normDup #${normDupCount}: skip tool_use type=${msg.type} id=${msg.id}`)
+          continue
+        }
+        normalizedSeen.add(normKey)
       } else {
         const normContent = this.normalizeMessageText((msg.content || '') || (msg.toolResult || ''))
         // 注意：截取长度必须与 messageSemanticKey 保持一致（4000字符）
         normKey = msg.type + ':content:' + normContent.substring(0, 4000)
+        if (normalizedSeen.has(normKey)) {
+          normDupCount++
+          console.info(`[SessionStore] getDedupedMessages normDup #${normDupCount}: skip by content type=${msg.type} id=${msg.id}`)
+          continue
+        }
+        normalizedSeen.add(normKey)
       }
 
-      if (normalizedSeen.has(normKey)) {
-        normDupCount++
-        console.info(`[SessionStore] getDedupedMessages normDup #${normDupCount}: skip type=${msg.type} id=${msg.id}`)
-        continue
-      }
-      normalizedSeen.add(normKey)
       finalResult.push(msg)
     }
 

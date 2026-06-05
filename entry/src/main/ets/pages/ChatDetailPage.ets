@@ -229,7 +229,6 @@ struct ChatDetailPage {
 
   // "最新消息"浮动按钮
   @State showNewMessageButton: boolean = false
-  @State codexSendStatusLabel: string = ''
 
   // 沉浸光感追光效果状态
   @State lightIntensity: number = 0
@@ -411,7 +410,6 @@ struct ChatDetailPage {
     this.loadMessages()
     // 同步当前会话的工作状态（避免从对话列表页进入时状态显示为"空闲"）
     this.chatStatus = sessionStore.getSessionStatus(this.sessionId || '')
-    this.refreshCodexSendStatusLabel()
     this.setupCallbacks()
     // 加载当前会话权限模式
     this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
@@ -845,7 +843,6 @@ struct ChatDetailPage {
       }
       // 消息变化时同步任务列表状态（最新任务状态在 sessionStore 里更新）
       this.taskItems = sessionStore.getCurrentTasks()
-      this.refreshCodexSendStatusLabel()
       // 查看历史或用户触控时不强制滚动，避免打断用户
       if (!this.userIsViewingHistory && !this.isUserTouchingList) {
         this.scrollToBottom()
@@ -1131,7 +1128,6 @@ struct ChatDetailPage {
   private statusChangedListener = (sid: string, status: SessionStatus) => {
     if (sid === this.sessionId) {
       this.chatStatus = status
-      this.refreshCodexSendStatusLabel()
       // 同步当前会话的权限模式
       this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
       // 状态变为 completed 或 idle 时停止计时器
@@ -1160,22 +1156,7 @@ struct ChatDetailPage {
     }
   }
 
-  private refreshCodexSendStatusLabel(): void {
-    if (!this.sessionId || !this.isCodexDocumentFlow()) {
-      this.codexSendStatusLabel = ''
-      return
-    }
-    this.codexSendStatusLabel = ""
-  }
 
-  private getCodexSendShortStatusLabel(): string {
-    if (this.codexSendStatusLabel.indexOf('提交') >= 0) return '提交中'
-    if (this.codexSendStatusLabel.indexOf('送达') >= 0) return '已送达'
-    if (this.codexSendStatusLabel.indexOf('同步') >= 0) return '同步中'
-    if (this.codexSendStatusLabel.indexOf('波动') >= 0 || this.codexSendStatusLabel.indexOf('连接') >= 0) return '连接中'
-    if (this.codexSendStatusLabel.indexOf('失败') >= 0) return '发送失败'
-    return this.codexSendStatusLabel
-  }
 
   private rawMessageListener = (sid: string, msg: WSMessage) => {
     if (sid === this.sessionId) {
@@ -5775,29 +5756,6 @@ struct ChatDetailPage {
   }
 
   @Builder
-  CodexSendStatusBar() {
-    if (this.codexSendStatusLabel.length > 0) {
-      Row({ space: 5 }) {
-        LoadingProgress()
-          .width(10)
-          .height(10)
-          .color('#30D158')
-
-        Text(this.getCodexSendShortStatusLabel())
-          .fontSize(10)
-          .fontColor('#8EE6A2')
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-      }
-      .height(22)
-      .padding({ left: 8, right: 8 })
-      .backgroundColor('rgba(48, 209, 88, 0.10)')
-      .border({ width: 0.5, color: 'rgba(48, 209, 88, 0.22)' })
-      .borderRadius(11)
-      .margin({ right: 14, bottom: 6 })
-      .alignSelf(ItemAlign.End)
-    }
-  }
 
   @Builder
   InputAreaContent() {
