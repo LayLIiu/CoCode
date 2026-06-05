@@ -791,6 +791,15 @@ struct ChatDetailPage {
 
   private async loadMessages(): Promise<void> {
     await sessionStore.loadMessages(this.sessionId)
+    
+    // Official Codex 会话：强制从本地文件同步消息（解决第三方模型 AI 回复不推送的问题）
+    const session = sessionStore.sessions.find(s => s.id === this.sessionId)
+    const threadId = session?.officialCodexThreadId || sessionStore.getOfficialCodexThreadId(this.sessionId)
+    if (threadId) {
+      console.info(`[ChatDetailPage] Syncing local messages for Official Codex thread: ${threadId}`)
+      await sessionStore.syncCurrentOfficialCodexSession()
+    }
+    
     // 使用 getDedupedMessages 确保加载时就是去重的（防御性）
     const msgs = sessionStore.getDedupedMessages(this.sessionId)
     this.messages = [...msgs]
