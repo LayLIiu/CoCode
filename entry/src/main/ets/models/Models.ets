@@ -174,6 +174,7 @@ export type WSMessageType =
   | 'unknown'
   | 'pong'
   | "official_codex_update"
+  | "codex_controller_status"
 
 
 export interface WSMessage {
@@ -207,6 +208,10 @@ export interface WSMessage {
 
   // Agent 派遣
   subtype?: string           // system_notification 子类型（如 task_notification）
+
+  // Codex Controller 状态
+  status?: string          // "connected" | "reconnecting"
+  attempt?: number         // 重连尝试次数
   data?: Record<string, Object>  // 附加数据（如 task_notification 负载）
   summary?: string           // Agent 任务摘要
   parentToolUseId?: string   // 父级工具 UseID（用于 Agent 子工具追踪）

@@ -2437,6 +2437,22 @@ struct ChatDetailPage {
           .width('100%')
         }
 
+        // Codex 连接状态提示
+        if (sessionStore.codexControllerStatus === "reconnecting" && this.isCodexDocumentFlow()) {
+          Row({ space: 6 }) {
+            LoadingProgress()
+              .width(12)
+              .height(12)
+              .color(Theme.AccentOrange)
+            Text("正在重连 Codex...")
+              .fontSize(12)
+              .fontColor(Theme.AccentOrange)
+          }
+          .width("100%")
+          .justifyContent(FlexAlign.Center)
+          .padding({ bottom: 8 })
+        }
+
         this.InputAreaContent()
       }
       .width('100%')

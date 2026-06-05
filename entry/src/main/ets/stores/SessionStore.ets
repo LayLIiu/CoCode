@@ -68,6 +68,10 @@ export class SessionStore {
 
   // WebSocket 状态
   private wsSubscribed: boolean = false
+
+  // Codex Controller 连接状态
+  codexControllerStatus: string = 'unknown' // 'unknown' | 'connected' | 'reconnecting'
+  codexControllerReconnectAttempt: number = 0
   private officialCodexThreadIds: Map<string, string> = new Map()
   private officialCodexThreadRuntime: Map<string, OfficialCodexThreadRuntimeSnapshot> = new Map()
   private officialCodexSendQueues: Map<string, Promise<void>> = new Map()
@@ -4741,6 +4745,14 @@ export class SessionStore {
     console.info(`[SessionStore] Global WS msg: ${msg.type}`)
 
     switch (msg.type) {
+      case 'codex_controller_status':
+        // Codex Controller 连接状态变化（重连中/已连接）
+        console.info(`[SessionStore] Codex controller status: ${msg.status}`)
+        this.codexControllerStatus = msg.status || "unknown"
+        this.codexControllerReconnectAttempt = msg.attempt || 0
+        this.notifySessionsChanged()
+        break
+
       case 'sessions_updated':
         this.fetchSessions().catch((e: Error) => {
           console.error(`[SessionStore] fetchSessions on global event error: ${e.message}`)
