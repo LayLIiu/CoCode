@@ -3653,7 +3653,7 @@ struct ChatDetailPage {
 
       if (this.isToolGroupExpanded(messages)) {
         Column({ space: 8 }) {
-          this.ToolProcessSummaryRow(messages)
+//           this.ToolProcessSummaryRow(messages)
 
           ForEach(this.getGroupedToolUses(messages), (msg: Message) => {
             this.CompactToolRow(msg)
