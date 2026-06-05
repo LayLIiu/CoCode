@@ -1456,7 +1456,8 @@ export class APIService {
     clientSessionId?: string,
     model?: string,
     reasoningEffort?: string,
-    serviceTier?: string
+    serviceTier?: string,
+    transportMode?: 'auto' | 'remote_control' | 'script_fallback'
   ): Promise<Record<string, Object>> {
     const body = JSON.stringify({
       prompt,
@@ -1465,7 +1466,8 @@ export class APIService {
       clientSessionId: clientSessionId || null,
       model: model || null,
       reasoningEffort: reasoningEffort || null,
-      serviceTier: serviceTier || null
+      serviceTier: serviceTier || null,
+      transportMode: transportMode || 'auto'
     })
     return await this.request<Record<string, Object>>('/api/official-codex-remote/send', 'POST', body, 70000)
   }

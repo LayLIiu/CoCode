@@ -9,6 +9,7 @@ import { wsService } from '../services/WebSocketService'
 import { storageService } from '../services/StorageService'
 import { notificationHelper } from '../services/NotificationHelper'
 import { liveViewService, getAiDisplayName } from '../services/LiveViewService'
+import { toastManager } from '../services/ToastManager'
 import { authStore } from './AuthStore'
 import { appState } from './AppState'
 
@@ -2582,24 +2583,42 @@ export class SessionStore {
         this.markOfficialCodexActivity(sessionId)
         const cwd = session?.workDir || session?.projectPath || ''
         const threadId = observedThreadId
-        await this.ensureOfficialCodexControllerConnected()
+        const transportMode = authStore.officialCodexSendMode || 'auto'
+        if (transportMode === 'remote_control') {
+          await this.ensureOfficialCodexControllerConnected()
+        }
         const result = await Promise.race([
-          apiService.sendCodexRemotePrompt(content, cwd, threadId, sessionId),
+          apiService.sendCodexRemotePrompt(content, cwd, threadId, sessionId, '', '', '', transportMode),
           this.timeoutAfter(SessionStore.OFFICIAL_CODEX_SEND_TIMEOUT_MS, '发送超时，已自动重置发送状态。请确认 Codex Desktop 在线后重试。')
         ])
+        const actualTransportMode = (result['actualTransportMode'] as string) || ''
+        const requestedTransportMode = (result['requestedTransportMode'] as string) || transportMode
         const nextThreadId = (result['threadId'] as string) || ''
         const turnId = (result['turnId'] as string) || ''
-        if (nextThreadId.length <= 0) {
+        if (actualTransportMode !== 'script_fallback' && nextThreadId.length <= 0) {
           throw new Error('发送失败：没有拿到 Codex Desktop 会话 ID')
         }
 
-        observedThreadId = nextThreadId
-        await this.saveOfficialCodexThreadId(sessionId, nextThreadId)
+        console.info(`[SessionStore] Official Codex send requested=${requestedTransportMode} actual=${actualTransportMode || 'unknown'} threadId=${nextThreadId || observedThreadId || 'pending'}`)
+        if (actualTransportMode === 'script_fallback') {
+          toastManager.info('Codex 已通过脚本发送')
+        } else if (actualTransportMode === 'remote_control') {
+          toastManager.info('Codex 已通过官方通道发送')
+        }
+
+        if (nextThreadId.length > 0) {
+          observedThreadId = nextThreadId
+          await this.saveOfficialCodexThreadId(sessionId, nextThreadId)
+        }
         if (turnId.length > 0) {
           this.officialCodexActiveTurns.set(sessionId, turnId)
         }
         this.markOfficialCodexActivity(sessionId)
-        void this.pollOfficialCodexLocalThread(sessionId, nextThreadId, 0, 0, '')
+        if (observedThreadId.length > 0) {
+          void this.pollOfficialCodexLocalThread(sessionId, observedThreadId, 0, 0, '')
+        } else if (actualTransportMode === 'script_fallback') {
+          this.updateSessionStatus(sessionId, 'thinking')
+        }
       })
       .catch((e: Error) => {
         this.officialCodexActiveTurns.delete(sessionId)

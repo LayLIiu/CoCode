@@ -68,6 +68,7 @@ export struct SettingsPage {
   @State codexAutomationFallbackAvailable: boolean = false
   @State officialCodexThreadCount: number = 0
   @State officialCodexSyncLoading: boolean = false
+  @State officialCodexSendMode: 'auto' | 'remote_control' | 'script_fallback' = 'script_fallback'
 
   // 模型选择
   @State showModelSheet: boolean = false
@@ -117,6 +118,7 @@ export struct SettingsPage {
 
     // 加载生物识别设置
     this.biometricEnabled = authStore.biometricEnabled
+    this.officialCodexSendMode = authStore.officialCodexSendMode
 
     // 注册监听
     this.modelsChangedListener = () => {
@@ -661,6 +663,28 @@ export struct SettingsPage {
       }
       .width('100%')
 
+      Divider()
+        .color('rgba(255, 255, 255, 0.08)')
+
+      Column({ space: 8 }) {
+        Text('发送方式')
+          .fontSize(Theme.FontBody)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.TextPrimary)
+
+        Text(this.getOfficialCodexSendModeSummary())
+          .fontSize(Theme.FontCaption)
+          .fontColor(Theme.TextSecondary)
+
+        Row({ space: 6 }) {
+          this.OfficialCodexSendModeChip('auto', '自动')
+          this.OfficialCodexSendModeChip('remote_control', '官方')
+          this.OfficialCodexSendModeChip('script_fallback', '脚本')
+        }
+        .width('100%')
+      }
+      .width('100%')
+
       // 操作按钮
       Row({ space: Theme.SpacingMD }) {
         Button() {
@@ -751,6 +775,36 @@ export struct SettingsPage {
     .alignItems(HorizontalAlign.Start)
     .backgroundColor(bgColor)
     .borderRadius(10)
+  }
+
+  private getOfficialCodexSendModeSummary(): string {
+    switch (this.officialCodexSendMode) {
+      case 'remote_control':
+        return '只走官方 Remote Control，失败直接报错，不自动兜底'
+      case 'script_fallback':
+        return '直接调用你本机的脚本发送，不依赖 controller WebSocket'
+      default:
+        return '自动模式当前优先尝试本机脚本发送'
+    }
+  }
+
+  @Builder
+  OfficialCodexSendModeChip(mode: 'auto' | 'remote_control' | 'script_fallback', label: string) {
+    Text(label)
+      .fontSize(Theme.FontTiny)
+      .fontWeight(this.officialCodexSendMode === mode ? FontWeight.Bold : FontWeight.Medium)
+      .fontColor(this.officialCodexSendMode === mode ? Theme.TextOnPrimary : Theme.TextSecondary)
+      .textAlign(TextAlign.Center)
+      .layoutWeight(1)
+      .height(30)
+      .backgroundColor(this.officialCodexSendMode === mode ? Theme.PrimaryColor : 'rgba(255, 255, 255, 0.055)')
+      .borderRadius(8)
+      .onClick(() => {
+        this.officialCodexSendMode = mode
+        authStore.setOfficialCodexSendMode(mode).catch((e: Error) => {
+          console.error(`[Settings] Save Official Codex send mode error: ${e.message}`)
+        })
+      })
   }
 
   @Builder

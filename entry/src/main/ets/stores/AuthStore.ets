@@ -33,6 +33,9 @@ export class AuthStore {
   // E2EE: 桌面端公钥（扫码时从 QR 码获取，云中继端到端加密用）
   relayE2EEPubKey: string | null = null
 
+  // Official Codex 发送模式
+  officialCodexSendMode: 'auto' | 'remote_control' | 'script_fallback' = 'script_fallback'
+
   private preferences?: preferences.Preferences
 
   static getInstance(): AuthStore {
@@ -77,6 +80,10 @@ export class AuthStore {
 
       // 加载 E2EE 桌面端公钥
       this.relayE2EEPubKey = await this.preferences.get('relayE2EEPubKey', '') as string || null
+
+      // Official Codex 发送模式
+      this.officialCodexSendMode = await this.preferences.get('officialCodexSendMode', 'script_fallback') as
+        'auto' | 'remote_control' | 'script_fallback'
 
       // 更新 API 服务地址
       this.updateApiServiceUrl()
@@ -297,6 +304,14 @@ export class AuthStore {
       } else {
         await this.preferences.delete('relayE2EEPubKey')
       }
+      await this.preferences.flush()
+    }
+  }
+
+  async setOfficialCodexSendMode(mode: 'auto' | 'remote_control' | 'script_fallback'): Promise<void> {
+    this.officialCodexSendMode = mode
+    if (this.preferences) {
+      await this.preferences.put('officialCodexSendMode', mode)
       await this.preferences.flush()
     }
   }
