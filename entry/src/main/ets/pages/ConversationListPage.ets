@@ -359,6 +359,7 @@ export struct ConversationListPage {
   @State sessions: Session[] = []
   @State expandedCodexProjects: Set<string> = new Set<string>()
   @State codexExpandedStateReady: boolean = false
+  @State codexExpandedStateHasSavedValue: boolean = false
   @State isLoading: boolean = false
   @State isSyncingOfficialCodex: boolean = false
   @State refreshTrigger: number = 0
@@ -819,7 +820,7 @@ export struct ConversationListPage {
       return
     }
 
-    if (this.expandedCodexProjects.size > 0) {
+    if (this.expandedCodexProjects.size > 0 || this.codexExpandedStateHasSavedValue) {
       return
     }
 
@@ -860,6 +861,7 @@ export struct ConversationListPage {
     try {
       const raw = await storageService.loadString(ConversationListPage.CODEX_PROJECT_EXPANDED_KEY, '')
       const groups = this.getCodexProjectGroups()
+      this.codexExpandedStateHasSavedValue = raw.trim().length > 0
       if (raw.trim().length <= 0) {
         const expanded = new Set<string>()
         for (let i = 0; i < groups.length; i++) {
@@ -906,6 +908,7 @@ export struct ConversationListPage {
     try {
       const values = Array.from(this.expandedCodexProjects.values())
       await storageService.saveString(ConversationListPage.CODEX_PROJECT_EXPANDED_KEY, JSON.stringify(values))
+      this.codexExpandedStateHasSavedValue = true
     } catch (e) {
       console.error(`[ConversationListPage] saveCodexProjectExpandState error: ${e}`)
     }

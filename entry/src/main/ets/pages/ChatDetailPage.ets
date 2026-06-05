@@ -63,7 +63,7 @@ class DiffStats {
 }
 
 function getToolIcon(toolName: string): ToolIconInfo {
-  switch (toolName) {
+  switch (normalizeToolNameForDisplay(toolName)) {
     case 'Bash':
       return new ToolIconInfo($r('sys.symbol.gearshape'), 'Terminal', Theme.AccentGreen)
     case 'Read':
@@ -87,6 +87,65 @@ function getToolIcon(toolName: string): ToolIconInfo {
     default:
       return new ToolIconInfo($r('sys.symbol.gearshape'), toolName, Theme.TextSecondary)
   }
+}
+
+function normalizeToolNameForDisplay(toolName: string): string {
+  const raw = (toolName || '').trim()
+  const lower = raw.replace(/[-_ ]/g, '').toLowerCase()
+  if (lower === 'execcommand' || lower === 'shellcommand' || lower === 'runcommand' ||
+    lower === 'terminal' || lower === 'shell' || lower === 'exec' || lower === 'command' ||
+    lower === 'localcommand') {
+    return 'Bash'
+  }
+  if (lower === 'readfile' || lower === 'openfile' || lower === 'viewfile' || lower === 'catfile') return 'Read'
+  if (lower === 'search' || lower === 'grepsearch' || lower === 'codesearch' || lower === 'searchcontent' ||
+    lower === 'ripgrep') return 'Grep'
+  if (lower === 'globsearch' || lower === 'findfiles' || lower === 'listfiles' || lower === 'lsfiles') return 'Glob'
+  if (lower === 'editfile' || lower === 'applypatch' || lower === 'patchfile' || lower === 'fileedit') return 'Edit'
+  if (lower === 'writefile' || lower === 'createfile' || lower === 'savefile') return 'Write'
+  return raw
+}
+
+function classifyBashCommandForDisplay(command: string): string {
+  const trimmed = command.trim()
+  if (trimmed.length <= 0) return 'Bash'
+  const lower = trimmed.toLowerCase()
+  const compact = lower.replace(/\s+/g, ' ')
+
+  if (compact.indexOf('apply_patch') >= 0 ||
+    compact.indexOf('*** begin patch') >= 0 ||
+    compact.indexOf('git apply') === 0) {
+    return 'Edit'
+  }
+
+  if (compact.startsWith('rg ') ||
+    compact.startsWith('grep ') ||
+    compact.startsWith('ripgrep ') ||
+    compact.indexOf(' rg ') >= 0 ||
+    compact.indexOf(' grep ') >= 0) {
+    return 'Grep'
+  }
+
+  if (compact.startsWith('sed ') ||
+    compact.startsWith('cat ') ||
+    compact.startsWith('nl ') ||
+    compact.startsWith('head ') ||
+    compact.startsWith('tail ') ||
+    compact.startsWith('less ') ||
+    compact.startsWith('wc ') ||
+    compact.startsWith('awk ')) {
+    return 'Read'
+  }
+
+  if (compact.startsWith('ls ') ||
+    compact === 'ls' ||
+    compact.startsWith('find ') ||
+    compact.startsWith('fd ') ||
+    compact.indexOf('rg --files') >= 0) {
+    return 'Glob'
+  }
+
+  return 'Bash'
 }
 
 @Entry
@@ -170,6 +229,7 @@ struct ChatDetailPage {
 
   // "最新消息"浮动按钮
   @State showNewMessageButton: boolean = false
+  @State codexSendStatusLabel: string = ''
 
   // 沉浸光感追光效果状态
   @State lightIntensity: number = 0
@@ -211,7 +271,7 @@ struct ChatDetailPage {
   private hasPlayedCompleteSound: boolean = false
 
   // 分页加载
-  @State displayedMessageCount: number = 40
+  @State displayedMessageCount: number = 32
   @State isLoadingMore: boolean = false
   @State isMessagesLoaded: boolean = false
   @State isListReady: boolean = false
@@ -351,6 +411,7 @@ struct ChatDetailPage {
     this.loadMessages()
     // 同步当前会话的工作状态（避免从对话列表页进入时状态显示为"空闲"）
     this.chatStatus = sessionStore.getSessionStatus(this.sessionId || '')
+    this.refreshCodexSendStatusLabel()
     this.setupCallbacks()
     // 加载当前会话权限模式
     this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
@@ -737,7 +798,7 @@ struct ChatDetailPage {
     this.messages = [...msgs]
     this.lastMessagesSignature = this.buildMessagesSignature(msgs)
     // 初始只显示最近一小段，长对话上滑时再分批加载，避免首次渲染过重
-    this.displayedMessageCount = Math.min(40, this.messages.length)
+    this.displayedMessageCount = Math.min(32, this.messages.length)
     this.refreshVisibleMessagesCache(msgs)
     // 倒序列表默认就在最新消息位置，无需scrollTo
     this.isMessagesLoaded = true
@@ -762,7 +823,7 @@ struct ChatDetailPage {
           const delta = msgs.length - previousMessageCount
           this.displayedMessageCount = Math.min(msgs.length, this.displayedMessageCount + delta)
         } else if (previousMessageCount === 0) {
-          this.displayedMessageCount = Math.min(40, msgs.length)
+          this.displayedMessageCount = Math.min(32, msgs.length)
         }
         this.refreshVisibleMessagesCache(msgs)
         // 更新最新消息 ID（用于条件过渡动画）
@@ -784,6 +845,7 @@ struct ChatDetailPage {
       }
       // 消息变化时同步任务列表状态（最新任务状态在 sessionStore 里更新）
       this.taskItems = sessionStore.getCurrentTasks()
+      this.refreshCodexSendStatusLabel()
       // 查看历史或用户触控时不强制滚动，避免打断用户
       if (!this.userIsViewingHistory && !this.isUserTouchingList) {
         this.scrollToBottom()
@@ -793,7 +855,12 @@ struct ChatDetailPage {
 
   private buildMessagesSignature(messages: Message[]): string {
     let signature = String(messages.length)
-    for (let i = 0; i < messages.length; i++) {
+    const start = Math.max(0, messages.length - 80)
+    if (start > 0) {
+      const first = messages[0]
+      signature += '|first:' + first.id + ':' + first.type
+    }
+    for (let i = start; i < messages.length; i++) {
       const message = messages[i]
       signature += '|' + message.id +
         ':' + message.type +
@@ -808,7 +875,7 @@ struct ChatDetailPage {
   private refreshVisibleMessagesCache(sourceMessages?: Message[]): void {
     const allMessages = sourceMessages && sourceMessages.length > 0
       ? sourceMessages
-      : sessionStore.getDedupedMessages(this.sessionId)
+      : (this.messages.length > 0 ? this.messages : sessionStore.getDedupedMessages(this.sessionId))
     const filtered = allMessages.filter(m =>
       !(m.type === 'tool_use' && m.parentToolUseId) &&
       !(this.isCodexDocumentFlow() && m.type === 'thinking'))
@@ -919,42 +986,9 @@ struct ChatDetailPage {
   }
 
   private appendCodexTurnRenderableMessages(result: Message[], turn: Message[], isLatestTurn: boolean): void {
-    if (turn.length <= 1) {
-      result.push(turn[0])
-      if (this.shouldShowRunningProcessBundle(isLatestTurn)) {
-        result.push(this.createProcessBundleMessage(turn[0], turn[0], [], true))
-      }
-      return
-    }
-
-    let finalAssistantIndex = -1
-    for (let i = turn.length - 1; i >= 1; i--) {
-      const message = turn[i]
-      if (message.type === 'assistant' && (message.content || '').trim().length > 0) {
-        finalAssistantIndex = i
-        break
-      }
-    }
-
-    if (finalAssistantIndex <= 1 || !this.shouldFoldCodexTurn(turn, finalAssistantIndex, isLatestTurn)) {
-      if (this.shouldShowRunningProcessBundle(isLatestTurn)) {
-        result.push(turn[0])
-        result.push(this.createProcessBundleMessage(turn[0], turn[turn.length - 1], turn.slice(1), true))
-      } else {
-        for (let i = 0; i < turn.length; i++) {
-          this.appendRenderableMessage(result, turn[i])
-        }
-      }
-      return
-    }
-
-    const processMessages = turn.slice(1, finalAssistantIndex)
-    result.push(turn[0])
-    const processMessage = this.createProcessBundleMessage(turn[0], turn[finalAssistantIndex], processMessages, false)
-    result.push(processMessage)
-    result.push(turn[finalAssistantIndex])
-
-    for (let i = finalAssistantIndex + 1; i < turn.length; i++) {
+    // Codex 长任务中途也可能输出 assistant 文本，不能只凭“出现了文本回复”
+    // 就把前面的过程折叠成 process bundle。这里保持真实消息流顺序展示。
+    for (let i = 0; i < turn.length; i++) {
       this.appendRenderableMessage(result, turn[i])
     }
   }
@@ -983,10 +1017,11 @@ struct ChatDetailPage {
     isRunning: boolean): Message {
     const id = 'process-bundle-' + userMessage.id + '-' + finalAssistant.id
     this.processBundleCache.set(id, processMessages)
+    const content = isRunning ? '' : this.getProcessBundleCompletedLabel(processMessages)
     return {
       id,
       type: 'system',
-      content: '',
+      content,
       timestamp: finalAssistant.timestamp,
       toolStatus: isRunning ? 'running' : 'completed'
     }
@@ -999,6 +1034,11 @@ struct ChatDetailPage {
   private collectProcessBundle(message: Message): Message[] {
     const cached = this.processBundleCache.get(message.id)
     return cached && cached.length > 0 ? cached : []
+  }
+
+  private getProcessBundleMessagesForRender(message: Message): Message[] {
+    if (!this.isProcessBundleExpanded(message)) return []
+    return this.collectProcessBundle(message)
   }
 
   private isProcessBundleExpanded(message: Message): boolean {
@@ -1025,6 +1065,9 @@ struct ChatDetailPage {
   }
 
   private getProcessBundleLabel(message: Message, messages: Message[]): string {
+    if (messages.length <= 0 && (message.content || '').length > 0) {
+      return message.content
+    }
     const elapsed = message.toolStatus === 'running'
       ? this.elapsedSeconds
       : this.getToolGroupElapsedSeconds(messages)
@@ -1034,6 +1077,11 @@ struct ChatDetailPage {
       if (runningSummary.length > 0) return elapsedLabel + ' · ' + runningSummary
     }
     return elapsedLabel
+  }
+
+  private getProcessBundleCompletedLabel(messages: Message[]): string {
+    const elapsed = this.getToolGroupElapsedSeconds(messages)
+    return elapsed > 0 ? '已处理 ' + this.formatElapsed(elapsed) : '已处理'
   }
 
   private getRunningProcessSummary(messages: Message[]): string {
@@ -1053,11 +1101,11 @@ struct ChatDetailPage {
   }
 
   private getRunningToolSummary(message: Message): string {
-    const toolName = message.toolName || ''
+    const toolName = this.getEffectiveToolName(message)
     const input = message.toolInput || {}
     const filePath = this.getToolFilePath(message)
     const fileName = filePath.length > 0 ? this.getDisplayFileName(filePath) : ''
-    const query = this.getToolSearchQuery(input)
+    const query = this.getToolSearchQueryForMessage(message)
     if (toolName === 'Read') return fileName.length > 0 ? '正在读取 ' + fileName : '正在读取文件'
     if (toolName === 'Grep' || toolName === 'Glob') {
       return query.length > 0 ? '正在搜索 ' + query : '正在搜索'
@@ -1083,6 +1131,7 @@ struct ChatDetailPage {
   private statusChangedListener = (sid: string, status: SessionStatus) => {
     if (sid === this.sessionId) {
       this.chatStatus = status
+      this.refreshCodexSendStatusLabel()
       // 同步当前会话的权限模式
       this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
       // 状态变为 completed 或 idle 时停止计时器
@@ -1109,6 +1158,23 @@ struct ChatDetailPage {
         }
       }
     }
+  }
+
+  private refreshCodexSendStatusLabel(): void {
+    if (!this.sessionId || !this.isCodexDocumentFlow()) {
+      this.codexSendStatusLabel = ''
+      return
+    }
+    this.codexSendStatusLabel = ""
+  }
+
+  private getCodexSendShortStatusLabel(): string {
+    if (this.codexSendStatusLabel.indexOf('提交') >= 0) return '提交中'
+    if (this.codexSendStatusLabel.indexOf('送达') >= 0) return '已送达'
+    if (this.codexSendStatusLabel.indexOf('同步') >= 0) return '同步中'
+    if (this.codexSendStatusLabel.indexOf('波动') >= 0 || this.codexSendStatusLabel.indexOf('连接') >= 0) return '连接中'
+    if (this.codexSendStatusLabel.indexOf('失败') >= 0) return '发送失败'
+    return this.codexSendStatusLabel
   }
 
   private rawMessageListener = (sid: string, msg: WSMessage) => {
@@ -1199,10 +1265,19 @@ struct ChatDetailPage {
 
   // 获取工具输入摘要
   private getToolInputSummary(toolName: string, input: Record<string, Object>): string {
+    toolName = normalizeToolNameForDisplay(toolName)
     if (toolName === 'Bash') {
-      const cmd = input['command'] || input['cmd'] || input['shellCommand']
+      const cmd = input['command'] || input['cmd'] || input['shellCommand'] || input['commandLine'] || input['script']
       if (typeof cmd === 'string') {
         return this.truncateInlineSummary(cmd, 72)
+      }
+      const args = input['args']
+      if (Array.isArray(args)) {
+        const parts: string[] = []
+        for (let i = 0; i < args.length; i++) {
+          parts.push(String(args[i]))
+        }
+        return this.truncateInlineSummary(parts.join(' '), 72)
       }
     } else if (toolName === 'Read' || toolName === 'Write' || toolName === 'Edit') {
       const filePath = input['file_path'] || input['filePath'] || input['path'] || input['uri']
@@ -1668,9 +1743,10 @@ struct ChatDetailPage {
     const elapsed = this.getToolGroupElapsedSeconds(messages)
     const elapsedText = elapsed > 0 ? this.formatElapsed(elapsed) : ''
     if (!this.isToolGroupComplete(messages)) {
-      return elapsedText.length > 0 ? '已处理 ' + elapsedText : '正在处理'
+      return elapsedText.length > 0 ? '处理中 · ' + elapsedText : '处理中'
     }
-    return elapsedText.length > 0 ? '过程已折叠 · ' + elapsedText : '过程已折叠'
+    const summary = this.getToolGroupSummary(messages)
+    return elapsedText.length > 0 ? summary + ' · ' + elapsedText : summary
   }
 
   private getBottomSpacerHeight(): number {
@@ -2156,7 +2232,7 @@ struct ChatDetailPage {
           ForEach(this.getReversedRenderableMessages(), (message: Message) => {
             ListItem() {
               if (this.isProcessBundleMessage(message)) {
-                this.ProcessBundleBubble(message, this.collectProcessBundle(message))
+                this.ProcessBundleBubble(message, this.getProcessBundleMessagesForRender(message))
               } else if (message.type === 'tool_use' && (message.toolName === 'Agent' || message.toolName === 'AskUserQuestion')) {
                 // Agent / AskUserQuestion 有特殊渲染，不参与合组
                 this.MessageBubble(message)
@@ -2589,7 +2665,7 @@ struct ChatDetailPage {
     if (this.isLoadingMore) return
     this.isLoadingMore = true
     setTimeout(() => {
-      const increment = 40
+      const increment = 24
       const newCount = Math.min(this.displayedMessageCount + increment, this.messages.length)
       this.displayedMessageCount = newCount
       this.refreshVisibleMessagesCache(this.messages)
@@ -2750,6 +2826,30 @@ struct ChatDetailPage {
           .fontSize(15)
           .fontColor(Theme.TextPrimary)
           .lineHeight(22)
+
+        if (message.sendStatus === 'sending') {
+          Row({ space: 4 }) {
+            LoadingProgress()
+              .width(10)
+              .height(10)
+              .color(Theme.TextTertiary)
+            Text('正在提交')
+              .fontSize(11)
+              .fontColor(Theme.TextTertiary)
+          }
+        } else if (message.sendStatus === 'failed') {
+          Row({ space: 4 }) {
+            SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+              .fontSize(10)
+              .fontColor([Theme.AccentOrange])
+            Text('发送失败 · 点按重试')
+              .fontSize(11)
+              .fontColor(Theme.AccentOrange)
+          }
+          .onClick(() => {
+            this.retryUserMessage(message)
+          })
+        }
 
         if (this.activeCopyMessageId === message.id) {
           this.MessageQuickActions(message)
@@ -3157,14 +3257,69 @@ struct ChatDetailPage {
 
   private getBashCommand(message: Message): string {
     if (!message.toolInput) return ''
-    const cmd = message.toolInput['command'] || message.toolInput['cmd'] || message.toolInput['shellCommand']
-    return typeof cmd === 'string' ? cmd : ''
+    const cmd = message.toolInput['command'] || message.toolInput['cmd'] || message.toolInput['shellCommand'] ||
+      message.toolInput['commandLine'] || message.toolInput['script']
+    if (typeof cmd === 'string') return cmd
+    const args = message.toolInput['args']
+    if (Array.isArray(args)) {
+      const parts: string[] = []
+      for (let i = 0; i < args.length; i++) {
+        parts.push(String(args[i]))
+      }
+      return parts.join(' ')
+    }
+    return ''
+  }
+
+  private getEffectiveToolName(message: Message): string {
+    const name = normalizeToolNameForDisplay(message.toolName || '')
+    if (name === 'Bash') {
+      return classifyBashCommandForDisplay(this.getBashCommand(message))
+    }
+    if (name.length > 0) return name
+    return 'Tool'
   }
 
   private getToolFilePath(message: Message): string {
     if (!message.toolInput) return ''
     const fp = message.toolInput['file_path'] || message.toolInput['filePath'] || message.toolInput['path'] || message.toolInput['uri']
-    return typeof fp === 'string' ? fp : ''
+    if (typeof fp === 'string' && fp.trim().length > 0) return fp
+    const command = this.getBashCommand(message)
+    if (command.length > 0) {
+      return this.extractLikelyPathFromCommand(command)
+    }
+    return ''
+  }
+
+  private extractLikelyPathFromCommand(command: string): string {
+    const tokens = this.splitCommandTokens(command)
+    if (tokens.length <= 1) return ''
+    for (let i = tokens.length - 1; i >= 1; i--) {
+      const token = tokens[i]
+      if (token.length <= 0) continue
+      if (token.startsWith('-')) continue
+      if (token === '|' || token === '>' || token === '>>') continue
+      if (token.indexOf('/') >= 0 || token.indexOf('.') >= 0) {
+        return token
+      }
+    }
+    return ''
+  }
+
+  private splitCommandTokens(command: string): string[] {
+    const normalized = command.replace(/\n/g, ' ').trim()
+    if (normalized.length <= 0) return []
+    const raw = normalized.split(' ')
+    const tokens: string[] = []
+    for (let i = 0; i < raw.length; i++) {
+      const token = raw[i].trim()
+        .replace(/^['"]+/, '')
+        .replace(/['",]+$/, '')
+      if (token.length > 0) {
+        tokens.push(token)
+      }
+    }
+    return tokens
   }
 
   private truncateToolResult(message: Message): string {
@@ -3175,10 +3330,11 @@ struct ChatDetailPage {
   }
 
   private getToolResultLabel(message: Message): string {
-    if (message.toolName === 'Edit' || message.toolName === 'Write') {
+    const toolName = this.getEffectiveToolName(message)
+    if (toolName === 'Edit' || toolName === 'Write') {
       return 'DIFF / OUTPUT'
     }
-    if (message.toolName === 'Bash') {
+    if (toolName === 'Bash') {
       return 'OUTPUT'
     }
     return 'RESULT'
@@ -3207,7 +3363,7 @@ struct ChatDetailPage {
   }
 
   private getToolActionSummary(message: Message): string {
-    const toolName = message.toolName || ''
+    const toolName = this.getEffectiveToolName(message)
     const input = message.toolInput || {}
     const detail = this.getToolInputSummary(toolName, input)
     if (toolName === 'Bash') return detail.length > 0 ? detail : '运行 shell 命令'
@@ -3226,7 +3382,8 @@ struct ChatDetailPage {
 
   private getToolMetaText(message: Message): string {
     const parts: string[] = []
-    if (message.toolName === 'Edit' || message.toolName === 'Write') {
+    const toolName = this.getEffectiveToolName(message)
+    if (toolName === 'Edit' || toolName === 'Write') {
       const statsText = this.getSingleToolDiffStatsText(message)
       if (statsText.length > 0) parts.push(statsText)
     }
@@ -3244,7 +3401,8 @@ struct ChatDetailPage {
   }
 
   private getToolBlockPreview(message: Message): string {
-    if (message.toolName === 'Bash' && this.getBashCommand(message).length > 0) {
+    const toolName = this.getEffectiveToolName(message)
+    if (toolName === 'Bash' && this.getBashCommand(message).length > 0) {
       return '$ ' + this.getBashCommand(message)
     }
     if (message.toolInput) {
@@ -3267,19 +3425,19 @@ struct ChatDetailPage {
       // Header
       Row({ space: 8 }) {
         // 图标
-        SymbolGlyph(getToolIcon(message.toolName || 'Tool').symbol)
+        SymbolGlyph(getToolIcon(this.getEffectiveToolName(message)).symbol)
           .fontSize(14)
-          .fontColor([getToolIcon(message.toolName || 'Tool').color])
+          .fontColor([getToolIcon(this.getEffectiveToolName(message)).color])
 
         // 工具名
-        Text(getToolIcon(message.toolName || 'Tool').label.toUpperCase())
+        Text(getToolIcon(this.getEffectiveToolName(message)).label.toUpperCase())
           .fontSize(10)
           .fontWeight(FontWeight.Bold)
           .fontColor(Theme.TextSecondary)
 
         // 文件名/命令摘要
-        if (this.getToolInputSummary(message.toolName || '', message.toolInput || {})) {
-          Text(this.getToolInputSummary(message.toolName || '', message.toolInput || {}))
+        if (this.getToolActionSummary(message)) {
+          Text(this.getToolActionSummary(message))
             .fontSize(11)
             .fontColor(Theme.TextTertiary)
             .maxLines(1)
@@ -3322,7 +3480,7 @@ struct ChatDetailPage {
 
         Column({ space: 8 }) {
           // Bash 工具：显示命令
-          if (message.toolName === 'Bash' && this.getBashCommand(message)) {
+          if (this.getEffectiveToolName(message) === 'Bash' && this.getBashCommand(message)) {
             Text('$ ' + this.getBashCommand(message))
               .fontSize(11)
               .fontColor(Theme.TextPrimary)
@@ -3334,7 +3492,8 @@ struct ChatDetailPage {
           }
 
           // 文件内容预览（Write/Edit）
-          if ((message.toolName === 'Write' || message.toolName === 'Edit') &&
+          if ((this.getEffectiveToolName(message) === 'Write' ||
+            this.getEffectiveToolName(message) === 'Edit') &&
             this.getToolFilePath(message) && message.toolStatus === 'completed') {
             FileAttachmentBubble({
               filePath: this.getToolFilePath(message),
@@ -3592,13 +3751,13 @@ struct ChatDetailPage {
   }
 
   private getCompactToolName(message: Message): string {
-    const name = message.toolName || 'Tool'
+    const name = this.getEffectiveToolName(message)
     if (name.length > 0) return name
     return getToolIcon(name).label
   }
 
   private getCompactToolDetail(message: Message): string {
-    const toolName = message.toolName || ''
+    const toolName = this.getEffectiveToolName(message)
     const input = message.toolInput || {}
     const summary = this.getToolInputSummary(toolName, input)
     if (summary.length > 0) return summary
@@ -3612,7 +3771,7 @@ struct ChatDetailPage {
     let hasEdit = false
     let hasCommand = false
     for (let i = 0; i < messages.length; i++) {
-      const name = messages[i].toolName || ''
+      const name = this.getEffectiveToolName(messages[i])
       if (name === 'Grep' || name === 'Glob' || name === 'Read') hasSearch = true
       if (name === 'Edit' || name === 'Write') hasEdit = true
       if (name === 'Bash') hasCommand = true
@@ -3624,7 +3783,7 @@ struct ChatDetailPage {
   }
 
   private getToolProcessDetail(message: Message): string {
-    const toolName = message.toolName || ''
+    const toolName = this.getEffectiveToolName(message)
     const input = message.toolInput || {}
     const filePath = this.getToolFilePath(message)
     const fileName = filePath.length > 0 ? this.getDisplayFileName(filePath) : ''
@@ -3633,12 +3792,12 @@ struct ChatDetailPage {
       return fileName.length > 0 ? 'Read ' + fileName : 'Read file'
     }
     if (toolName === 'Grep') {
-      const query = this.getToolSearchQuery(input)
+      const query = this.getToolSearchQueryForMessage(message)
       const where = fileName.length > 0 ? ' in ' + fileName : ''
       return query.length > 0 ? 'Searched for ' + query + where : 'Searched content' + where
     }
     if (toolName === 'Glob') {
-      const query = this.getToolSearchQuery(input)
+      const query = this.getToolSearchQueryForMessage(message)
       return query.length > 0 ? 'Searched files matching ' + query : 'Searched files'
     }
     if (toolName === 'Bash') {
@@ -3672,6 +3831,35 @@ struct ChatDetailPage {
     return this.truncateInlineSummary(value, 110)
   }
 
+  private getToolSearchQueryForMessage(message: Message): string {
+    const input = message.toolInput || {}
+    const direct = this.getToolSearchQuery(input)
+    if (direct.length > 0) return direct
+
+    const command = this.getBashCommand(message)
+    if (command.length <= 0) return ''
+    const tokens = this.splitCommandTokens(command)
+    if (tokens.length <= 1) return ''
+
+    let commandIndex = -1
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i].toLowerCase()
+      if (token === 'rg' || token === 'grep' || token === 'ripgrep') {
+        commandIndex = i
+        break
+      }
+    }
+    if (commandIndex < 0) return ''
+
+    for (let i = commandIndex + 1; i < tokens.length; i++) {
+      const token = tokens[i]
+      if (token.startsWith('-')) continue
+      if (token === '|' || token === '>' || token === '>>') break
+      return this.truncateInlineSummary(token, 110)
+    }
+    return ''
+  }
+
   /**
    * 工具组折叠态摘要文字（如 "调用 3 个工具 · 执行 2 个命令"）
    */
@@ -3693,8 +3881,9 @@ struct ChatDetailPage {
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i]
       if (m.type === 'tool_use' && m.toolName) {
-        const prev = typeCounts[m.toolName]
-        typeCounts[m.toolName] = (prev !== undefined ? prev : 0) + 1
+        const name = this.getEffectiveToolName(m)
+        const prev = typeCounts[name]
+        typeCounts[name] = (prev !== undefined ? prev : 0) + 1
       }
     }
     const keys = Object.keys(typeCounts)
@@ -3747,7 +3936,8 @@ struct ChatDetailPage {
     for (let i = 0; i < messages.length; i++) {
       const message = messages[i]
       if (message.type !== 'tool_use') continue
-      if (message.toolName !== 'Edit' && message.toolName !== 'Write') continue
+      const toolName = this.getEffectiveToolName(message)
+      if (toolName !== 'Edit' && toolName !== 'Write') continue
       const stats = this.countDiffLines(message.toolResult || '')
       total.added += stats.added
       total.removed += stats.removed
@@ -4282,7 +4472,7 @@ struct ChatDetailPage {
     // 按工具类型统计实际调用次数，不去重
     const typeCounts: Record<string, number> = {}
     for (let i = 0; i < childToolCalls.length; i++) {
-      const name = childToolCalls[i].toolName || 'Tool'
+      const name = normalizeToolNameForDisplay(childToolCalls[i].toolName || 'Tool')
       const prev = typeCounts[name]
       typeCounts[name] = (prev !== undefined ? prev : 0) + 1
     }
@@ -4348,7 +4538,7 @@ struct ChatDetailPage {
 
   private isToolExpandable(toolName?: string): boolean {
     if (!toolName) return false
-    return ['Edit', 'Write', 'Bash', 'Read', 'Grep', 'WebFetch', 'Agent'].indexOf(toolName) >= 0
+    return ['Edit', 'Write', 'Bash', 'Read', 'Grep', 'WebFetch', 'Agent'].indexOf(normalizeToolNameForDisplay(toolName)) >= 0
   }
 
   private toggleTool(id: string): void {
@@ -5501,6 +5691,15 @@ struct ChatDetailPage {
     }
   }
 
+  private retryUserMessage(message: Message): void {
+    const content = (message.content || '').trim()
+    if (content.length <= 0) return
+    const sent = sessionStore.sendMessage(content)
+    if (sent) {
+      toastManager.info('已重新发送')
+    }
+  }
+
   private async pickImage(): Promise<void> {
     try {
       const picker = new photoViewPicker.PhotoViewPicker()
@@ -5572,6 +5771,31 @@ struct ChatDetailPage {
       }
     } catch (e) {
       console.error('pickFile error:', e)
+    }
+  }
+
+  @Builder
+  CodexSendStatusBar() {
+    if (this.codexSendStatusLabel.length > 0) {
+      Row({ space: 5 }) {
+        LoadingProgress()
+          .width(10)
+          .height(10)
+          .color('#30D158')
+
+        Text(this.getCodexSendShortStatusLabel())
+          .fontSize(10)
+          .fontColor('#8EE6A2')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .height(22)
+      .padding({ left: 8, right: 8 })
+      .backgroundColor('rgba(48, 209, 88, 0.10)')
+      .border({ width: 0.5, color: 'rgba(48, 209, 88, 0.22)' })
+      .borderRadius(11)
+      .margin({ right: 14, bottom: 6 })
+      .alignSelf(ItemAlign.End)
     }
   }
 

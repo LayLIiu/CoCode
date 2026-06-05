@@ -61,6 +61,7 @@ export interface Message {
   toolResult?: string
   toolStatus?: ToolStatus
   isStreaming?: boolean
+  sendStatus?: 'sending' | 'sent' | 'failed'
 
   // 权限请求
   permissionId?: string
