@@ -2835,7 +2835,7 @@ export class SessionStore {
               this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
             } else if (nextStableTicks >= 45 &&
               this.isLocalOfficialCodexTurnLikelyComplete(sessionId) &&
-              !this.shouldKeepOfficialCodexWorking(sessionId, threadId, 12000) &&
+              !this.shouldKeepOfficialCodexWorking(sessionId, threadId, 30000) &&
               (!this.hasOfficialCodexActiveTurn(sessionId) ||
                 (!this.isOfficialCodexThreadRuntimeActive(threadId) && nextStableTicks >= 120))) {
               this.officialCodexActiveTurns.delete(sessionId)
@@ -2923,7 +2923,11 @@ export class SessionStore {
     const messages = this.messages.get(sessionId) || []
     if (messages.length <= 0) return false
     const last = messages[messages.length - 1]
-    if (last.type === 'assistant' || last.type === 'error') return true
+    if (last.type === 'assistant') {
+      // 必须有实际内容才算完成，防止把空的占位 assistant 消息当作 final
+      return (last.content || '').trim().length > 0
+    }
+    if (last.type === 'error') return true
     if (last.type === 'tool_use' && (last.toolStatus === 'completed' || last.toolStatus === 'failed')) return true
     return false
   }
