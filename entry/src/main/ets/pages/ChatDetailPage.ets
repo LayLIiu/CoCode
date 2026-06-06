@@ -216,8 +216,6 @@ struct ChatDetailPage {
   // 工具组折叠状态
   @State expandedToolGroupIds: Set<string> = new Set()
   @State expandedProcessBundleIds: Set<string> = new Set()
-  @State toolShimmerProgress: number = 0
-
   // 强制重绘计数器（ArkTS @State 不追踪嵌套对象属性变更）
   @State messageUpdateCounter: number = 0
   private lastMessagesSignature: string = ''
@@ -265,7 +263,6 @@ struct ChatDetailPage {
   @State elapsedSeconds: number = 0
   @State mascotScale: number = 1.0
   private workTimer: number = -1
-  private toolShimmerTimer: number = -1
 
   // 音效：标记本轮 AI 回复是否已播放"已连接"和"已完成"音效，发送新消息时重置
   private hasPlayedConnectSound: boolean = false
@@ -435,7 +432,6 @@ struct ChatDetailPage {
     // 定时拉取上下文使用率
     setTimeout(() => { if (!this.isDestroyed) this.fetchContextUsage() }, 1000)
     this.contextPollTimer = setInterval(() => { if (!this.isDestroyed) this.fetchContextUsage() }, 30000)
-    this.startToolShimmerLoop()
 
     const draft = sessionStore.inputDrafts.get(this.sessionId)
     if (draft) {
@@ -457,7 +453,6 @@ struct ChatDetailPage {
     this.streamingThinking = ''
     this.streamingAssistant = ''
     this.stopAssistantTypewriter()
-    this.stopToolShimmerLoop()
     this.stopWorkTimer()
     if (this.touchTimer >= 0) {
       clearTimeout(this.touchTimer)
@@ -491,7 +486,6 @@ struct ChatDetailPage {
 
   onPageShow(): void {
     this.isPageActive = true
-    this.startToolShimmerLoop()
     this.getRouterParams()
     // 回到页面时重新同步工作状态和权限模式
     if (this.sessionId) {
@@ -505,7 +499,6 @@ struct ChatDetailPage {
 
   onPageHide(): void {
     this.isPageActive = false
-    this.stopToolShimmerLoop()
   }
 
   private async fetchContextUsage(): Promise<void> {
@@ -1303,53 +1296,6 @@ struct ChatDetailPage {
   private truncateInlineSummary(value: string, maxLength: number): string {
     const normalized = value.trim().replace(/\s+/g, ' ')
     return normalized.length > maxLength ? normalized.substring(0, maxLength) + '...' : normalized
-  }
-
-  private startToolShimmerLoop(): void {
-    if (this.toolShimmerTimer !== -1) return
-    this.toolShimmerProgress = 0
-    this.toolShimmerTimer = setInterval(() => {
-      if (this.isDestroyed || !this.isPageActive) {
-        return
-      }
-      const next = this.toolShimmerProgress + 0.03
-      this.toolShimmerProgress = next >= 1 ? next - 1 : next
-    }, 40)
-  }
-
-  private stopToolShimmerLoop(): void {
-    if (this.toolShimmerTimer === -1) return
-    clearInterval(this.toolShimmerTimer)
-    this.toolShimmerTimer = -1
-  }
-
-  private getToolShimmerTranslateX(): number {
-    return -240 + this.toolShimmerProgress * 480
-  }
-
-  @Builder
-  ToolRunningShimmerOverlay(active: boolean, radius: number = 10) {
-    if (active) {
-      Column()
-        .width('42%')
-        .height('140%')
-        .borderRadius(radius + 6)
-        .opacity(0.75)
-        .linearGradient({
-          angle: 0,
-          colors: [
-            ['rgba(255,255,255,0)', 0],
-            ['rgba(255,255,255,0.02)', 0.18],
-            ['rgba(255,255,255,0.14)', 0.42],
-            ['rgba(255,255,255,0.28)', 0.5],
-            ['rgba(255,255,255,0.14)', 0.58],
-            ['rgba(255,255,255,0.02)', 0.82],
-            ['rgba(255,255,255,0)', 1]
-          ]
-        })
-        .translate({ x: this.getToolShimmerTranslateX() })
-        .hitTestBehavior(HitTestMode.None)
-    }
   }
 
   /**
@@ -3621,8 +3567,6 @@ struct ChatDetailPage {
         width: 0.5,
         color: 'rgba(255,255,255,0.12)'
       })
-
-      this.ToolRunningShimmerOverlay(message.toolStatus === 'running', 10)
     }
     .width('100%')
     .clip(true)
@@ -3687,11 +3631,8 @@ struct ChatDetailPage {
         }
       }
       .width('100%')
-
-      this.ToolRunningShimmerOverlay(message.toolStatus === 'running', 0)
     }
     .width('100%')
-    .clip(true)
     .margin({ bottom: this.isProcessBundleExpanded(message) ? Theme.SpacingLG : Theme.SpacingMD })
   }
 
@@ -3757,8 +3698,6 @@ struct ChatDetailPage {
         }
       }
       .width('100%')
-
-      this.ToolRunningShimmerOverlay(!this.isToolGroupComplete(messages), 0)
     }
     .width('100%')
     .clip(true)
@@ -4057,6 +3996,7 @@ struct ChatDetailPage {
     }
     return true
   }
+
 
   /**
    * 工具组右侧进度文字（如 "已完成" 或 "2/3"）

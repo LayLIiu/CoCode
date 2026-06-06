@@ -976,7 +976,10 @@ export class SessionStore {
 
   private persistMessages(sessionId: string, messages?: Message[]): Promise<void> {
     const source = messages || this.messages.get(sessionId) || []
-    const deduped = this.deduplicateMessages(source)
+    // 只持久化稳定 ID 消息（服务端 UUID），过滤临时 ID（stream-/thinking-/user-/permission-/question-/err-/sys-）
+    // 避免重进会话时本地临时 ID 消息与服务端同步回来的 UUID 消息形成重复
+    const stableOnly = source.filter((m: Message) => this.isStableMessageId(m.id))
+    const deduped = this.deduplicateMessages(stableOnly)
     const start = Math.max(0, deduped.length - SessionStore.LOCAL_MESSAGE_CACHE_LIMIT)
     const cached = deduped.slice(start)
     return this.enqueueSave(sessionId, () => storageService.saveMessages(sessionId, cached))
@@ -1684,6 +1687,13 @@ export class SessionStore {
   }
 
   // 后台同步服务器消息
+  // 核心策略（参考 Codex 路径）：服务端是单一真相源
+  //  1) 拉取服务端消息（都是稳定 UUID）
+  //  2) 删除内存里所有 "非稳定 ID 的临时消息"（stream-/thinking-/user-/permission-/question-/err-/sys-）
+  //     —— 因为这些都是服务端消息的临时副本，服务端已经返回正式版本
+  //  3) 保留内存里语义内容在服务端找不到的临时消息（用户刚发出、服务端 JSONL 尚未刷盘的场景）
+  //  4) 服务端消息直接覆盖式合并，按时间戳排序
+  // 不再使用多维度模糊去重，彻底消除"同一消息两份"的可能
   private async syncMessagesFromServer(sessionId: string): Promise<void> {
     // 并发保护：已有同步进行中则跳过（防止重复调用导致竞态）
     if (this.syncingSessions.has(sessionId)) {
@@ -1694,81 +1704,53 @@ export class SessionStore {
     try {
       const serverMessages = await apiService.getMessages(sessionId, 200)
 
-      // 重新获取当前本地消息（可能已被 WebSocket 更新），避免覆盖实时消息
+      // 构造服务端消息的语义键集合，用于判断本地临时消息是否已被服务端承认
+      const serverSemanticKeys = new Set<string>()
+      const serverIds = new Set<string>()
+      for (let i = 0; i < serverMessages.length; i++) {
+        const sm = serverMessages[i]
+        if (sm.id) serverIds.add(sm.id)
+        serverSemanticKeys.add(this.messageSemanticKey(sm))
+      }
+
+      // 重新获取当前本地消息（可能已被 WebSocket 更新）
       const currentLocal = this.messages.get(sessionId) || []
-      let merged = this.mergeMessages(currentLocal, serverMessages)
 
-      // 检查 merge 计算期间是否有新的 WS 消息到达（避免覆盖丢失）
-      const afterMerge = this.messages.get(sessionId) || []
-      if (afterMerge.length > currentLocal.length) {
-        for (let i = currentLocal.length; i < afterMerge.length; i++) {
-          const newMsg = afterMerge[i]
-          // 改用 messageContentKey 比较，避免 type+content 误判（tool_use content 全为空）
-          const newKey = this.messageSemanticKey(newMsg)
-          const existsById = merged.some(m => m.id === newMsg.id)
-          const existsByKey = merged.some(m => this.messageSemanticKey(m) === newKey)
-          if (!existsById && !existsByKey) {
-            merged.push(newMsg)
+      // 保留策略：本地消息中，只保留"语义内容在服务端找不到"的临时消息
+      // 这些是用户刚发出 / 流式中 / 服务端 JSONL 尚未落盘的消息，删了用户会看到消息消失
+      const preservedLocal: Message[] = []
+      let droppedTransientCount = 0
+      for (let i = 0; i < currentLocal.length; i++) {
+        const m = currentLocal[i]
+        const hasStableId = this.isStableMessageId(m.id)
+        // 稳定 ID 消息：如果服务端已返回同 ID，由服务端版本覆盖；否则保留
+        if (hasStableId) {
+          if (!serverIds.has(m.id)) {
+            preservedLocal.push(m)
           }
+          continue
         }
-        merged.sort((a, b) =>
-          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-        )
+        // 临时 ID 消息：如果服务端已有同语义版本，丢弃临时副本
+        const semKey = this.messageSemanticKey(m)
+        if (serverSemanticKeys.has(semKey)) {
+          droppedTransientCount++
+          continue
+        }
+        // 服务端还没承认 —— 保留临时消息，等下次同步替换
+        preservedLocal.push(m)
+      }
+      if (droppedTransientCount > 0) {
+        console.info(`[SessionStore] sync: dropped ${droppedTransientCount} transient-id messages replaced by server`)
       }
 
-      // 去重检测并清理：用语义键去重，防止重新进入聊天页后
-      // 服务端正式消息和本地流式临时消息 ID/toolUseId 不一致导致重复。
-      // 始终执行去重，而不是只在检测到重复时
-      {
-        const deduped: Message[] = []
-        const seenKeys: Set<string> = new Set()
-        const seenIds: Set<string> = new Set()
-        let removedDupCount = 0
-        for (let i = 0; i < merged.length; i++) {
-          const m = merged[i]
-          const hasStableId = this.isStableMessageId(m.id)
-          // 优先按 ID 去重
-          if (m.id && hasStableId) {
-            if (seenIds.has(m.id)) {
-              removedDupCount++
-              console.warn(`[SessionStore] Removing dup after sync (by ID): #${removedDupCount} id=${m.id} type=${m.type}`)
-              continue
-            }
-            seenIds.add(m.id)
-          }
-          // 语义内容去重：即使有稳定 ID 的消息也要参与，
-          // 以捕获"本地临时 ID + 服务器稳定 ID"表示同一条消息的情况。
-          // 当两条消息语义键相同但 ID 不同时，优先保留稳定 ID 的那条。
-          const key = this.messageSemanticKey(m)
-          if (seenKeys.has(key)) {
-            removedDupCount++
-            // 如果当前消息有稳定 ID 而已有消息没有，用稳定 ID 版本替换
-            if (hasStableId) {
-              let replaced = false
-              for (let j = 0; j < deduped.length; j++) {
-                if (this.messageSemanticKey(deduped[j]) === key && !this.isStableMessageId(deduped[j].id)) {
-                  console.info(`[SessionStore] Replacing transient ${deduped[j].id} with stable ${m.id} (same semantic key)`)
-                  deduped[j] = m
-                  replaced = true
-                  removedDupCount-- // 替换不算额外删除
-                  break
-                }
-              }
-              if (replaced) {
-                continue
-              }
-            }
-            console.warn(`[SessionStore] Removing dup after sync (by content): #${removedDupCount} key=${key.substring(0, 100)} type=${m.type} id=${m.id}`)
-            continue
-          }
-          seenKeys.add(key)
-          deduped.push(m)
-        }
-        if (removedDupCount > 0) {
-          console.warn(`[SessionStore] Removed ${removedDupCount} dups from merged result, deduped=${deduped.length}`)
-        }
-        merged = deduped  // 始终使用去重后的结果
+      // 合并：服务端消息 + 本地保留消息，按时间排序
+      let merged: Message[] = serverMessages.slice()
+      for (let i = 0; i < preservedLocal.length; i++) {
+        merged.push(preservedLocal[i])
       }
+      merged.sort((a, b) =>
+        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      )
 
       this.messages.set(sessionId, merged)
       this.notifyMessagesChanged(sessionId)
@@ -1801,164 +1783,6 @@ export class SessionStore {
       this.syncingSessions.delete(sessionId)
     }
   }
-
-  // 智能合并消息：服务器消息为主，保留本地独有的消息
-  // 使用多维度去重（toolUseId / id / 内容摘要）防止重复
-  private mergeMessages(localMessages: Message[], serverMessages: Message[]): Message[] {
-    // 为服务器消息构建多维去重组
-    const serverKeys: Map<string, boolean> = new Map()
-    const serverIds: Set<string> = new Set()
-
-    // 先对服务器消息本身去重（防止服务器返回重复消息）
-    const dedupedServerMessages: Message[] = []
-    for (let i = 0; i < serverMessages.length; i++) {
-      const msg = serverMessages[i]
-      const primaryKey = this.messageContentKey(msg)
-      const semanticKey = this.messageSemanticKey(msg)
-
-      // 检查是否已在去重后的列表中
-      let isDup = false
-      const hasStableId = this.isStableMessageId(msg.id)
-      if (hasStableId) {
-        if (serverIds.has(msg.id)) {
-          isDup = true
-        } else {
-          serverIds.add(msg.id)
-        }
-      }
-      // 服务端历史内部不要按 semanticKey 去重，否则两条相同内容的真实历史消息会被误删。
-      // semanticKey 只登记给后续“本地临时消息 vs 服务端正式消息”匹配使用。
-      if (!isDup && serverKeys.has(primaryKey)) {
-        isDup = true
-      }
-
-      if (!isDup) {
-        serverKeys.set(primaryKey, true)
-        serverKeys.set(semanticKey, true)
-        dedupedServerMessages.push(msg)
-      } else {
-        console.info(`[SessionStore] mergeMessages: skip dup server msg id=${msg.id} type=${msg.type}`)
-      }
-    }
-
-    // 先添加去重后的服务器消息
-    const result: Message[] = [...dedupedServerMessages]
-
-    // 再检查本地消息中是否有服务器没有的
-    for (let i = 0; i < localMessages.length; i++) {
-      const msg = localMessages[i]
-      const primaryKey = this.messageContentKey(msg)
-      const semanticKey = this.messageSemanticKey(msg)
-
-      // 跳过: 主键匹配（含 type + toolUseId / type + id / type + content）
-      if (serverKeys.has(primaryKey)) continue
-      // 跳过: 语义匹配（服务端有正式 ID，本地是 stream-/user-/toolUseId 临时形态时尤其重要）
-      if (serverKeys.has(semanticKey)) continue
-      // 跳过: id 匹配
-      if (msg.id && serverIds.has(msg.id)) continue
-
-      // 额外检查: 对 tool_use 消息，检查服务器是否有同 type + 同 toolName 的消息
-      // （WS 流式 toolUseId 与服务端 toolUseId 不同时，主键匹配会失败）
-      let foundByContent = false
-      if (msg.type === 'tool_use' && msg.toolName) {
-        for (let j = 0; j < serverMessages.length; j++) {
-          const sm = serverMessages[j]
-          if (sm.type === 'tool_use' && sm.toolName === msg.toolName) {
-            // tool_use 的 content 通常为空，靠 toolName + 时间排序去重
-            // 进一步校验：如果两者 toolUseId 相同说明是同一工具调用
-            if (sm.toolUseId && sm.toolUseId === msg.toolUseId) {
-              foundByContent = true
-              break
-            }
-            // toolUseId 不同但 toolName 相同 → 检查 toolInput 是否相同：
-            // 不同 toolInput 说明是不同调用（如 Read 不同文件），不应合并
-            const localInput = msg.toolInput ? this.stableStringify(msg.toolInput) : ''
-            const serverInput = sm.toolInput ? this.stableStringify(sm.toolInput) : ''
-            if (localInput && serverInput && localInput !== serverInput) {
-              continue
-            }
-            // toolInput 相同时，按时间附近判定是否同一调用
-            const msgTime = new Date(msg.timestamp).getTime()
-            const smTime = new Date(sm.timestamp).getTime()
-            if (Math.abs(msgTime - smTime) < 5000) {
-              foundByContent = true
-              break
-            }
-          }
-        }
-      }
-
-      // 对没有 toolUseId 的本地消息，检查服务器是否有同 type 同内容的
-      if (!msg.toolUseId) {
-        for (let j = 0; j < serverMessages.length; j++) {
-          const sm = serverMessages[j]
-          if (sm.type === msg.type) {
-            const localContent = (msg.content || msg.toolResult || '').substring(0, 2000)
-            const serverContent = (sm.content || sm.toolResult || '').substring(0, 2000)
-            // 内容完全匹配（降低长度阈值，确保短消息也能去重）
-            if (localContent.length > 0 && localContent === serverContent) {
-              foundByContent = true
-              break
-            }
-            // 本地和服务端可能一个是整段、一个是拆分段（页面重进后历史同步常见）
-            if (this.isOverlappingText(localContent, serverContent)) {
-              foundByContent = true
-              break
-            }
-            // 规整化对比：trim + 合并空白，捕获流式 vs 服务端格式差异（尾部换行、前后空格等）
-            const normLocal = localContent.trim().replace(/\s+/g, ' ')
-            const normServer = serverContent.trim().replace(/\s+/g, ' ')
-            if (normLocal.length > 0 && normLocal === normServer) {
-              foundByContent = true
-              break
-            }
-          }
-        }
-      }
-
-      if (!foundByContent) {
-        result.push(msg)
-      }
-    }
-
-    // 按时间排序
-    result.sort((a, b) => {
-      return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    })
-
-    // 最终去重：同类型同内容只保留一条（不含时间戳比对，避免本地/服务器时间戳差异导致重复）
-    // 使用完整内容去重，避免超长消息的截断误判
-    // 增加 ID 维度：优先用 ID 去重，无 ID 时用内容去重，防止不同消息内容相同被误合并
-    const finalResult: Message[] = []
-    const seenFinal: Map<string, boolean> = new Map()
-    const seenFinalIds: Set<string> = new Set()
-    for (let i = 0; i < result.length; i++) {
-      const m = result[i]
-      // 优先按 ID 去重（如果有有效 ID）
-      const hasStableId = this.isStableMessageId(m.id)
-      if (hasStableId) {
-        if (seenFinalIds.has(m.id)) {
-          continue
-        }
-        seenFinalIds.add(m.id)
-      }
-      // 稳定 ID 的服务端历史消息只按 ID 去重，避免两次相同内容的真实消息被误删。
-      if (hasStableId) {
-        seenFinal.set(this.messageSemanticKey(m), true)
-        finalResult.push(m)
-        continue
-      }
-      // 临时消息使用语义键去重，捕获流式 vs 服务端格式差异，也避免 toolUseId 变化造成重复
-      const finalKey = this.messageSemanticKey(m)
-      const existing = seenFinal.get(finalKey)
-      if (existing) continue
-      seenFinal.set(finalKey, true)
-      finalResult.push(m)
-    }
-
-    return finalResult
-  }
-
 
   // 稳定化 JSON.stringify：递归对 key 排序，消除嵌套对象属性顺序不确定性
   private stableStringify(value: Object | undefined | null): string {
@@ -4579,7 +4403,10 @@ export class SessionStore {
             }
 
             this.streamingBuffers.set(sessionId, buffer)
-            this.scheduleStreamingPreviewFlush(sessionId)
+            // 不再每 120ms 刷新预览到 streamHeads，避免在 UI 上出现
+            // "正在生成"气泡 + 闪烁光标 + 半截内容。等 message_complete /
+            // tool_use_complete 时 flushStreamingBuffer + flushHeadToTail
+            // 一次性出完整消息。
           }
         }
         break

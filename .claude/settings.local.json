@@ -5,7 +5,12 @@
       "Bash(/Applications/DevEco-Studio.app/Contents/tools/node/bin/node /Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw.js --stop-daemon)",
       "Bash(hvigorw assembleHap --no-daemon)",
       "Read(//Users/liujie/Downloads/cc-haha-main/desktop/**)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(git -C /Users/liujie/MyApplication2 diff)",
+      "Bash(git -C /Users/liujie/MyApplication2 log --oneline -10)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git -C /Users/liujie/MyApplication2 push)"
     ]
   },
   "enableAllProjectMcpServers": true,
