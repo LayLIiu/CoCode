@@ -421,13 +421,13 @@ export struct ConversationListPage {
 
     this.loadRecentDirs()
     void this.loadCodexProjectExpandState()
-    this.syncOfficialCodexThreadsIfNeeded()
+    this.syncOfficialCodexThreadsIfNeeded(false)
   }
 
   onPageShow(): void {
     this.refreshSessionsFromStore()
     sessionStore.warmOfficialCodexControllerIfNeeded()
-    this.syncOfficialCodexThreadsIfNeeded()
+    this.syncOfficialCodexThreadsIfNeeded(true)
     // 每次页面显示时重新设置键盘避让模式
     try {
       this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET)
@@ -441,7 +441,7 @@ export struct ConversationListPage {
     this.refreshTrigger = Date.now()
   }
 
-  private syncOfficialCodexThreadsIfNeeded(): void {
+  private syncOfficialCodexThreadsIfNeeded(force: boolean = false): void {
     this.refreshSessionsFromStore()
 
     if (this.tabType !== TabType.CODEX || this.isSyncingOfficialCodex) {
@@ -449,13 +449,13 @@ export struct ConversationListPage {
     }
 
     const now = Date.now()
-    if (now - this.lastOfficialCodexSyncAt < 30000 && this.getFilteredSessions().length > 0) {
+    if (!force && now - this.lastOfficialCodexSyncAt < 30000 && this.getFilteredSessions().length > 0) {
       return
     }
 
     this.isSyncingOfficialCodex = true
     this.lastOfficialCodexSyncAt = now
-    void sessionStore.syncOfficialCodexThreadsToLocal(50)
+    void sessionStore.syncOfficialCodexThreadsToLocal(120)
       .then(() => {
         this.refreshSessionsFromStore()
       })
@@ -532,7 +532,7 @@ export struct ConversationListPage {
       return {
         content: {
           icon: $r('sys.symbol.arrow_clockwise'),
-          action: () => { this.syncOfficialCodexThreadsIfNeeded() }
+          action: () => { this.syncOfficialCodexThreadsIfNeeded(true) }
         }
       }
     }

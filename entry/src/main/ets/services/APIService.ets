@@ -1471,6 +1471,19 @@ export class APIService {
     })
     return await this.request<Record<string, Object>>('/api/official-codex-remote/send', 'POST', body, 70000)
   }
+
+  async stopCodexRemotePrompt(
+    threadId?: string,
+    clientSessionId?: string,
+    transportMode?: 'auto' | 'remote_control' | 'script_fallback'
+  ): Promise<Record<string, Object>> {
+    const body = JSON.stringify({
+      threadId: threadId || null,
+      clientSessionId: clientSessionId || null,
+      transportMode: transportMode || 'auto'
+    })
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/stop', 'POST', body, 20000)
+  }
   // MARK: - Official Codex Remote Control API
 
   /**

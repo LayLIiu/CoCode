@@ -227,6 +227,9 @@ export default class EntryAbility extends UIAbility {
     // 5. 数据加载（放在连接恢复之后，避免回前台瞬间同时触发大量任务）
     this.foregroundRefreshTimer = setTimeout(() => {
       this.foregroundRefreshTimer = -1
+      sessionStore.syncOfficialCodexThreadsToLocal(80).catch((e: Error) => {
+        hilog.error(DOMAIN, 'testTag', 'Official Codex thread sync on foreground error: %{public}s', e.message)
+      })
       if (sessionStore.currentSessionId) {
         sessionStore.syncCurrentOfficialCodexSession().catch((e: Error) => {
           hilog.error(DOMAIN, 'testTag', 'Official Codex foreground sync error: %{public}s', e.message)

@@ -29,9 +29,11 @@ class OfficialCodexThreadRuntimeSnapshot {
 export class SessionStore {
   private static instance: SessionStore
   private static readonly OFFICIAL_CODEX_RECENT_DAYS = 15
-  private static readonly OFFICIAL_CODEX_LIST_LIMIT = 50
+  private static readonly OFFICIAL_CODEX_LIST_LIMIT = 120
   private static readonly OFFICIAL_CODEX_SEND_TIMEOUT_MS = 30000
   private static readonly OFFICIAL_CODEX_SEND_STALE_MS = 45000
+  private static readonly OFFICIAL_CODEX_DISCOVERY_INTERVAL_MS = 20000
+  private static readonly OFFICIAL_CODEX_STATUS_SYNC_INTERVAL_MS = 10000
 
   // 会话列表
   sessions: Session[] = []
@@ -122,6 +124,7 @@ export class SessionStore {
 
   // Official Codex 全局心跳（无论停留在哪个页面，都自动同步运行中的对话）
   private officialCodexHeartbeatTimer: number = -1
+  private officialCodexDiscoveryTimer: number = -1
 
   // 流式消息内部缓冲区（关闭逐字显示后，只在这里累积，等 message_complete 一次性刷入）
   private streamingBuffers: Map<string, StreamingBuffer> = new Map()
@@ -189,7 +192,7 @@ export class SessionStore {
     this.loadLocalData()
 
     // 统一定时器：先清理过期状态，再同步活跃会话（避免两个定时器交替导致状态振荡）
-    // 每 15 秒执行一次，合并了原来的 staleStatusTimer + officialCodexHeartbeatTimer
+    // 每 10 秒执行一次，合并了原来的 staleStatusTimer + officialCodexHeartbeatTimer
     this.staleStatusTimer = setInterval(() => {
       // 第一步：清理过期的工作状态
       this.syncSessionStatuses()
@@ -197,7 +200,13 @@ export class SessionStore {
       if (appState.isInForeground) {
         void this.syncTrackedOfficialCodexSessions()
       }
-    }, 15000)
+    }, SessionStore.OFFICIAL_CODEX_STATUS_SYNC_INTERVAL_MS)
+
+    // 独立线程发现器：定期把本地新增/更新的 Codex 线程同步进移动端列表
+    this.officialCodexDiscoveryTimer = setInterval(() => {
+      if (!appState.isInForeground) return
+      void this.syncOfficialCodexThreadsToLocal(Math.max(SessionStore.OFFICIAL_CODEX_LIST_LIMIT, 80))
+    }, SessionStore.OFFICIAL_CODEX_DISCOVERY_INTERVAL_MS)
 
     // 应用启动时同步所有 Official Codex 会话状态
     setTimeout(() => {
@@ -1235,6 +1244,48 @@ export class SessionStore {
     }
 
     return new Date(latestTime).toISOString()
+  }
+
+  private findExistingSessionIdByOfficialCodexThreadId(threadId: string): string | null {
+    if (!threadId || threadId.length <= 0) return null
+    for (let i = 0; i < this.sessions.length; i++) {
+      const session = this.sessions[i]
+      if (session.officialCodexThreadId === threadId || this.officialCodexThreadIds.get(session.id) === threadId) {
+        return session.id
+      }
+    }
+    return null
+  }
+
+  private async ensureOfficialCodexSessionForThreadId(threadId: string): Promise<string | null> {
+    if (!threadId || threadId.length <= 0) return null
+
+    const existing = this.findExistingSessionIdByOfficialCodexThreadId(threadId)
+    if (existing) return existing
+
+    try {
+      const threads = await this.fetchOfficialCodexThreads(Math.max(SessionStore.OFFICIAL_CODEX_LIST_LIMIT, 80))
+      for (let i = 0; i < threads.length; i++) {
+        const item = threads[i]
+        if (((item['id'] as string) || '') !== threadId) continue
+        const session = this.buildOfficialCodexSessionFromThread(item)
+        if (!session) return null
+        if (this.isSessionArchivedByIdentity(session.id, threadId)) return null
+
+        this.sessions.push(session)
+        this.officialCodexThreadIds.set(session.id, threadId)
+        await this.restoreSessionFromDeleted(session.id)
+        await this.saveOfficialCodexThreadIds()
+        await this.saveSessionsToStorage()
+        this.notifySessionsChanged()
+        console.info(`[SessionStore] Auto-created Official Codex session for thread ${threadId}`)
+        return session.id
+      }
+    } catch (e) {
+      console.error(`[SessionStore] ensureOfficialCodexSessionForThreadId error: ${e}`)
+    }
+
+    return null
   }
 
   private updateSessionActivity(
@@ -3037,9 +3088,10 @@ export class SessionStore {
 
     try {
       const changed = await this.syncOfficialCodexThreadMessagesFromLocal(sessionId, threadId)
+      const runtimeActive = this.isOfficialCodexThreadRuntimeActive(threadId)
       // 修复：只有真正有活跃 turn 时才恢复 thinking，hasRecentOfficialCodexActivity 不再单独恢复
-      if (this.hasOfficialCodexActiveTurn(sessionId)) {
-        this.updateSessionStatus(sessionId, 'thinking')
+      if (this.hasOfficialCodexActiveTurn(sessionId) || runtimeActive) {
+        this.updateSessionStatus(sessionId, changed ? this.getLocalOfficialCodexPollingStatus(sessionId) : 'thinking')
         void this.pollOfficialCodexLocalThread(sessionId, threadId, 0, changed ? 0 : 1, this.buildMessagesSignatureForPolling(sessionId))
         return
       }
@@ -3944,7 +3996,30 @@ export class SessionStore {
 
   stopGeneration(): void {
     if (!this.currentSessionId) return
-    wsService.sendStop(this.currentSessionId)
+
+    const sessionId = this.currentSessionId
+    const session = this.sessions.find((s: Session) => s.id === sessionId)
+    const threadId = session?.officialCodexThreadId || this.officialCodexThreadIds.get(sessionId) || ''
+
+    if (this.isOfficialCodexSession(sessionId)) {
+      const transportMode = authStore.officialCodexSendMode || 'auto'
+      this.updateSessionStatus(sessionId, 'idle')
+      apiService.stopCodexRemotePrompt(threadId, sessionId, transportMode).then(() => {
+        toastManager.info('已请求停止 Codex Desktop 当前任务')
+      }).catch((e: Error) => {
+        const errMsg: Message = {
+          id: 'official-codex-stop-error-' + Date.now(),
+          type: 'error',
+          content: e.message || String(e),
+          timestamp: new Date().toISOString()
+        }
+        this.addMessage(sessionId, errMsg)
+        toastManager.error(e.message || '停止 Codex Desktop 任务失败')
+      })
+      return
+    }
+
+    wsService.sendStop(sessionId)
   }
 
   changePermissionMode(mode: PermissionMode): void {
@@ -3971,6 +4046,7 @@ export class SessionStore {
    */
   async syncAllOfficialCodexStatuses(): Promise<void> {
     console.info('[SessionStore] syncAllOfficialCodexStatuses: checking all Official Codex sessions')
+    await this.syncOfficialCodexThreadsToLocal(Math.max(SessionStore.OFFICIAL_CODEX_LIST_LIMIT, 80))
     await this.syncTrackedOfficialCodexSessions()
   }
 
@@ -4082,6 +4158,7 @@ export class SessionStore {
     this.syncingOfficialCodexLatest.add(sessionId)
     try {
       const changed = await this.syncOfficialCodexThreadMessagesFromLocal(sessionId, threadId)
+      const runtimeActive = this.isOfficialCodexThreadRuntimeActive(threadId)
       if (changed) {
         this.markOfficialCodexActivity(sessionId)
         this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
@@ -4090,7 +4167,7 @@ export class SessionStore {
       // 关键修复：只有真正有活跃 turn 时才设为 thinking 并启动轮询
       // hasRecentOfficialCodexActivity 不再单独作为恢复 thinking 的条件，避免状态振荡
       const hasActiveTurn = this.hasOfficialCodexActiveTurn(sessionId)
-      if (hasActiveTurn) {
+      if (hasActiveTurn || runtimeActive) {
         this.updateSessionStatus(sessionId, changed ? this.getLocalOfficialCodexPollingStatus(sessionId) : 'thinking')
         void this.pollOfficialCodexLocalThread(sessionId, threadId, 0, changed ? 0 : 1, this.buildMessagesSignatureForPolling(sessionId))
       } else if (this.hasOfficialCodexTerminalCooldown(sessionId)) {
@@ -4776,6 +4853,9 @@ export class SessionStore {
         this.fetchSessions().catch((e: Error) => {
           console.error(`[SessionStore] fetchSessions on global event error: ${e.message}`)
         })
+        void this.syncOfficialCodexThreadsToLocal(Math.max(SessionStore.OFFICIAL_CODEX_LIST_LIMIT, 80)).catch((e: Error) => {
+          console.error(`[SessionStore] syncOfficialCodexThreadsToLocal on global event error: ${e.message}`)
+        })
         break
 
       case 'session_activated':
@@ -4791,15 +4871,17 @@ export class SessionStore {
           // 检查是否是 Official Codex 格式的 sessionId (official-codex-{threadId})
           if (msg.sessionId.startsWith('official-codex-')) {
             const threadId = msg.sessionId.replace('official-codex-', '')
-            // 从 threadId 找到对应的真实 sessionId
-            for (let i = 0; i < this.sessions.length; i++) {
-              const session = this.sessions[i]
-              if (session.officialCodexThreadId === threadId ||
-                  this.officialCodexThreadIds.get(session.id) === threadId) {
-                targetSessionId = session.id
-                console.info(`[SessionStore] Mapped threadId ${threadId} to sessionId ${targetSessionId} for status update`)
-                break
-              }
+            const mappedSessionId = this.findExistingSessionIdByOfficialCodexThreadId(threadId)
+            if (mappedSessionId) {
+              targetSessionId = mappedSessionId
+              console.info(`[SessionStore] Mapped threadId ${threadId} to sessionId ${targetSessionId} for status update`)
+            } else {
+              void this.ensureOfficialCodexSessionForThreadId(threadId).then((createdSessionId: string | null) => {
+                if (!createdSessionId) return
+                console.info(`[SessionStore] Late-created session ${createdSessionId} for status update of thread ${threadId}`)
+                this.updateSessionStatusFromState(createdSessionId, msg.state || 'idle')
+              })
+              break
             }
           }
           console.info(`[SessionStore] Session status changed: ${targetSessionId} -> ${msg.state}`)
@@ -4816,15 +4898,17 @@ export class SessionStore {
             isOfficialCodexBroadcast = true
             // 从 threadId 找到对应的真实 sessionId
             const threadId = msg.sessionId.replace('official-codex-', '')
-            // 遍历所有会话找到匹配的 threadId
-            for (let i = 0; i < this.sessions.length; i++) {
-              const session = this.sessions[i]
-              if (session.officialCodexThreadId === threadId ||
-                  this.officialCodexThreadIds.get(session.id) === threadId) {
-                targetSessionId = session.id
-                console.info(`[SessionStore] Mapped threadId ${threadId} to sessionId ${targetSessionId}`)
-                break
-              }
+            const mappedSessionId = this.findExistingSessionIdByOfficialCodexThreadId(threadId)
+            if (mappedSessionId) {
+              targetSessionId = mappedSessionId
+              console.info(`[SessionStore] Mapped threadId ${threadId} to sessionId ${targetSessionId}`)
+            } else {
+              void this.ensureOfficialCodexSessionForThreadId(threadId).then((createdSessionId: string | null) => {
+                if (!createdSessionId) return
+                console.info(`[SessionStore] Late-created session ${createdSessionId} for broadcast of thread ${threadId}`)
+                this.handleWSMessage(createdSessionId, msg.message as WSMessage)
+              })
+              break
             }
           }
 

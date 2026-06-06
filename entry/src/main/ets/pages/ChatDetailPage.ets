@@ -1560,6 +1560,25 @@ struct ChatDetailPage {
     return session?.projectPath || session?.workDir || '当前会话'
   }
 
+  private getSessionMetaLineText(): string {
+    const projectText = this.getSessionProjectText()
+    if (!sessionStore.isOfficialCodexSessionPublic(this.sessionId)) {
+      return projectText
+    }
+    return `${projectText} · ${this.getOfficialCodexSendModeText()}`
+  }
+
+  private getOfficialCodexSendModeText(): string {
+    switch (authStore.officialCodexSendMode) {
+      case 'remote_control':
+        return '官方发送'
+      case 'script_fallback':
+        return '脚本发送'
+      default:
+        return '自动发送'
+    }
+  }
+
   private getSessionProviderId(): string {
     const session = sessionStore.sessions.find((s: Session) => s.id === this.sessionId)
     return session?.aiTool || ''
@@ -2542,8 +2561,8 @@ struct ChatDetailPage {
         }
       }
 
-      // 第二排：工作路径
-      Text(this.getSessionProjectText())
+      // 第二排：工作路径 + Codex 发送方式
+      Text(this.getSessionMetaLineText())
         .fontSize(10)
         .fontColor(Theme.TextTertiary)
         .maxLines(1)

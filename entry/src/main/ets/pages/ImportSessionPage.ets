@@ -44,14 +44,12 @@ struct ImportSessionPage {
     this.isLoading = true
 
     try {
-      const allSessions = await apiService.getSessions()
-      // 根据Tab类型过滤
-      let importableSessions = allSessions.filter((s: Session) => this.isSessionForTab(s))
       if (this.tabType === TabType.CODEX) {
-        const officialSessions = await this.loadOfficialCodexSessions()
-        importableSessions = [...officialSessions, ...importableSessions]
+        this.sessions = await this.loadOfficialCodexSessions()
+      } else {
+        const allSessions = await apiService.getSessions()
+        this.sessions = allSessions.filter((s: Session) => this.isSessionForTab(s))
       }
-      this.sessions = importableSessions
     } catch (e) {
       console.error(`[ImportSessionPage] Load error: ${e}`)
     }
@@ -90,7 +88,7 @@ struct ImportSessionPage {
         data = (localResponse['threads'] as Array<Record<string, Object>>) || []
       } catch {
         // 降级到远程 API
-        const response = await apiService.listCodexRemoteThreads(50)
+        const response = await apiService.listCodexRemoteThreads(120)
         const result = response['result'] as Record<string, Object>
         data = ((result && result['data']) as Array<Record<string, Object>>) || []
       }
@@ -109,7 +107,9 @@ struct ImportSessionPage {
         const title = name.length > 0 ? name : preview
         const cwd = ((thread['cwd'] as string) || '').trim()
         const createdAt = this.formatOfficialCodexTime(thread['createdAt'])
-        const updatedAt = this.formatOfficialCodexTime(thread['updatedAt'])
+        const updatedAt = this.formatOfficialCodexTime(
+          thread['effectiveUpdatedAt'] || thread['updatedAt'] || thread['effectiveUpdatedMs'] || thread['mtimeMs']
+        )
         sessions.push({
           id: 'official-codex-' + threadId,
           title: title.length > 0 ? title : 'Codex Desktop 对话',
@@ -123,6 +123,9 @@ struct ImportSessionPage {
           officialCodexThreadId: threadId
         })
       }
+      sessions.sort((a: Session, b: Session): number => {
+        return new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
+      })
       return sessions
     } catch (e) {
       console.error(`[ImportSessionPage] Load Official Codex threads error: ${e}`)
@@ -131,9 +134,14 @@ struct ImportSessionPage {
   }
 
   private formatOfficialCodexTime(value: Object): string {
-    // 处理 undefined、null、空字符串等情况
     if (value === undefined || value === null || value === '') {
       return new Date().toISOString()
+    }
+    if (typeof value === 'string') {
+      const parsed = new Date(value).getTime()
+      if (!isNaN(parsed) && parsed > 0) {
+        return new Date(parsed).toISOString()
+      }
     }
     const raw = Number(value)
     if (isNaN(raw) || raw <= 0) {
@@ -243,6 +251,7 @@ struct ImportSessionPage {
           )
           await sessionStore.restoreSessionFromDeleted(officialCodexSessions[i].id)
         }
+        await sessionStore.syncOfficialCodexThreadsToLocal(120)
       }
 
       // 导入普通会话
