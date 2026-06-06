@@ -216,6 +216,7 @@ struct ChatDetailPage {
   // 工具组折叠状态
   @State expandedToolGroupIds: Set<string> = new Set()
   @State expandedProcessBundleIds: Set<string> = new Set()
+  @State toolShimmerProgress: number = 0
 
   // 强制重绘计数器（ArkTS @State 不追踪嵌套对象属性变更）
   @State messageUpdateCounter: number = 0
@@ -264,6 +265,7 @@ struct ChatDetailPage {
   @State elapsedSeconds: number = 0
   @State mascotScale: number = 1.0
   private workTimer: number = -1
+  private toolShimmerTimer: number = -1
 
   // 音效：标记本轮 AI 回复是否已播放"已连接"和"已完成"音效，发送新消息时重置
   private hasPlayedConnectSound: boolean = false
@@ -433,6 +435,7 @@ struct ChatDetailPage {
     // 定时拉取上下文使用率
     setTimeout(() => { if (!this.isDestroyed) this.fetchContextUsage() }, 1000)
     this.contextPollTimer = setInterval(() => { if (!this.isDestroyed) this.fetchContextUsage() }, 30000)
+    this.startToolShimmerLoop()
 
     const draft = sessionStore.inputDrafts.get(this.sessionId)
     if (draft) {
@@ -454,6 +457,7 @@ struct ChatDetailPage {
     this.streamingThinking = ''
     this.streamingAssistant = ''
     this.stopAssistantTypewriter()
+    this.stopToolShimmerLoop()
     this.stopWorkTimer()
     if (this.touchTimer >= 0) {
       clearTimeout(this.touchTimer)
@@ -487,6 +491,7 @@ struct ChatDetailPage {
 
   onPageShow(): void {
     this.isPageActive = true
+    this.startToolShimmerLoop()
     this.getRouterParams()
     // 回到页面时重新同步工作状态和权限模式
     if (this.sessionId) {
@@ -500,6 +505,7 @@ struct ChatDetailPage {
 
   onPageHide(): void {
     this.isPageActive = false
+    this.stopToolShimmerLoop()
   }
 
   private async fetchContextUsage(): Promise<void> {
@@ -838,12 +844,14 @@ struct ChatDetailPage {
           this.latestMessageId = msgs[msgs.length - 1].id
           this.maybeStartAssistantTypewriter(msgs[msgs.length - 1], previousLastMessageId)
         }
-        // 兜底检测：消息已包含 assistant 回复但状态仍卡在工作状态
+        // 兜底检测：非 Codex 会话在拿到 assistant 回复后可以直接收口为 completed。
+        // Codex 的状态更依赖本地线程/turn/runtime，不能在这里过早收口。
         if (msgs.length > 0) {
           const lastMsg = msgs[msgs.length - 1]
           if (lastMsg.type === 'assistant' && lastMsg.content && lastMsg.content.length > 0) {
-            if (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
-                this.chatStatus === 'tool_executing') {
+            if (!this.isCodexDocumentFlow() &&
+                (this.chatStatus === 'thinking' || this.chatStatus === 'streaming' ||
+                this.chatStatus === 'tool_executing')) {
               console.info(`[ChatDetailPage] Fallback: detected assistant message but status=${this.chatStatus}, forcing completed`)
               sessionStore.updateSessionStatus(this.sessionId, 'completed')
             }
@@ -1295,6 +1303,53 @@ struct ChatDetailPage {
   private truncateInlineSummary(value: string, maxLength: number): string {
     const normalized = value.trim().replace(/\s+/g, ' ')
     return normalized.length > maxLength ? normalized.substring(0, maxLength) + '...' : normalized
+  }
+
+  private startToolShimmerLoop(): void {
+    if (this.toolShimmerTimer !== -1) return
+    this.toolShimmerProgress = 0
+    this.toolShimmerTimer = setInterval(() => {
+      if (this.isDestroyed || !this.isPageActive) {
+        return
+      }
+      const next = this.toolShimmerProgress + 0.03
+      this.toolShimmerProgress = next >= 1 ? next - 1 : next
+    }, 40)
+  }
+
+  private stopToolShimmerLoop(): void {
+    if (this.toolShimmerTimer === -1) return
+    clearInterval(this.toolShimmerTimer)
+    this.toolShimmerTimer = -1
+  }
+
+  private getToolShimmerTranslateX(): number {
+    return -240 + this.toolShimmerProgress * 480
+  }
+
+  @Builder
+  ToolRunningShimmerOverlay(active: boolean, radius: number = 10) {
+    if (active) {
+      Column()
+        .width('42%')
+        .height('140%')
+        .borderRadius(radius + 6)
+        .opacity(0.75)
+        .linearGradient({
+          angle: 0,
+          colors: [
+            ['rgba(255,255,255,0)', 0],
+            ['rgba(255,255,255,0.02)', 0.18],
+            ['rgba(255,255,255,0.14)', 0.42],
+            ['rgba(255,255,255,0.28)', 0.5],
+            ['rgba(255,255,255,0.14)', 0.58],
+            ['rgba(255,255,255,0.02)', 0.82],
+            ['rgba(255,255,255,0)', 1]
+          ]
+        })
+        .translate({ x: this.getToolShimmerTranslateX() })
+        .hitTestBehavior(HitTestMode.None)
+    }
   }
 
   /**
@@ -3446,125 +3501,131 @@ struct ChatDetailPage {
 
   @Builder
   ToolUseBubble(message: Message) {
-    Column({ space: 0 }) {
-      // Header
-      Row({ space: 8 }) {
-        // 图标
-        SymbolGlyph(getToolIcon(this.getEffectiveToolName(message)).symbol)
-          .fontSize(14)
-          .fontColor([getToolIcon(this.getEffectiveToolName(message)).color])
+    Stack({ alignContent: Alignment.Center }) {
+      Column({ space: 0 }) {
+        // Header
+        Row({ space: 8 }) {
+          // 图标
+          SymbolGlyph(getToolIcon(this.getEffectiveToolName(message)).symbol)
+            .fontSize(14)
+            .fontColor([getToolIcon(this.getEffectiveToolName(message)).color])
 
-        // 工具名
-        Text(getToolIcon(this.getEffectiveToolName(message)).label.toUpperCase())
-          .fontSize(10)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TextSecondary)
-
-        // 文件名/命令摘要
-        if (this.getToolActionSummary(message)) {
-          Text(this.getToolActionSummary(message))
-            .fontSize(11)
-            .fontColor(Theme.TextTertiary)
-            .maxLines(1)
-            .layoutWeight(1)
-        } else {
-          Blank().layoutWeight(1)
-        }
-
-        // 结果行数
-        if (this.getToolResultLineCount(message)) {
-          Text(this.getToolResultLineCount(message))
+          // 工具名
+          Text(getToolIcon(this.getEffectiveToolName(message)).label.toUpperCase())
             .fontSize(10)
-            .fontColor(Theme.TextTertiary)
-        }
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextSecondary)
 
-        // 状态图标
-        this.ToolStatusIcon(message.toolStatus)
-
-        // 展开箭头
-        if (this.isToolExpandableWithResult(message)) {
-          if (this.expandedToolIds.has(message.id)) {
-            SymbolGlyph($r('sys.symbol.chevron_down'))
-              .fontSize(10)
-              .fontColor([Theme.TextSecondary])
-          } else {
-            SymbolGlyph($r('sys.symbol.chevron_right'))
-              .fontSize(10)
-              .fontColor([Theme.TextSecondary])
-          }
-        }
-      }
-      .width('100%')
-      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-
-      // 展开内容
-      if (this.expandedToolIds.has(message.id) && this.isToolExpandableWithResult(message)) {
-        Divider()
-          .color('rgba(255,255,255,0.1)')
-          .width('100%')
-
-        Column({ space: 8 }) {
-          // Bash 工具：显示命令
-          if (this.getEffectiveToolName(message) === 'Bash' && this.getBashCommand(message)) {
-            Text('$ ' + this.getBashCommand(message))
+          // 文件名/命令摘要
+          if (this.getToolActionSummary(message)) {
+            Text(this.getToolActionSummary(message))
               .fontSize(11)
-              .fontColor(Theme.TextPrimary)
-              .fontFamily('monospace')
-              .width('100%')
-              .padding(10)
-              .borderRadius(6)
-              .backgroundColor('#1C1C1E')
+              .fontColor(Theme.TextTertiary)
+              .maxLines(1)
+              .layoutWeight(1)
+          } else {
+            Blank().layoutWeight(1)
           }
 
-          // 文件内容预览（Write/Edit）
-          if ((this.getEffectiveToolName(message) === 'Write' ||
-            this.getEffectiveToolName(message) === 'Edit') &&
-            this.getToolFilePath(message) && message.toolStatus === 'completed') {
-            FileAttachmentBubble({
-              filePath: this.getToolFilePath(message),
-              onImageTap: (src: string, alt: string, name: string) => {
-                this.openFilePreview(src, alt, name)
-              }
-            })
+          // 结果行数
+          if (this.getToolResultLineCount(message)) {
+            Text(this.getToolResultLineCount(message))
+              .fontSize(10)
+              .fontColor(Theme.TextTertiary)
           }
 
-          // 输出结果
-          if (message.toolResult) {
-            Column({ space: 4 }) {
-              Text(this.getToolResultLabel(message))
-                .fontSize(9)
-                .fontWeight(FontWeight.Bold)
-                .fontColor(Theme.TextSecondary)
+          // 状态图标
+          this.ToolStatusIcon(message.toolStatus)
 
-              // 检测是否有图片
-              if (message.images && message.images.length > 0) {
-                ForEach(message.images, (img: MessageImage, idx: number) => {
-                  Image('data:' + img.mediaType + ';base64,' + img.data)
-                    .width('100%')
-                    .constraintSize({ maxHeight: 300 })
-                    .objectFit(ImageFit.Contain)
-                    .borderRadius(8)
-                })
-              }
-
-              MarkdownRenderer({ content: this.truncateToolResult(message),
-                onLinkClick: (url: string) => { this.openExternalLink(url) } })
+          // 展开箭头
+          if (this.isToolExpandableWithResult(message)) {
+            if (this.expandedToolIds.has(message.id)) {
+              SymbolGlyph($r('sys.symbol.chevron_down'))
+                .fontSize(10)
+                .fontColor([Theme.TextSecondary])
+            } else {
+              SymbolGlyph($r('sys.symbol.chevron_right'))
+                .fontSize(10)
+                .fontColor([Theme.TextSecondary])
             }
-            .width('100%')
-            .alignItems(HorizontalAlign.Start)
           }
         }
         .width('100%')
         .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+
+        // 展开内容
+        if (this.expandedToolIds.has(message.id) && this.isToolExpandableWithResult(message)) {
+          Divider()
+            .color('rgba(255,255,255,0.1)')
+            .width('100%')
+
+          Column({ space: 8 }) {
+            // Bash 工具：显示命令
+            if (this.getEffectiveToolName(message) === 'Bash' && this.getBashCommand(message)) {
+              Text('$ ' + this.getBashCommand(message))
+                .fontSize(11)
+                .fontColor(Theme.TextPrimary)
+                .fontFamily('monospace')
+                .width('100%')
+                .padding(10)
+                .borderRadius(6)
+                .backgroundColor('#1C1C1E')
+            }
+
+            // 文件内容预览（Write/Edit）
+            if ((this.getEffectiveToolName(message) === 'Write' ||
+              this.getEffectiveToolName(message) === 'Edit') &&
+              this.getToolFilePath(message) && message.toolStatus === 'completed') {
+              FileAttachmentBubble({
+                filePath: this.getToolFilePath(message),
+                onImageTap: (src: string, alt: string, name: string) => {
+                  this.openFilePreview(src, alt, name)
+                }
+              })
+            }
+
+            // 输出结果
+            if (message.toolResult) {
+              Column({ space: 4 }) {
+                Text(this.getToolResultLabel(message))
+                  .fontSize(9)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(Theme.TextSecondary)
+
+                // 检测是否有图片
+                if (message.images && message.images.length > 0) {
+                  ForEach(message.images, (img: MessageImage, idx: number) => {
+                    Image('data:' + img.mediaType + ';base64,' + img.data)
+                      .width('100%')
+                      .constraintSize({ maxHeight: 300 })
+                      .objectFit(ImageFit.Contain)
+                      .borderRadius(8)
+                  })
+                }
+
+                MarkdownRenderer({ content: this.truncateToolResult(message),
+                  onLinkClick: (url: string) => { this.openExternalLink(url) } })
+              }
+              .width('100%')
+              .alignItems(HorizontalAlign.Start)
+            }
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+        }
       }
+      .width('100%')
+      .backgroundColor('#2C2C2E')
+      .borderRadius(10)
+      .border({
+        width: 0.5,
+        color: 'rgba(255,255,255,0.12)'
+      })
+
+      this.ToolRunningShimmerOverlay(message.toolStatus === 'running', 10)
     }
     .width('100%')
-    .backgroundColor('#2C2C2E')
-    .borderRadius(10)
-    .border({
-      width: 0.5,
-      color: 'rgba(255,255,255,0.12)'
-    })
+    .clip(true)
     .onClick(() => {
       if (this.isToolExpandableWithResult(message)) {
         this.toggleTool(message.id)
@@ -3579,52 +3640,58 @@ struct ChatDetailPage {
    */
   @Builder
   ProcessBundleBubble(message: Message, processMessages: Message[]) {
-    Column({ space: 0 }) {
-      Row({ space: 6 }) {
-        Text(this.getProcessBundleLabel(message, processMessages))
-          .fontSize(13)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.TextSecondary)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
+    Stack({ alignContent: Alignment.Center }) {
+      Column({ space: 0 }) {
+        Row({ space: 6 }) {
+          Text(this.getProcessBundleLabel(message, processMessages))
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Theme.TextSecondary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
 
-        SymbolGlyph(this.isProcessBundleExpanded(message)
-          ? $r('sys.symbol.chevron_down')
-          : $r('sys.symbol.chevron_right'))
-          .fontSize(11)
-          .fontColor([Theme.TextTertiary])
-      }
-      .width('100%')
-      .padding({ left: 2, right: 2, top: 8, bottom: 10 })
-      .onClick(() => {
-        this.toggleProcessBundle(message.id)
-      })
-
-      Divider()
-        .color('rgba(255,255,255,0.09)')
-        .width('100%')
-
-      if (this.isProcessBundleExpanded(message)) {
-        Column({ space: 14 }) {
-          ForEach(processMessages, (processMsg: Message, idx: number) => {
-            if (processMsg.type === 'assistant' && (processMsg.content || '').trim().length > 0) {
-              this.ProcessAssistantSnippet(processMsg)
-            } else if (this.isStandaloneToolGroupMessage(processMsg) &&
-              this.isFirstProcessToolInChronologicalGroup(processMessages, idx)) {
-              this.ProcessToolGroupInline(this.collectToolGroup(processMsg))
-            } else if (processMsg.type === 'permission_request') {
-              this.PermissionBubble(processMsg)
-            } else if (processMsg.type === 'question') {
-              this.QuestionBubble(processMsg)
-            }
-          }, (processMsg: Message, idx: number) => processMsg.id + '_' + idx + '_' + (processMsg.toolStatus || ''))
+          SymbolGlyph(this.isProcessBundleExpanded(message)
+            ? $r('sys.symbol.chevron_down')
+            : $r('sys.symbol.chevron_right'))
+            .fontSize(11)
+            .fontColor([Theme.TextTertiary])
         }
         .width('100%')
-        .padding({ top: 14, bottom: 4 })
+        .padding({ left: 2, right: 2, top: 8, bottom: 10 })
+        .onClick(() => {
+          this.toggleProcessBundle(message.id)
+        })
+
+        Divider()
+          .color('rgba(255,255,255,0.09)')
+          .width('100%')
+
+        if (this.isProcessBundleExpanded(message)) {
+          Column({ space: 14 }) {
+            ForEach(processMessages, (processMsg: Message, idx: number) => {
+              if (processMsg.type === 'assistant' && (processMsg.content || '').trim().length > 0) {
+                this.ProcessAssistantSnippet(processMsg)
+              } else if (this.isStandaloneToolGroupMessage(processMsg) &&
+                this.isFirstProcessToolInChronologicalGroup(processMessages, idx)) {
+                this.ProcessToolGroupInline(this.collectToolGroup(processMsg))
+              } else if (processMsg.type === 'permission_request') {
+                this.PermissionBubble(processMsg)
+              } else if (processMsg.type === 'question') {
+                this.QuestionBubble(processMsg)
+              }
+            }, (processMsg: Message, idx: number) => processMsg.id + '_' + idx + '_' + (processMsg.toolStatus || ''))
+          }
+          .width('100%')
+          .padding({ top: 14, bottom: 4 })
+        }
       }
+      .width('100%')
+
+      this.ToolRunningShimmerOverlay(message.toolStatus === 'running', 0)
     }
     .width('100%')
+    .clip(true)
     .margin({ bottom: this.isProcessBundleExpanded(message) ? Theme.SpacingLG : Theme.SpacingMD })
   }
 
@@ -3651,44 +3718,50 @@ struct ChatDetailPage {
 
   @Builder
   ToolGroupBubble(messages: Message[]) {
-    Column({ space: 0 }) {
-      Row({ space: 6 }) {
-        Text(this.getToolGroupProcessLabel(messages))
-          .fontSize(13)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Theme.TextSecondary)
+    Stack({ alignContent: Alignment.Center }) {
+      Column({ space: 0 }) {
+        Row({ space: 6 }) {
+          Text(this.getToolGroupProcessLabel(messages))
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Theme.TextSecondary)
 
-        SymbolGlyph(this.isToolGroupExpanded(messages)
-          ? $r('sys.symbol.chevron_down')
-          : $r('sys.symbol.chevron_right'))
-          .fontSize(11)
-          .fontColor([Theme.TextTertiary])
+          SymbolGlyph(this.isToolGroupExpanded(messages)
+            ? $r('sys.symbol.chevron_down')
+            : $r('sys.symbol.chevron_right'))
+            .fontSize(11)
+            .fontColor([Theme.TextTertiary])
 
-        Blank().layoutWeight(1)
-      }
-      .width('100%')
-      .padding({ left: 2, right: 2, top: 8, bottom: 10 })
-      .onClick(() => {
-        this.toggleToolGroup(messages)
-      })
-
-      Divider()
-        .color('rgba(255,255,255,0.09)')
-        .width('100%')
-
-      if (this.isToolGroupExpanded(messages)) {
-        Column({ space: 8 }) {
-//           this.ToolProcessSummaryRow(messages)
-
-          ForEach(this.getGroupedToolUses(messages), (msg: Message) => {
-            this.CompactToolRow(msg)
-          }, (msg: Message) => msg.id + '_' + (msg.toolStatus || '') + '_' + (msg.toolName || ''))
+          Blank().layoutWeight(1)
         }
         .width('100%')
-        .padding({ top: 12, bottom: 4 })
+        .padding({ left: 2, right: 2, top: 8, bottom: 10 })
+        .onClick(() => {
+          this.toggleToolGroup(messages)
+        })
+
+        Divider()
+          .color('rgba(255,255,255,0.09)')
+          .width('100%')
+
+        if (this.isToolGroupExpanded(messages)) {
+          Column({ space: 8 }) {
+//           this.ToolProcessSummaryRow(messages)
+
+            ForEach(this.getGroupedToolUses(messages), (msg: Message) => {
+              this.CompactToolRow(msg)
+            }, (msg: Message) => msg.id + '_' + (msg.toolStatus || '') + '_' + (msg.toolName || ''))
+          }
+          .width('100%')
+          .padding({ top: 12, bottom: 4 })
+        }
       }
+      .width('100%')
+
+      this.ToolRunningShimmerOverlay(!this.isToolGroupComplete(messages), 0)
     }
     .width('100%')
+    .clip(true)
     .margin({ bottom: this.isToolGroupExpanded(messages) ? Theme.SpacingLG : Theme.SpacingMD })
   }
 

@@ -128,6 +128,7 @@ export class SessionStore {
 
   // 流式消息内部缓冲区（关闭逐字显示后，只在这里累积，等 message_complete 一次性刷入）
   private streamingBuffers: Map<string, StreamingBuffer> = new Map()
+  private streamingPreviewTimers: Map<string, number> = new Map()
 
   // 串行化保存队列（防止并发写入竞态导致数据丢失）
   private saveQueues: Map<string, Promise<void>> = new Map()
@@ -1348,8 +1349,51 @@ export class SessionStore {
     return lastAt > 0 && (Date.now() - lastAt) < windowMs
   }
 
+  private hasPendingOfficialCodexWork(sessionId: string, windowMs: number = 20000): boolean {
+    if (this.officialCodexSendQueues.has(sessionId)) {
+      return true
+    }
+    const startedAt = this.officialCodexSendStartedAt.get(sessionId) || 0
+    return startedAt > 0 && (Date.now() - startedAt) < windowMs
+  }
+
   private hasOfficialCodexActiveTurn(sessionId: string): boolean {
     return this.officialCodexActiveTurns.has(sessionId)
+  }
+
+  private hasOfficialCodexStreamingPreview(sessionId: string): boolean {
+    const buffer = this.streamingBuffers.get(sessionId)
+    if (buffer) {
+      if (buffer.assistant.trim().length > 0) return true
+      if (buffer.blockType === 'text' && buffer.thinking.trim().length > 0) return true
+    }
+
+    const head = this.streamHeads.get(sessionId) || []
+    for (let i = head.length - 1; i >= 0; i--) {
+      const message = head[i]
+      if (message.type === 'assistant' && (message.content || '').trim().length > 0) {
+        return true
+      }
+    }
+
+    return false
+  }
+
+  private hasOfficialCodexThinkingPreview(sessionId: string): boolean {
+    const buffer = this.streamingBuffers.get(sessionId)
+    if (buffer && buffer.thinking.trim().length > 0 && buffer.assistant.trim().length <= 0) {
+      return true
+    }
+
+    const head = this.streamHeads.get(sessionId) || []
+    for (let i = head.length - 1; i >= 0; i--) {
+      const message = head[i]
+      if (message.type === 'thinking' && (message.content || '').trim().length > 0) {
+        return true
+      }
+    }
+
+    return false
   }
 
   private hasOfficialCodexTerminalCooldown(sessionId: string, windowMs: number = 60000): boolean {
@@ -2072,32 +2116,60 @@ export class SessionStore {
     const buffer = this.streamingBuffers.get(sessionId)
     if (!buffer) return
     this.streamingBuffers.delete(sessionId)
+    this.cancelStreamingPreviewTimer(sessionId)
+    this.updateStreamingHeadFromBuffer(sessionId, buffer, false, false)
+  }
 
-    const head: Message[] = []
+  private scheduleStreamingPreviewFlush(sessionId: string): void {
+    if (this.streamingPreviewTimers.has(sessionId)) {
+      return
+    }
+    const timer = setTimeout(() => {
+      this.streamingPreviewTimers.delete(sessionId)
+      const buffer = this.streamingBuffers.get(sessionId)
+      if (!buffer) return
+      this.updateStreamingHeadFromBuffer(sessionId, buffer, true, true)
+    }, 120)
+    this.streamingPreviewTimers.set(sessionId, timer)
+  }
+
+  private cancelStreamingPreviewTimer(sessionId: string): void {
+    const timer = this.streamingPreviewTimers.get(sessionId)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      this.streamingPreviewTimers.delete(sessionId)
+    }
+  }
+
+  private updateStreamingHeadFromBuffer(
+    sessionId: string,
+    buffer: StreamingBuffer,
+    isStreaming: boolean,
+    usePreviewIds: boolean
+  ): void {
+    const nextHead: Message[] = []
+    const suffix = usePreviewIds ? sessionId : String(Date.now())
     if (buffer.thinking.trim().length > 0) {
-      head.push({
-        id: 'thinking-' + Date.now(),
+      nextHead.push({
+        id: usePreviewIds ? `thinking-preview-${suffix}` : `thinking-${suffix}`,
         type: 'thinking',
         content: buffer.thinking,
-        isStreaming: false,
+        isStreaming,
         timestamp: new Date().toISOString(),
       })
     }
     if (buffer.assistant.trim().length > 0) {
-      head.push({
-        id: 'stream-' + Date.now(),
+      nextHead.push({
+        id: usePreviewIds ? `stream-preview-${suffix}` : `stream-${suffix}`,
         type: 'assistant',
         content: buffer.assistant,
-        isStreaming: false,
+        isStreaming,
         timestamp: new Date().toISOString(),
       })
     }
 
-    if (head.length > 0) {
-      let existing = this.streamHeads.get(sessionId) || []
-      existing = existing.concat(head)
-      this.streamHeads.set(sessionId, existing)
-    }
+    this.streamHeads.set(sessionId, nextHead)
+    this.notifyMessagesChanged(sessionId)
   }
 
   /** 将流式 Head 缓冲刷新到 Tail (messages) */
@@ -2668,7 +2740,7 @@ export class SessionStore {
         if (observedThreadId.length > 0) {
           void this.pollOfficialCodexLocalThread(sessionId, observedThreadId, 0, 0, '')
         } else if (actualTransportMode === 'script_fallback') {
-          this.updateSessionStatus(sessionId, 'thinking')
+          this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
         }
       })
       .catch((e: Error) => {
@@ -2676,7 +2748,7 @@ export class SessionStore {
         this.warmOfficialCodexControllerIfNeeded(true)
         if (observedThreadId.length > 0 && this.isOfficialCodexTransientPollingError(e)) {
           this.markOfficialCodexActivity(sessionId)
-          this.updateSessionStatus(sessionId, 'thinking')
+          this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
           void this.pollOfficialCodexLocalThread(
             sessionId,
             observedThreadId,
@@ -2784,7 +2856,7 @@ export class SessionStore {
               resolve()
               return
             }
-            this.updateSessionStatus(sessionId, 'thinking')
+            this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
             this.pollOfficialCodexLocalThread(
               sessionId,
               threadId,
@@ -2813,6 +2885,13 @@ export class SessionStore {
   }
 
   private getLocalOfficialCodexPollingStatus(sessionId: string): SessionStatus {
+    if (this.hasOfficialCodexStreamingPreview(sessionId)) {
+      return 'streaming'
+    }
+    if (this.hasOfficialCodexThinkingPreview(sessionId)) {
+      return 'thinking'
+    }
+
     const messages = this.messages.get(sessionId) || []
     for (let i = messages.length - 1; i >= 0; i--) {
       const message = messages[i]
@@ -2910,7 +2989,7 @@ export class SessionStore {
         console.info(`[SessionStore] Ignoring late active update for ${sessionId} after terminal status`)
         return
       }
-      this.updateSessionStatus(sessionId, 'thinking')
+      this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
     }
   }
 
@@ -2948,7 +3027,7 @@ export class SessionStore {
       })
       return
     } else {
-      this.updateSessionStatus(sessionId, 'thinking')
+      this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
     }
 
     void this.pollOfficialCodexLocalThread(
@@ -3091,7 +3170,7 @@ export class SessionStore {
       const runtimeActive = this.isOfficialCodexThreadRuntimeActive(threadId)
       // 修复：只有真正有活跃 turn 时才恢复 thinking，hasRecentOfficialCodexActivity 不再单独恢复
       if (this.hasOfficialCodexActiveTurn(sessionId) || runtimeActive) {
-        this.updateSessionStatus(sessionId, changed ? this.getLocalOfficialCodexPollingStatus(sessionId) : 'thinking')
+        this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
         void this.pollOfficialCodexLocalThread(sessionId, threadId, 0, changed ? 0 : 1, this.buildMessagesSignatureForPolling(sessionId))
         return
       }
@@ -4070,15 +4149,16 @@ export class SessionStore {
       const isCurrent = this.currentSessionId === session.id
       const isRuntimeActive = this.isOfficialCodexThreadRuntimeActive(threadId)
       const hasActiveTurn = this.hasOfficialCodexActiveTurn(session.id)
+      const hasPendingWork = this.hasPendingOfficialCodexWork(session.id)
       const hasTerminalCooldown = this.hasOfficialCodexTerminalCooldown(session.id)
 
-      if (hasTerminalCooldown && !isCurrent && !hasActiveTurn && !isRuntimeActive) {
+      if (hasTerminalCooldown && !isCurrent && !hasActiveTurn && !isRuntimeActive && !hasPendingWork) {
         continue
       }
 
       // 只有真正活跃的会话才进入候选列表：活跃 turn / 活跃状态 / 运行时活跃 / 当前会话
       // 移除 isRecentlyActive 条件，避免对已完成会话反复检查导致状态振荡
-      if (isCurrent || isActiveStatus || isRuntimeActive || hasActiveTurn) {
+      if (isCurrent || isActiveStatus || isRuntimeActive || hasActiveTurn || hasPendingWork) {
         candidates.push(session)
       }
     }
@@ -4139,7 +4219,8 @@ export class SessionStore {
           // 修复：只有真正有活跃 turn 或 terminal cooldown 才跳过清理
           // hasRecentOfficialCodexActivity 不再单独作为跳过条件，避免已完成会话状态无法回落
           if (this.hasOfficialCodexActiveTurn(session.id) ||
-            this.hasOfficialCodexTerminalCooldown(session.id)) {
+            this.hasOfficialCodexTerminalCooldown(session.id) ||
+            this.hasPendingOfficialCodexWork(session.id)) {
             continue
           }
           void this.refreshOfficialCodexActiveSession(session.id, threadId)
@@ -4167,8 +4248,9 @@ export class SessionStore {
       // 关键修复：只有真正有活跃 turn 时才设为 thinking 并启动轮询
       // hasRecentOfficialCodexActivity 不再单独作为恢复 thinking 的条件，避免状态振荡
       const hasActiveTurn = this.hasOfficialCodexActiveTurn(sessionId)
-      if (hasActiveTurn || runtimeActive) {
-        this.updateSessionStatus(sessionId, changed ? this.getLocalOfficialCodexPollingStatus(sessionId) : 'thinking')
+      const hasPendingWork = this.hasPendingOfficialCodexWork(sessionId)
+      if (hasActiveTurn || runtimeActive || hasPendingWork) {
+        this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
         void this.pollOfficialCodexLocalThread(sessionId, threadId, 0, changed ? 0 : 1, this.buildMessagesSignatureForPolling(sessionId))
       } else if (this.hasOfficialCodexTerminalCooldown(sessionId)) {
         this.updateSessionStatus(sessionId, changed ? 'completed' : 'idle')
@@ -4180,10 +4262,12 @@ export class SessionStore {
     } catch (e) {
       console.info(`[SessionStore] refreshOfficialCodexActiveSession skipped: ${e}`)
       const supplemented = await this.supplementOfficialCodexMessagesFromLocal(sessionId, threadId, true)
-      if (this.hasOfficialCodexTerminalCooldown(sessionId) && !this.hasOfficialCodexActiveTurn(sessionId)) {
+      if (this.hasPendingOfficialCodexWork(sessionId)) {
+        this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
+      } else if (this.hasOfficialCodexTerminalCooldown(sessionId) && !this.hasOfficialCodexActiveTurn(sessionId)) {
         this.updateSessionStatus(sessionId, supplemented ? 'completed' : 'idle')
       } else if (this.hasOfficialCodexActiveTurn(sessionId)) {
-        this.updateSessionStatus(sessionId, 'thinking')
+        this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
       } else if (supplemented) {
         this.updateSessionStatus(sessionId, 'completed')
       } else {
@@ -4221,22 +4305,33 @@ export class SessionStore {
       return
     }
 
-    // 关键防振荡：如果之前是 completed/idle 且在 terminal cooldown 期间，
-    // 不允许通过 polling 或本地推断把它改回活跃状态，除非有真正的活跃 turn
-    const shouldBlockOscillation = !!(session?.officialCodexThreadId ||
+    const isOfficialCodexStatusSession = !!(session?.officialCodexThreadId ||
       this.officialCodexThreadIds.get(sessionId) ||
       ((session?.aiTool || '').toLowerCase().indexOf('codex') >= 0))
+
+    if (isOfficialCodexStatusSession &&
+      (status === 'completed' || status === 'idle') &&
+      (previous === 'thinking' || previous === 'streaming' || previous === 'tool_executing') &&
+      this.hasPendingOfficialCodexWork(sessionId) &&
+      this.hasRecentOfficialCodexActivity(sessionId, 30000)) {
+      console.info(`[SessionStore] Blocking premature terminal status: ${sessionId} ${previous}->${status}`)
+      return
+    }
+
+    // 关键防振荡：如果之前是 completed/idle 且在 terminal cooldown 期间，
+    // 不允许通过 polling 或本地推断把它改回活跃状态，除非有真正的活跃 turn
+    const shouldBlockOscillation = isOfficialCodexStatusSession
     if (shouldBlockOscillation &&
       (previous === 'completed' || previous === 'idle') &&
       (status === 'thinking' || status === 'streaming' || status === 'tool_executing') &&
       this.hasOfficialCodexTerminalCooldown(sessionId, 120000) &&
-      !this.hasOfficialCodexActiveTurn(sessionId)) {
+      !this.hasOfficialCodexActiveTurn(sessionId) &&
+      !this.hasPendingOfficialCodexWork(sessionId)) {
       console.info(`[SessionStore] Blocking status oscillation: ${sessionId} ${previous}->${status} blocked by terminal cooldown`)
       return
     }
 
-    if (status === 'thinking' || status === 'streaming' || status === 'tool_executing' ||
-      status === 'permission_pending' || status === 'question_pending') {
+    if (this.isWorkingSessionStatus(status) || this.isWaitingSessionStatus(status)) {
       this.officialCodexTerminalAt.delete(sessionId)
     } else if (status === 'completed' || status === 'idle') {
       this.officialCodexTerminalAt.set(sessionId, Date.now())
@@ -4253,26 +4348,11 @@ export class SessionStore {
       storageService.saveSessionStatuses(this.sessionStatuses)
     }
 
-    const isOfficialCodexStatusSession = !!(session?.officialCodexThreadId ||
-      this.officialCodexThreadIds.get(sessionId) ||
-      ((session?.aiTool || '').toLowerCase().indexOf('codex') >= 0))
-
-    // 非 Official Codex 会话继续保留旧的 completed -> idle 回落逻辑
-    if (status === 'completed' && !isOfficialCodexStatusSession) {
-      // 清除之前的 timer
-      const oldTimer = this.completedTimers.get(sessionId)
-      if (oldTimer !== undefined) {
-        clearTimeout(oldTimer)
-      }
-      const timer = setTimeout(() => {
-        this.completedTimers.delete(sessionId)
-        // 只有当前仍然是 completed 时才恢复（避免覆盖新的工作状态）
-        if (this.sessionStatuses.get(sessionId) === 'completed') {
-          this.updateSessionStatus(sessionId, 'idle')
-        }
-      }, 2000)
-      this.completedTimers.set(sessionId, timer)
-    } else if (status === 'completed' || status === 'idle') {
+    // Claude / Codex / OpenCode 统一：completed 短暂停留后回到 idle，
+    // 但 Codex 要额外确认没有活跃工作，避免结束态覆盖真实运行态。
+    if (status === 'completed') {
+      this.scheduleCompletedToIdle(sessionId, isOfficialCodexStatusSession)
+    } else if (status === 'idle') {
       const oldTimer = this.completedTimers.get(sessionId)
       if (oldTimer !== undefined) {
         clearTimeout(oldTimer)
@@ -4487,6 +4567,7 @@ export class SessionStore {
             }
 
             this.streamingBuffers.set(sessionId, buffer)
+            this.scheduleStreamingPreviewFlush(sessionId)
           }
         }
         break
@@ -4965,11 +5046,29 @@ export class SessionStore {
   private updateSessionStatusFromState(sessionId: string, state: string): void {
     // 获取当前状态，避免覆盖已完成状态
     const currentStatus = this.sessionStatuses.get(sessionId) || 'idle'
+    const session = this.sessions.find((s: Session) => s.id === sessionId)
+    const threadId = session?.officialCodexThreadId || this.officialCodexThreadIds.get(sessionId) || ''
+    const shouldAllowWorkingRecovery =
+      this.hasPendingOfficialCodexWork(sessionId) ||
+      this.hasOfficialCodexActiveTurn(sessionId) ||
+      (threadId.length > 0 && this.isOfficialCodexThreadRuntimeActive(threadId)) ||
+      this.hasRecentOfficialCodexActivity(sessionId, 30000) ||
+      this.hasOfficialCodexStreamingPreview(sessionId) ||
+      this.hasOfficialCodexThinkingPreview(sessionId)
+
+    if ((state === 'completed' || state === 'idle') &&
+        (currentStatus === 'thinking' || currentStatus === 'streaming' || currentStatus === 'tool_executing') &&
+        this.hasPendingOfficialCodexWork(sessionId) &&
+        this.hasRecentOfficialCodexActivity(sessionId, 30000)) {
+      console.info(`[SessionStore] Ignoring stale terminal state ${state} for ${sessionId}, current is ${currentStatus}`)
+      return
+    }
 
     // 如果当前是 completed 或 idle，且新状态是 working 状态，忽略
     // 这避免桌面端延迟的状态消息覆盖移动端的完成状态
     if ((currentStatus === 'completed' || currentStatus === 'idle') &&
-        (state === 'thinking' || state === 'streaming' || state === 'tool_executing')) {
+        (state === 'thinking' || state === 'streaming' || state === 'tool_executing') &&
+        !shouldAllowWorkingRecovery) {
       console.info(`[SessionStore] Ignoring stale status ${state} for ${sessionId}, current is ${currentStatus}`)
       return
     }
@@ -4999,6 +5098,41 @@ export class SessionStore {
         break
     }
     this.updateSessionStatus(sessionId, status)
+  }
+
+  private isWorkingSessionStatus(status: SessionStatus): boolean {
+    return status === 'thinking' || status === 'streaming' || status === 'tool_executing'
+  }
+
+  private isWaitingSessionStatus(status: SessionStatus): boolean {
+    return status === 'permission_pending' || status === 'question_pending'
+  }
+
+  private scheduleCompletedToIdle(sessionId: string, isOfficialCodexStatusSession: boolean): void {
+    const oldTimer = this.completedTimers.get(sessionId)
+    if (oldTimer !== undefined) {
+      clearTimeout(oldTimer)
+      this.completedTimers.delete(sessionId)
+    }
+
+    const delayMs = isOfficialCodexStatusSession ? 2800 : 2000
+    const timer = setTimeout(() => {
+      this.completedTimers.delete(sessionId)
+      if (this.sessionStatuses.get(sessionId) !== 'completed') {
+        return
+      }
+      if (isOfficialCodexStatusSession &&
+        (this.hasPendingOfficialCodexWork(sessionId) ||
+          this.hasOfficialCodexActiveTurn(sessionId) ||
+          this.hasOfficialCodexStreamingPreview(sessionId) ||
+          this.hasOfficialCodexThinkingPreview(sessionId) ||
+          this.hasRecentOfficialCodexActivity(sessionId, 12000))) {
+        console.info(`[SessionStore] Skip completed->idle cooldown for active Codex session: ${sessionId}`)
+        return
+      }
+      this.updateSessionStatus(sessionId, 'idle')
+    }, delayMs)
+    this.completedTimers.set(sessionId, timer)
   }
 
   private updateSessionTitle(sessionId: string, title: string): void {
