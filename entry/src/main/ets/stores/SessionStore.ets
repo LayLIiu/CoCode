@@ -1410,6 +1410,19 @@ export class SessionStore {
     return status === 'running' || status === 'inprogress' || status === 'pending'
   }
 
+  private shouldKeepOfficialCodexWorking(
+    sessionId: string,
+    threadId: string,
+    recentWindowMs: number = SessionStore.OFFICIAL_CODEX_SEND_STALE_MS
+  ): boolean {
+    return this.hasPendingOfficialCodexWork(sessionId, recentWindowMs) ||
+      this.hasOfficialCodexActiveTurn(sessionId) ||
+      (threadId.length > 0 && this.isOfficialCodexThreadRuntimeActive(threadId)) ||
+      this.hasRecentOfficialCodexActivity(sessionId, recentWindowMs) ||
+      this.hasOfficialCodexStreamingPreview(sessionId) ||
+      this.hasOfficialCodexThinkingPreview(sessionId)
+  }
+
   private formatOfficialCodexTime(value: Object): string {
     // 处理 undefined、null、空字符串等情况
     if (value === undefined || value === null || value === '') {
@@ -2802,7 +2815,8 @@ export class SessionStore {
       setTimeout(() => {
         // 关键修复：如果已经有 terminal cooldown 且没有活跃 turn，立即停止轮询
         // 防止已完成的会话被 polling 循环反复恢复为 thinking
-        if (this.hasOfficialCodexTerminalCooldown(sessionId) && !this.hasOfficialCodexActiveTurn(sessionId)) {
+        if (this.hasOfficialCodexTerminalCooldown(sessionId) &&
+          !this.shouldKeepOfficialCodexWorking(sessionId, threadId)) {
           this.officialCodexLocalPollingSessions.delete(sessionId)
           this.updateSessionStatus(sessionId, 'completed')
           resolve()
@@ -2821,6 +2835,7 @@ export class SessionStore {
               this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
             } else if (nextStableTicks >= 45 &&
               this.isLocalOfficialCodexTurnLikelyComplete(sessionId) &&
+              !this.shouldKeepOfficialCodexWorking(sessionId, threadId, 12000) &&
               (!this.hasOfficialCodexActiveTurn(sessionId) ||
                 (!this.isOfficialCodexThreadRuntimeActive(threadId) && nextStableTicks >= 120))) {
               this.officialCodexActiveTurns.delete(sessionId)
@@ -2829,9 +2844,7 @@ export class SessionStore {
               resolve()
               return
             } else if (nextStableTicks >= 90 &&
-              !this.hasOfficialCodexActiveTurn(sessionId) &&
-              !this.hasRecentOfficialCodexActivity(sessionId, 120000) &&
-              !this.isOfficialCodexThreadRuntimeActive(threadId)) {
+              !this.shouldKeepOfficialCodexWorking(sessionId, threadId, 120000)) {
               this.officialCodexLocalPollingSessions.delete(sessionId)
               this.updateSessionStatus(sessionId, 'idle')
               resolve()
@@ -2850,7 +2863,8 @@ export class SessionStore {
           })
           .catch(() => {
             // 如果已经有 terminal cooldown，不再恢复 thinking
-            if (this.hasOfficialCodexTerminalCooldown(sessionId) && !this.hasOfficialCodexActiveTurn(sessionId)) {
+            if (this.hasOfficialCodexTerminalCooldown(sessionId) &&
+              !this.shouldKeepOfficialCodexWorking(sessionId, threadId)) {
               this.officialCodexLocalPollingSessions.delete(sessionId)
               this.updateSessionStatus(sessionId, 'idle')
               resolve()
@@ -3167,9 +3181,7 @@ export class SessionStore {
 
     try {
       const changed = await this.syncOfficialCodexThreadMessagesFromLocal(sessionId, threadId)
-      const runtimeActive = this.isOfficialCodexThreadRuntimeActive(threadId)
-      // 修复：只有真正有活跃 turn 时才恢复 thinking，hasRecentOfficialCodexActivity 不再单独恢复
-      if (this.hasOfficialCodexActiveTurn(sessionId) || runtimeActive) {
+      if (this.shouldKeepOfficialCodexWorking(sessionId, threadId)) {
         this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
         void this.pollOfficialCodexLocalThread(sessionId, threadId, 0, changed ? 0 : 1, this.buildMessagesSignatureForPolling(sessionId))
         return
@@ -3178,8 +3190,10 @@ export class SessionStore {
     } catch (e) {
       console.error(`[SessionStore] syncOfficialCodexSessionOnLoad error: ${e}`)
       const supplemented = await this.supplementOfficialCodexMessagesFromLocal(sessionId, threadId, false)
-      const runtimeActive = this.isOfficialCodexThreadRuntimeActive(threadId)
-      this.updateSessionStatus(sessionId, runtimeActive ? 'thinking' : (supplemented ? 'completed' : 'idle'))
+      this.updateSessionStatus(sessionId,
+        this.shouldKeepOfficialCodexWorking(sessionId, threadId)
+          ? this.getLocalOfficialCodexPollingStatus(sessionId)
+          : (supplemented ? 'completed' : 'idle'))
     }
   }
   private async syncOfficialCodexThreadMessages(sessionId: string, threadId: string): Promise<void> {
@@ -4239,17 +4253,13 @@ export class SessionStore {
     this.syncingOfficialCodexLatest.add(sessionId)
     try {
       const changed = await this.syncOfficialCodexThreadMessagesFromLocal(sessionId, threadId)
-      const runtimeActive = this.isOfficialCodexThreadRuntimeActive(threadId)
+      const shouldKeepWorking = this.shouldKeepOfficialCodexWorking(sessionId, threadId)
       if (changed) {
         this.markOfficialCodexActivity(sessionId)
         this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
       }
 
-      // 关键修复：只有真正有活跃 turn 时才设为 thinking 并启动轮询
-      // hasRecentOfficialCodexActivity 不再单独作为恢复 thinking 的条件，避免状态振荡
-      const hasActiveTurn = this.hasOfficialCodexActiveTurn(sessionId)
-      const hasPendingWork = this.hasPendingOfficialCodexWork(sessionId)
-      if (hasActiveTurn || runtimeActive || hasPendingWork) {
+      if (shouldKeepWorking) {
         this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
         void this.pollOfficialCodexLocalThread(sessionId, threadId, 0, changed ? 0 : 1, this.buildMessagesSignatureForPolling(sessionId))
       } else if (this.hasOfficialCodexTerminalCooldown(sessionId)) {
@@ -4262,12 +4272,10 @@ export class SessionStore {
     } catch (e) {
       console.info(`[SessionStore] refreshOfficialCodexActiveSession skipped: ${e}`)
       const supplemented = await this.supplementOfficialCodexMessagesFromLocal(sessionId, threadId, true)
-      if (this.hasPendingOfficialCodexWork(sessionId)) {
+      if (this.shouldKeepOfficialCodexWorking(sessionId, threadId)) {
         this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
       } else if (this.hasOfficialCodexTerminalCooldown(sessionId) && !this.hasOfficialCodexActiveTurn(sessionId)) {
         this.updateSessionStatus(sessionId, supplemented ? 'completed' : 'idle')
-      } else if (this.hasOfficialCodexActiveTurn(sessionId)) {
-        this.updateSessionStatus(sessionId, this.getLocalOfficialCodexPollingStatus(sessionId))
       } else if (supplemented) {
         this.updateSessionStatus(sessionId, 'completed')
       } else {

@@ -1500,6 +1500,20 @@ export class APIService {
     return await this.request<Record<string, Object>>('/api/official-codex-remote/controller-session', 'GET', '')
   }
 
+  async listCodexControllerAccounts(): Promise<Record<string, Object>> {
+    return await this.request<Record<string, Object>>('/api/official-codex-remote/controller-accounts', 'GET', '')
+  }
+
+  async selectCodexControllerAccount(accountId: string, autoConnect: boolean = true): Promise<Record<string, Object>> {
+    const body = JSON.stringify({ accountId, autoConnect })
+    return await this.request<Record<string, Object>>(
+      '/api/official-codex-remote/controller-account',
+      'POST',
+      body,
+      25000
+    )
+  }
+
   /**
    * 恢复持久化的 controller session
    */

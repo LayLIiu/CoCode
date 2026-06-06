@@ -15,6 +15,14 @@ import { openScanner, ScannedAddresses } from '../services/ScanService'
 import { connectionManager, ConnectionType, ConnectionQuality } from '../services/ConnectionManager'
 import { apiService, DesktopCapabilityItem } from '../services/APIService'
 
+class OfficialCodexControllerAccountItem {
+  accountId: string = ''
+  clientId: string = ''
+  updatedAt: number = 0
+  isCurrentAuthAccount: boolean = false
+  isSelected: boolean = false
+}
+
 @Component
 export struct SettingsPage {
   @State isDarkMode: boolean = true
@@ -69,6 +77,10 @@ export struct SettingsPage {
   @State officialCodexThreadCount: number = 0
   @State officialCodexSyncLoading: boolean = false
   @State officialCodexSendMode: 'auto' | 'remote_control' | 'script_fallback' = 'script_fallback'
+  @State officialCodexAccounts: OfficialCodexControllerAccountItem[] = []
+  @State officialCodexCurrentAuthAccountId: string = ''
+  @State officialCodexSelectedAccountId: string = ''
+  @State officialCodexSwitchingAccount: boolean = false
 
   // 模型选择
   @State showModelSheet: boolean = false
@@ -82,6 +94,7 @@ export struct SettingsPage {
     this.loadSettings()
     this.updateConnectionStatus()
     this.refreshCodexControllerStatus()
+    this.refreshOfficialCodexAccounts()
     this.refreshOfficialCodexThreadCount()
   }
 
@@ -684,6 +697,34 @@ export struct SettingsPage {
         .width('100%')
       }
       .width('100%')
+
+      if (this.officialCodexAccounts.length > 0) {
+        Divider()
+          .color('rgba(255, 255, 255, 0.08)')
+
+        Column({ space: 8 }) {
+          Text('官方账号')
+            .fontSize(Theme.FontBody)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Theme.TextPrimary)
+
+          Text('点选当前要走官方 Remote Control 的账号。桌面端切账号后，这里也要切到同一个账号。')
+            .fontSize(Theme.FontCaption)
+            .fontColor(Theme.TextSecondary)
+
+          if (this.officialCodexCurrentAuthAccountId && this.officialCodexSelectedAccountId &&
+            this.officialCodexCurrentAuthAccountId !== this.officialCodexSelectedAccountId) {
+            Text('当前使用账号和桌面当前账号不一致，官方发送可能失败。')
+              .fontSize(Theme.FontCaption)
+              .fontColor(Theme.ErrorColor)
+          }
+
+          ForEach(this.officialCodexAccounts, (account: OfficialCodexControllerAccountItem) => {
+            this.OfficialCodexAccountRow(account)
+          }, (account: OfficialCodexControllerAccountItem) => account.accountId)
+        }
+        .width('100%')
+      }
 
       // 操作按钮
       Row({ space: Theme.SpacingMD }) {
@@ -1973,6 +2014,68 @@ export struct SettingsPage {
     return `${this.getMissingCapabilityCount()} 项`
   }
 
+  @Builder
+  OfficialCodexAccountRow(account: OfficialCodexControllerAccountItem) {
+    Row({ space: 10 }) {
+      Column({ space: 4 }) {
+        Row({ space: 6 }) {
+          Text(this.formatOfficialCodexAccountId(account.accountId))
+            .fontSize(Theme.FontBody)
+            .fontWeight(account.isSelected ? FontWeight.Bold : FontWeight.Medium)
+            .fontColor(Theme.TextPrimary)
+
+          if (account.isSelected) {
+            Text('当前使用')
+              .fontSize(Theme.FontTiny)
+              .fontColor(Theme.TextOnPrimary)
+              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+              .backgroundColor(Theme.PrimaryColor)
+              .borderRadius(999)
+          }
+
+          if (account.isCurrentAuthAccount) {
+            Text('桌面当前')
+              .fontSize(Theme.FontTiny)
+              .fontColor(Theme.SuccessColor)
+              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+              .backgroundColor('rgba(48, 209, 88, 0.14)')
+              .borderRadius(999)
+          }
+        }
+
+        Text(`clientId ${this.formatOfficialCodexClientId(account.clientId)} · ${this.formatOfficialCodexUpdatedAt(account.updatedAt)}`)
+          .fontSize(Theme.FontCaption)
+          .fontColor(Theme.TextSecondary)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+
+      if (this.officialCodexSwitchingAccount && account.isSelected) {
+        LoadingProgress()
+          .width(16)
+          .height(16)
+          .color(Theme.PrimaryColor)
+      } else {
+        Text(account.isSelected ? '已选中' : '切换')
+          .fontSize(Theme.FontTiny)
+          .fontColor(account.isSelected ? Theme.TextTertiary : Theme.PrimaryColor)
+      }
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+    .backgroundColor(account.isSelected ? 'rgba(10, 132, 255, 0.12)' : 'rgba(255, 255, 255, 0.035)')
+    .borderRadius(12)
+    .border({
+      width: 0.5,
+      color: account.isSelected ? 'rgba(10, 132, 255, 0.3)' : 'rgba(255,255,255,0.08)'
+    })
+    .onClick(() => {
+      if (!this.officialCodexSwitchingAccount && !account.isSelected) {
+        this.selectOfficialCodexAccount(account.accountId)
+      }
+    })
+  }
+
   private getCapabilityColor(item: DesktopCapabilityItem): ResourceColor {
     if (item.available) return Theme.SuccessColor
     if (item.required) return Theme.ErrorColor
@@ -2004,6 +2107,54 @@ export struct SettingsPage {
       if (sessions[i].officialCodexThreadId) count++
     }
     this.officialCodexThreadCount = count
+  }
+
+  private formatOfficialCodexAccountId(accountId: string): string {
+    if (!accountId) return '未知账号'
+    if (accountId.length <= 18) return accountId
+    return accountId.substring(0, 8) + '...' + accountId.substring(accountId.length - 6)
+  }
+
+  private formatOfficialCodexClientId(clientId: string): string {
+    if (!clientId) return '未知'
+    if (clientId.length <= 10) return clientId
+    return clientId.substring(0, 6) + '...' + clientId.substring(clientId.length - 4)
+  }
+
+  private formatOfficialCodexUpdatedAt(updatedAt: number): string {
+    if (!updatedAt || updatedAt <= 0) return '未知时间'
+    const diff = Date.now() - updatedAt
+    if (diff < 60 * 1000) return '刚更新'
+    if (diff < 60 * 60 * 1000) return `${Math.floor(diff / 60000)} 分钟前`
+    if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / 3600000)} 小时前`
+    return `${Math.floor(diff / 86400000)} 天前`
+  }
+
+  private async refreshOfficialCodexAccounts(): Promise<void> {
+    if (!apiService.getBaseUrl()) return
+    try {
+      const result = await apiService.listCodexControllerAccounts()
+      const list = (result['accounts'] as Array<Record<string, Object>> | undefined) || []
+      const next: OfficialCodexControllerAccountItem[] = []
+      for (let i = 0; i < list.length; i++) {
+        const raw = list[i]
+        const item = new OfficialCodexControllerAccountItem()
+        item.accountId = (raw['accountId'] as string) || ''
+        item.clientId = (raw['clientId'] as string) || ''
+        item.updatedAt = Number(raw['updatedAt'] as number) || 0
+        item.isCurrentAuthAccount = ((raw['isCurrentAuthAccount'] as boolean) || false) === true
+        item.isSelected = ((raw['isSelected'] as boolean) || false) === true
+        next.push(item)
+      }
+      this.officialCodexAccounts = next
+      this.officialCodexCurrentAuthAccountId = (result['currentAuthAccountId'] as string) || ''
+      this.officialCodexSelectedAccountId = (result['selectedAccountId'] as string) || ''
+    } catch (e) {
+      console.error(`[Settings] refresh Codex accounts error: ${e}`)
+      this.officialCodexAccounts = []
+      this.officialCodexCurrentAuthAccountId = ''
+      this.officialCodexSelectedAccountId = ''
+    }
   }
 
   private async syncOfficialCodexThreadsFromSettings(): Promise<void> {
@@ -2077,6 +2228,7 @@ export struct SettingsPage {
       this.codexControllerWsConnected = wsConnected
       this.codexControllerError = errorMsg
       this.codexAutomationFallbackAvailable = fallbackAvailable
+      await this.refreshOfficialCodexAccounts()
     } catch (e) {
       console.error(`[Settings] Codex controller status error: ${e}`)
       this.codexControllerStatus = '未授权'
@@ -2100,6 +2252,7 @@ export struct SettingsPage {
       } else {
         this.codexControllerStatus = '未授权'
       }
+      await this.refreshOfficialCodexAccounts()
     } catch (e) {
       console.error(`[Settings] Restore controller error: ${e}`)
       this.codexControllerStatus = '未授权'
@@ -2113,9 +2266,31 @@ export struct SettingsPage {
       await apiService.disconnectCodexController()
       this.codexControllerWsConnected = false
       this.codexControllerStatus = '已就绪'
+      await this.refreshOfficialCodexAccounts()
     } catch (e) {
       console.error(`[Settings] Disconnect controller error: ${e}`)
     }
     this.codexControllerLoading = false
+  }
+
+  private async selectOfficialCodexAccount(accountId: string): Promise<void> {
+    this.officialCodexSwitchingAccount = true
+    try {
+      const result = await apiService.selectCodexControllerAccount(accountId, true)
+      const ok = ((result['ok'] as boolean) || false) === true
+      if (ok) {
+        const ws = result['ws'] as Record<string, Object> | null
+        this.codexControllerWsConnected = !!(ws && (ws['connected'] as boolean))
+        const session = result['session'] as Record<string, Object> | null
+        if (session) {
+          this.codexControllerClientId = (session['clientId'] as string) || ''
+          this.codexControllerStatus = this.codexControllerWsConnected ? '已连接' : '已就绪'
+        }
+      }
+      await this.refreshOfficialCodexAccounts()
+    } catch (e) {
+      console.error(`[Settings] select Codex account error: ${e}`)
+    }
+    this.officialCodexSwitchingAccount = false
   }
 }
