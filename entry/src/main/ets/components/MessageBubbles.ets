@@ -35,7 +35,7 @@ export struct UserBubble {
       }
     }
     .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-    .backgroundColor('#3A3A3C')
+    .backgroundColor('#16161A')
     .borderRadius(18)
     .gesture(
       LongPressGesture()
@@ -124,7 +124,7 @@ export struct AssistantBubble {
     }
     .width('100%')
     .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-    .backgroundColor('#2C2C2E')
+    .backgroundColor('#0E0E10')
     .borderRadius(18)
     .gesture(
       LongPressGesture()
@@ -248,7 +248,7 @@ export struct ThinkingBubble {
     }
     .width('100%')
     .onClick(() => this.onToggle(this.message.id))
-    .backgroundColor('#2C2C2E')
+    .backgroundColor('#0E0E10')
     .borderRadius(10)
     .border({ width: 0.5, color: 'rgba(255,255,255,0.1)' })
   }
@@ -301,7 +301,7 @@ export struct StreamingThinkingBubble {
         }
       }
       .width('100%')
-      .backgroundColor('#2C2C2E')
+      .backgroundColor('#0E0E10')
       .borderRadius(10)
       .border({ width: 0.5, color: 'rgba(255,255,255,0.1)' })
     }
@@ -518,7 +518,7 @@ export struct ToolUseBubble {
                 .width('100%')
                 .padding(10)
                 .borderRadius(6)
-                .backgroundColor('#1C1C1E')
+                .backgroundColor('#050508')
             }
             .width('100%')
             .alignItems(HorizontalAlign.Start)

@@ -15,7 +15,7 @@ import { MarkdownRenderer } from './MarkdownRenderer'
 export struct GradientBorderContainer {
   @Prop borderColor1: string = 'rgba(10, 132, 255, 0.5)'
   @Prop borderColor2: string = 'rgba(175, 82, 222, 0.3)'
-  @Prop gradientBackgroundColor: string = '#2C2C2E'
+  @Prop gradientBackgroundColor: string = '#0E0E10'
   @Prop gradientBorderRadius: number = 18
   @Prop gradientBorderWidth: number = 1
   @BuilderParam content: () => void = () => {}
@@ -202,7 +202,7 @@ export struct EnhancedAssistantBubble {
         }
         .width('100%')
         .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-        .backgroundColor('#2A2A2E')
+        .backgroundColor('#0C0C0E')
         .borderRadius(18)
         .border({
           width: 0.5,

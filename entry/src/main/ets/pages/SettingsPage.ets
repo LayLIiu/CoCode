@@ -297,7 +297,7 @@ export struct SettingsPage {
       })
       .titleMode(HdsNavigationTitleMode.MINI)
       .hideBackButton(true)
-      .backgroundColor('#101114')
+      .backgroundColor('#000000')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
       // 编辑 Sheet（独立 Column 避免多个 bindSheet 冲突）

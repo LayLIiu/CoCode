@@ -133,7 +133,7 @@ struct Index {
     .width('100%')
     .height('100%')
     .justifyContent(FlexAlign.Center)
-    .backgroundColor('#101114')
+    .backgroundColor('#000000')
   }
 
   @Builder
@@ -176,6 +176,6 @@ struct Index {
     .width('100%')
     .height('100%')
     .justifyContent(FlexAlign.Center)
-    .backgroundColor('#101114')
+    .backgroundColor('#000000')
   }
 }

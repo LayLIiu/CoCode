@@ -48,8 +48,8 @@ export class ThemeManager {
   private themes: Map<ThemeMode, ThemeColors> = new Map([
     ['dark', {
       backgroundPrimary: '#000000',
-      backgroundSecondary: '#1C1C1E',
-      backgroundTertiary: '#2C2C2E',
+      backgroundSecondary: '#050508',
+      backgroundTertiary: '#0E0E10',
       textPrimary: '#FFFFFF',
       textSecondary: '#8E8E93',
       textTertiary: '#636366',
@@ -63,7 +63,7 @@ export class ThemeManager {
       errorColor: '#FF453A',
       infoColor: '#0A84FF',
       borderPrimary: '#38383A',
-      borderSecondary: '#2C2C2E'
+      borderSecondary: '#0E0E10'
     }],
     ['light', {
       backgroundPrimary: '#FFFFFF',

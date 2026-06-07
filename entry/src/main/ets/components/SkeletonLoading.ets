@@ -288,7 +288,7 @@ export struct ChatDetailSkeleton {
           .borderRadius(6)
       }
       .padding(14)
-      .backgroundColor(isUser ? '#3A3A3C' : '#2C2C2E')
+      .backgroundColor(isUser ? '#16161A' : '#0E0E10')
       .borderRadius(18)
 
       if (!isUser) {

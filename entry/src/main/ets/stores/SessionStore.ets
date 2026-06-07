@@ -791,6 +791,9 @@ export class SessionStore {
       console.info(`[SessionStore] refreshTasks: ${sessionId} has 0 messages`)
       return
     }
+    // 轻量签名检查：避免频繁重新解析相同消息
+    const currentTasks = this.sessionTasks.get(sessionId) || []
+    const currentSignature = this.buildTasksSignature(currentTasks)
 
     // DEBUG: 统计消息中 tool_use 的类型
     let toolUseCount = 0
@@ -895,6 +898,10 @@ export class SessionStore {
 
     if (taskMap.size > 0) {
       const tasks = Array.from(taskMap.values())
+      const newSignature = this.buildTasksSignature(tasks)
+      if (newSignature === currentSignature) {
+        return
+      }
       this.sessionTasks.set(sessionId, tasks)
       this.taskBarDismissed = false
       this.notifySessionsChanged()
@@ -904,6 +911,14 @@ export class SessionStore {
         console.info(`[SessionStore] Task: id=${t.id} status=${t.status} content=${t.content.substring(0, 30)}`)
       }
     }
+  }
+  private buildTasksSignature(tasks: TaskItem[]): string {
+    if (!tasks || tasks.length <= 0) return '0'
+    let sig = String(tasks.length)
+    for (let i = 0; i < tasks.length; i++) {
+      sig += '|' + tasks[i].id + ':' + (tasks[i].status || 'pending')
+    }
+    return sig
   }
 
   // 更新单个任务的 WS 实时状态（利用已有 sessionTasks 作为基础，避免重建覆盖）

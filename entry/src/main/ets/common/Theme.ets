@@ -5,8 +5,8 @@
 export class Theme {
   // 背景色
   static readonly BackgroundPrimary: string = '#000000'
-  static readonly BackgroundSecondary: string = 'rgba(28, 28, 30, 0.85)'
-  static readonly BackgroundTertiary: string = 'rgba(44, 44, 46, 0.9)'
+  static readonly BackgroundSecondary: string = 'rgba(10, 10, 12, 0.85)'
+  static readonly BackgroundTertiary: string = 'rgba(14, 14, 16, 0.9)'
 
   // 文字颜色
   static readonly TextPrimary: string = '#FFFFFF'
@@ -43,9 +43,9 @@ export class Theme {
   static readonly GlassBorder: string = 'rgba(255, 255, 255, 0.10)'
 
   // 背景渐变颜色
-  static readonly BackgroundGradientStart: string = '#0a0a0a'
-  static readonly BackgroundGradientMiddle: string = '#1a1a1a'
-  static readonly BackgroundGradientEnd: string = '#0a0a0a'
+  static readonly BackgroundGradientStart: string = '#000000'
+  static readonly BackgroundGradientMiddle: string = '#000000'
+  static readonly BackgroundGradientEnd: string = '#000000'
 
   // 圆角
   static readonly RadiusSmall: number = 8

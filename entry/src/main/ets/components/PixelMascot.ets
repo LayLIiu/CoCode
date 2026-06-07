@@ -60,7 +60,7 @@ export struct PixelMascot {
   @Prop mascotType: MascotType = MascotType.CLAUDE
 
   // Claude 配色
-  private readonly eyeColor: string = '#1a1a1a'
+  private readonly eyeColor: string = '#000000'
   private readonly alertColor: string = '#FF3D00'
   private readonly kbBaseColor: string = '#616e7a'
   private readonly kbKeyColor: string = '#9aa8b4'

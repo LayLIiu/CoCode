@@ -413,7 +413,7 @@ struct ChatDetailPage {
     // 加载当前会话权限模式
     this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
     // 同步任务列表本地 @State 副本
-    this.taskItems = sessionStore.getCurrentTasks()
+    this.syncTasksFromStoreIfNeeded()
     // 恢复输入框草稿
     // 确保弹窗不会在进入页面时意外弹出
     this.showModelSheet = false
@@ -852,7 +852,7 @@ struct ChatDetailPage {
         }
       }
       // 消息变化时同步任务列表状态（最新任务状态在 sessionStore 里更新）
-      this.taskItems = sessionStore.getCurrentTasks()
+      this.syncTasksFromStoreIfNeeded()
       // 查看历史或用户触控时不强制滚动，避免打断用户
       if (!this.userIsViewingHistory && !this.isUserTouchingList) {
         this.scrollToBottom()
@@ -1179,7 +1179,7 @@ struct ChatDetailPage {
     // 触发重绘以更新 TaskBarView
     this.messageUpdateCounter++
     // 同步本地 @State 副本（@Builder 读取全局 Store 不被 ArkTS 追踪）
-    this.taskItems = sessionStore.getCurrentTasks()
+    this.syncTasksFromStoreIfNeeded()
     // 同步权限模式（服务端或其他端更改时更新）
     this.currentPermissionMode = sessionStore.getCurrentPermissionMode()
   }
@@ -1477,7 +1477,7 @@ struct ChatDetailPage {
       case 'system_notification':
         // Agent task_notification 等触发重绘以显示最新的 agentTaskStatus
         if (msg.subtype === 'task_notification') {
-          this.taskItems = sessionStore.getCurrentTasks()
+          this.syncTasksFromStoreIfNeeded()
           this.messageUpdateCounter++
         }
         break
@@ -2401,7 +2401,7 @@ struct ChatDetailPage {
       .backgroundColor('#00000000')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .bindSheet($$this.showModelSheet, this.ModelSelectorSheet(), {
-        height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+        height: 480, backgroundColor: '#0E0E10', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
       })
 
       Column() {
@@ -2414,21 +2414,21 @@ struct ChatDetailPage {
       Column()
         .width(0).height(0)
         .bindSheet($$this.showSlashSheet, this.SlashCommandsSheet(), {
-          height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+          height: 480, backgroundColor: '#0E0E10', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
         })
 
       // 上下文详情 Sheet
       Column()
         .width(0).height(0)
         .bindSheet($$this.showContextDetail, this.ContextDetailSheet(), {
-          height: 380, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+          height: 380, backgroundColor: '#0E0E10', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
         })
 
       // 翻译结果 Sheet
       Column()
         .width(0).height(0)
         .bindSheet($$this.showTranslateResult, this.TranslateResultSheet(), {
-          height: 420, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+          height: 420, backgroundColor: '#0E0E10', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
         })
 
       // 底部悬浮区域：任务面板 + 最新消息按钮 + 输入框
@@ -2492,7 +2492,7 @@ struct ChatDetailPage {
       .zIndex(2)
       .clip(false)
       .bindSheet($$this.showAttachSheet, this.AttachmentActionSheet(), {
-        height: 200, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+        height: 200, backgroundColor: '#0E0E10', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
       })  // 禁用裁切，让按钮形变效果可以超出边界
 
     // 菜单气泡 - 从按钮左下角扩散
@@ -2513,11 +2513,11 @@ struct ChatDetailPage {
       }
     .width('100%')
     .height('100%')
-    .backgroundColor('#101114')
+    .backgroundColor('#000000')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     .clip(false)
     .bindSheet($$this.showPermSheet, this.PermissionSheet(), {
-      height: 480, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+      height: 480, backgroundColor: '#0E0E10', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
     })
   }
 
@@ -2738,7 +2738,7 @@ struct ChatDetailPage {
           this.TaskSummaryBubble(message)
         }
 
-        if (message.type !== 'user' && !this.isCodexDocumentFlow()) {
+        if (message.type !== 'user') {
           Blank().layoutWeight(1)
         }
       }
@@ -2846,164 +2846,104 @@ struct ChatDetailPage {
 
   @Builder
   UserBubble(message: Message) {
-    if (this.isCodexDocumentFlow()) {
-      Column({ space: 4 }) {
-        Text(message.content)
-          .fontSize(15)
-          .fontColor(Theme.TextPrimary)
-          .lineHeight(22)
+    Column({ space: 4 }) {
+      Text(message.content)
+        .fontSize(15)
+        .fontColor(Theme.TextPrimary)
+        .lineHeight(22)
 
-        if (message.sendStatus === 'sending') {
-          Row({ space: 4 }) {
-            LoadingProgress()
-              .width(10)
-              .height(10)
-              .color(Theme.TextTertiary)
-            Text('正在提交')
-              .fontSize(11)
-              .fontColor(Theme.TextTertiary)
-          }
-        } else if (message.sendStatus === 'failed') {
-          Row({ space: 4 }) {
-            SymbolGlyph($r('sys.symbol.arrow_clockwise'))
-              .fontSize(10)
-              .fontColor([Theme.AccentOrange])
-            Text('发送失败 · 点按重试')
-              .fontSize(11)
-              .fontColor(Theme.AccentOrange)
-          }
-          .onClick(() => {
-            this.retryUserMessage(message)
-          })
+      if (message.sendStatus === 'sending') {
+        Row({ space: 4 }) {
+          LoadingProgress()
+            .width(10)
+            .height(10)
+            .color(Theme.TextTertiary)
+          Text('正在提交')
+            .fontSize(11)
+            .fontColor(Theme.TextTertiary)
         }
-
-        if (this.activeCopyMessageId === message.id) {
-          this.MessageQuickActions(message)
+      } else if (message.sendStatus === 'failed') {
+        Row({ space: 4 }) {
+          SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+            .fontSize(10)
+            .fontColor([Theme.AccentOrange])
+          Text('发送失败 · 点按重试')
+            .fontSize(11)
+            .fontColor(Theme.AccentOrange)
         }
+        .onClick(() => {
+          this.retryUserMessage(message)
+        })
       }
-      .constraintSize({ maxWidth: '82%' })
-      .padding({ left: 14, right: 14, top: 11, bottom: 11 })
-      .backgroundColor('#28282C')
-      .borderRadius(10)
-      .border({ width: 0.5, color: 'rgba(255,255,255,0.11)' })
-      .gesture(
-        LongPressGesture()
-          .onAction(() => {
-            if (this.activeCopyMessageId === message.id) {
-              this.activeCopyMessageId = ''
-            } else {
-              this.activeCopyMessageId = message.id
-            }
-          })
-      )
-    } else {
-      Column({ space: 4 }) {
-        Text(message.content)
-          .fontSize(15)
-          .fontColor(Theme.TextPrimary)
-          .lineHeight(22)
 
-        if (this.activeCopyMessageId === message.id) {
-          this.MessageQuickActions(message)
-        }
+      if (this.activeCopyMessageId === message.id) {
+        this.MessageQuickActions(message)
       }
-      .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-      .backgroundColor('#3A3A3C')
-      .borderRadius(18)
-      .gesture(
-        LongPressGesture()
-          .onAction(() => {
-            if (this.activeCopyMessageId === message.id) {
-              this.activeCopyMessageId = ''
-            } else {
-              this.activeCopyMessageId = message.id
-            }
-          })
-      )
     }
+    .constraintSize({ maxWidth: '82%' })
+    .padding({ left: 14, right: 14, top: 11, bottom: 11 })
+    .backgroundColor('#0C0C0E')
+    .borderRadius(10)
+    .border({ width: 0.5, color: 'rgba(255,255,255,0.11)' })
+    .gesture(
+      LongPressGesture()
+        .onAction(() => {
+          if (this.activeCopyMessageId === message.id) {
+            this.activeCopyMessageId = ''
+          } else {
+            this.activeCopyMessageId = message.id
+          }
+        })
+    )
   }
 
   @Builder
   AssistantBubble(message: Message) {
-    if (this.isCodexDocumentFlow()) {
-      Column({ space: 8 }) {
-        if (this.shouldHideContent(message.content)) {
-          // 隐藏工具调用 JSON
-        } else {
-          MarkdownRenderer({ content: message.content, onLinkClick: (url: string) => { this.openExternalLink(url) } })
+    Column({ space: 8 }) {
+      if (message.isStreaming) {
+        Row({ space: 6 }) {
+          SymbolGlyph($r('sys.symbol.clock'))
+            .fontSize(10)
+            .fontColor([Theme.TextTertiary])
+          Text('正在生成')
+            .fontSize(10)
+            .fontColor(Theme.TextTertiary)
         }
+        .padding({ bottom: 4 })
+      }
 
-        if (this.activeCopyMessageId === message.id) {
-          this.MessageQuickActions(message)
+      if (this.shouldHideContent(message.content)) {
+        // 隐藏工具调用 JSON
+      } else {
+        MarkdownRenderer({ content: message.content, onLinkClick: (url: string) => { this.openExternalLink(url) } })
+      }
+
+      if (message.isStreaming) {
+        Row({ space: 0 }) {
+          Column()
+            .width(2)
+            .height(14)
+            .backgroundColor(Theme.TextTertiary)
+            .borderRadius(1)
         }
       }
-      .width('100%')
-      .padding({ left: 2, right: 4, top: 2, bottom: 2 })
-      .gesture(
-        LongPressGesture()
-          .onAction(() => {
-            if (this.activeCopyMessageId === message.id) {
-              this.activeCopyMessageId = ''
-            } else {
-              this.activeCopyMessageId = message.id
-            }
-          })
-      )
-    } else {
-      Column({ space: 4 }) {
-        if (message.isStreaming) {
-          Row({ space: 6 }) {
-            SymbolGlyph($r('sys.symbol.clock'))
-              .fontSize(10)
-              .fontColor([Theme.TextTertiary])
-            Text('正在生成')
-              .fontSize(10)
-              .fontColor(Theme.TextTertiary)
-          }
-          .padding({ bottom: 4 })
-        }
 
-        if (this.shouldHideContent(message.content)) {
-          // 隐藏工具调用 JSON
-        } else {
-          MarkdownRenderer({ content: message.content, onLinkClick: (url: string) => { this.openExternalLink(url) } })
-        }
-
-        if (message.isStreaming) {
-          Row({ space: 0 }) {
-            Column()
-              .width(2)
-              .height(14)
-              .backgroundColor(Theme.TextTertiary)
-              .borderRadius(1)
-          }
-        }
-
-        if (this.activeCopyMessageId === message.id) {
-          this.MessageQuickActions(message)
-        }
+      if (this.activeCopyMessageId === message.id) {
+        this.MessageQuickActions(message)
       }
-      .width('100%')
-      .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-      .backgroundColor(message.isStreaming ? '#303035' : '#2C2C2E')
-      .borderRadius(18)
-      .border(message.isStreaming ? {
-        width: 0.5,
-        color: 'rgba(255,255,255,0.12)'
-      } : {
-        width: 0
-      })
-      .gesture(
-        LongPressGesture()
-          .onAction(() => {
-            if (this.activeCopyMessageId === message.id) {
-              this.activeCopyMessageId = ''
-            } else {
-              this.activeCopyMessageId = message.id
-            }
-          })
-      )
     }
+    .width('100%')
+    .padding({ left: 2, right: 4, top: 2, bottom: 2 })
+    .gesture(
+      LongPressGesture()
+        .onAction(() => {
+          if (this.activeCopyMessageId === message.id) {
+            this.activeCopyMessageId = ''
+          } else {
+            this.activeCopyMessageId = message.id
+          }
+        })
+    )
   }
 
   @Builder
@@ -3095,7 +3035,7 @@ struct ChatDetailPage {
         }
       }
       .width('100%')
-      .backgroundColor('#2C2C2E')
+      .backgroundColor('#0E0E10')
       .borderRadius(10)
       .border({ width: 0.5, color: 'rgba(255,255,255,0.1)' })
     }
@@ -3184,7 +3124,7 @@ struct ChatDetailPage {
     .onClick(() => {
       this.toggleThinking(message.id)
     })
-    .backgroundColor('#2C2C2E')
+    .backgroundColor('#0E0E10')
     .borderRadius(10)
     .border({
       width: 0.5,
@@ -3515,7 +3455,7 @@ struct ChatDetailPage {
                 .width('100%')
                 .padding(10)
                 .borderRadius(6)
-                .backgroundColor('#1C1C1E')
+                .backgroundColor('#0E0E10')
             }
 
             // 文件内容预览（Write/Edit）
@@ -3561,7 +3501,7 @@ struct ChatDetailPage {
         }
       }
       .width('100%')
-      .backgroundColor('#2C2C2E')
+      .backgroundColor('#0E0E10')
       .borderRadius(10)
       .border({
         width: 0.5,
@@ -4289,7 +4229,7 @@ struct ChatDetailPage {
                           .height(8)
                           .borderRadius(4)
                           .border({ width: 1, color: 'rgba(255,255,255,0.25)' })
-                          .backgroundColor('#1C1C1E')
+                          .backgroundColor('#0E0E10')
                           .margin({ left: 0, top: 4 })
                       }
                       .width(12)
@@ -4363,7 +4303,7 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
-    .backgroundColor('#2C2C2E')
+    .backgroundColor('#0E0E10')
     .borderRadius(10)
     .border({
       width: 0.5,
@@ -4423,7 +4363,7 @@ struct ChatDetailPage {
                     .height(6)
                     .borderRadius(3)
                     .border({ width: 1, color: 'rgba(255,255,255,0.2)' })
-                    .backgroundColor('#1C1C1E')
+                    .backgroundColor('#0E0E10')
                     .margin({ left: 0, top: 4 })
                 }
                 .width(10)
@@ -4477,7 +4417,7 @@ struct ChatDetailPage {
       }
     }
     .width('100%')
-    .backgroundColor('#2C2C2E')
+    .backgroundColor('#0E0E10')
     .borderRadius(8)
     .border({ width: 0.5, color: 'rgba(255,255,255,0.1)' })
   }
@@ -4755,7 +4695,7 @@ struct ChatDetailPage {
     }
     .width('100%')
     .padding(12)
-    .backgroundColor('#2C2C2E')
+    .backgroundColor('#0E0E10')
     .borderRadius(12)
   }
 
@@ -6028,5 +5968,24 @@ struct ChatDetailPage {
         })
       }
     })
+  }
+  // 任务列表签名（避免每次状态变化都同步）
+  private lastTasksSignature: string = ''
+
+  private syncTasksFromStoreIfNeeded(): void {
+    const tasks = sessionStore.getCurrentTasks()
+    const signature = this.buildTasksSignature(tasks)
+    if (signature === this.lastTasksSignature) return
+    this.lastTasksSignature = signature
+    this.taskItems = tasks
+  }
+
+  private buildTasksSignature(tasks: TaskItem[]): string {
+    if (!tasks || tasks.length <= 0) return '0'
+    let sig = String(tasks.length)
+    for (let i = 0; i < tasks.length; i++) {
+      sig += '|' + tasks[i].id + ':' + (tasks[i].status || 'pending')
+    }
+    return sig
   }
 }

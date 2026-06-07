@@ -201,7 +201,7 @@ struct SessionItemView {
   }
 
   private getLargeCardBottomMargin(): number {
-    return Theme.SpacingSM
+    return Theme.SpacingMD
   }
 
   build() {
@@ -338,7 +338,7 @@ struct SessionItemView {
         })
       }
       .width('100%')
-      .backgroundColor('rgba(28, 28, 30, 0.82)')
+      .backgroundColor('rgba(14, 14, 16, 0.82)')
       .border({ width: 0.5, color: this.getStatusBorderColor() })
       .borderRadius(Theme.RadiusMedium)
       .margin({ bottom: this.getLargeCardBottomMargin() })
@@ -352,6 +352,7 @@ struct SessionItemView {
 @Component
 export struct ConversationListPage {
   private static readonly CODEX_PROJECT_EXPANDED_KEY: string = 'codex_project_expanded_groups'
+  private static readonly CLAUDE_PROJECT_EXPANDED_KEY: string = 'claude_project_expanded_groups'
 
   @Prop tabType: TabType = TabType.CLAUDE
   @Prop pageTitle: string = Constants.TITLE_CLAUDE
@@ -360,6 +361,9 @@ export struct ConversationListPage {
   @State expandedCodexProjects: Set<string> = new Set<string>()
   @State codexExpandedStateReady: boolean = false
   @State codexExpandedStateHasSavedValue: boolean = false
+  @State expandedClaudeProjects: Set<string> = new Set<string>()
+  @State claudeExpandedStateReady: boolean = false
+  @State claudeExpandedStateHasSavedValue: boolean = false
   @State isLoading: boolean = false
   @State isSyncingOfficialCodex: boolean = false
   @State refreshTrigger: number = 0
@@ -421,6 +425,7 @@ export struct ConversationListPage {
 
     this.loadRecentDirs()
     void this.loadCodexProjectExpandState()
+    void this.loadClaudeProjectExpandState()
     this.syncOfficialCodexThreadsIfNeeded(false)
   }
 
@@ -438,6 +443,7 @@ export struct ConversationListPage {
     this.sessions = [...(sessionStore.sessions || [])]
     this.isLoading = sessionStore.isLoading
     this.ensureExpandedCodexProjects()
+    this.ensureExpandedClaudeProjects()
     this.refreshTrigger = Date.now()
   }
 
@@ -811,6 +817,53 @@ export struct ConversationListPage {
     return result
   }
 
+  // Claude 项目分组：按 workDir/projectPath 分组
+  private getClaudeProjectGroups(): ProjectSessionGroup[] {
+    const groups = new Map<string, ProjectSessionGroup>()
+    const sessions = this.getFilteredSessions()
+
+    for (let i = 0; i < sessions.length; i++) {
+      const session = sessions[i]
+      const projectName = this.getSessionProjectName(session)
+      let group = groups.get(projectName)
+      if (!group) {
+        group = new ProjectSessionGroup()
+        group.projectName = projectName
+        groups.set(projectName, group)
+      }
+      group.sessions.push(session)
+
+      const modifiedAt = this.getSessionSortTimestamp(session)
+      if (modifiedAt > group.latestModifiedAt) {
+        group.latestModifiedAt = modifiedAt
+        group.latestSessionTitle = session.title
+      }
+    }
+
+    const result = Array.from(groups.values())
+    result.sort((a: ProjectSessionGroup, b: ProjectSessionGroup) => {
+      if (a.projectName === '未知项目') return 1
+      if (b.projectName === '未知项目') return -1
+      const priorityDiff = this.getProjectGroupPriority(b) - this.getProjectGroupPriority(a)
+      if (priorityDiff !== 0) {
+        return priorityDiff
+      }
+      return b.latestModifiedAt - a.latestModifiedAt
+    })
+
+    for (let i = 0; i < result.length; i++) {
+      result[i].sessions.sort((a: Session, b: Session) => {
+        return this.compareSessionsForList(a, b)
+      })
+      if (result[i].sessions.length > 0) {
+        result[i].latestSessionTitle = result[i].sessions[0].title
+        result[i].latestModifiedAt = this.getSessionSortTimestamp(result[i].sessions[0])
+      }
+    }
+
+    return result
+  }
+
   private ensureExpandedCodexProjects(): void {
     if (this.tabType !== TabType.CODEX) {
       return
@@ -911,6 +964,105 @@ export struct ConversationListPage {
       this.codexExpandedStateHasSavedValue = true
     } catch (e) {
       console.error(`[ConversationListPage] saveCodexProjectExpandState error: ${e}`)
+    }
+  }
+
+  // ========== Claude 项目分组展开/折叠状态管理 ==========
+
+  private ensureExpandedClaudeProjects(): void {
+    if (this.tabType !== TabType.CLAUDE) {
+      return
+    }
+    if (!this.claudeExpandedStateReady) {
+      return
+    }
+    if (this.expandedClaudeProjects.size > 0 || this.claudeExpandedStateHasSavedValue) {
+      return
+    }
+    const groups = this.getClaudeProjectGroups()
+    if (groups.length <= 0) {
+      return
+    }
+    const nextExpanded = new Set<string>()
+    for (let i = 0; i < groups.length; i++) {
+      nextExpanded.add(groups[i].projectName)
+    }
+    this.expandedClaudeProjects = nextExpanded
+    void this.saveClaudeProjectExpandState()
+  }
+
+  private isClaudeProjectExpanded(projectName: string): boolean {
+    return this.expandedClaudeProjects.has(projectName)
+  }
+
+  private toggleClaudeProjectExpanded(projectName: string): void {
+    const nextExpanded = new Set<string>(this.expandedClaudeProjects)
+    if (nextExpanded.has(projectName)) {
+      nextExpanded.delete(projectName)
+    } else {
+      nextExpanded.add(projectName)
+    }
+    this.expandedClaudeProjects = nextExpanded
+    void this.saveClaudeProjectExpandState()
+  }
+
+  private async loadClaudeProjectExpandState(): Promise<void> {
+    if (this.tabType !== TabType.CLAUDE) {
+      this.claudeExpandedStateReady = true
+      return
+    }
+    try {
+      const raw = await storageService.loadString(ConversationListPage.CLAUDE_PROJECT_EXPANDED_KEY, '')
+      const groups = this.getClaudeProjectGroups()
+      this.claudeExpandedStateHasSavedValue = raw.trim().length > 0
+      if (raw.trim().length <= 0) {
+        const expanded = new Set<string>()
+        for (let i = 0; i < groups.length; i++) {
+          expanded.add(groups[i].projectName)
+        }
+        this.expandedClaudeProjects = expanded
+      } else {
+        const parsed = JSON.parse(raw) as string[]
+        const expanded = new Set<string>()
+        for (let i = 0; i < parsed.length; i++) {
+          const name = (parsed[i] || '').trim()
+          if (name.length > 0) {
+            expanded.add(name)
+          }
+        }
+        for (let i = 0; i < groups.length; i++) {
+          const projectName = groups[i].projectName
+          if (!expanded.has(projectName) && raw.trim().length <= 0) {
+            expanded.add(projectName)
+          }
+        }
+        this.expandedClaudeProjects = expanded
+      }
+    } catch (e) {
+      console.error(`[ConversationListPage] loadClaudeProjectExpandState error: ${e}`)
+      const groups = this.getClaudeProjectGroups()
+      const expanded = new Set<string>()
+      for (let i = 0; i < groups.length; i++) {
+        expanded.add(groups[i].projectName)
+      }
+      this.expandedClaudeProjects = expanded
+    } finally {
+      this.claudeExpandedStateReady = true
+      this.ensureExpandedClaudeProjects()
+      this.refreshTrigger = Date.now()
+    }
+  }
+
+  private async saveClaudeProjectExpandState(): Promise<void> {
+    if (this.tabType !== TabType.CLAUDE) {
+      return
+    }
+    try {
+      const values = Array.from(this.expandedClaudeProjects.values())
+      await storageService.saveString(ConversationListPage.CLAUDE_PROJECT_EXPANDED_KEY, JSON.stringify(values))
+      this.claudeExpandedStateHasSavedValue = true
+    } catch (e) {
+      console.error(`[ConversationListPage] saveClaudeProjectExpandState error: ${e}`)
     }
   }
 
@@ -1016,6 +1168,28 @@ export struct ConversationListPage {
                   }
                 }
               }, (group: ProjectSessionGroup) => group.projectName)
+            } else if (this.tabType === TabType.CLAUDE) {
+              ForEach(this.getClaudeProjectGroups(), (group: ProjectSessionGroup) => {
+                ListItemGroup({
+                  header: this.ProjectHeader(group, this.isClaudeProjectExpanded(group.projectName))
+                }) {
+                  if (this.isClaudeProjectExpanded(group.projectName)) {
+                    ForEach(group.sessions, (session: Session) => {
+                      ListItem() {
+                        SessionItemView({
+                          session: session,
+                          compactMode: false,
+                          refreshTrigger: this.refreshTrigger
+                        })
+                      }
+                      .swipeAction({
+                        end: this.SwipeActions(session),
+                        edgeEffect: SwipeEdgeEffect.Spring
+                      })
+                    }, (session: Session) => session.id)
+                  }
+                }
+              }, (group: ProjectSessionGroup) => group.projectName)
             } else {
               ForEach(this.getGroupedSessionArray(), (group: SessionGroup) => {
                 ListItemGroup({
@@ -1088,11 +1262,11 @@ export struct ConversationListPage {
       // 新建对话弹窗改为 bindSheet
     }
     .bindSheet($$this.showNewSessionDialog, this.NewSessionSheet(), {
-      height: 400, backgroundColor: '#1C1C1E', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
+      height: 400, backgroundColor: '#0E0E10', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
     })
     .width('100%')
     .height('100%')
-    .backgroundColor('#121214')
+    .backgroundColor('#0A0A0C')
   }
 
   @Builder
@@ -1110,7 +1284,7 @@ export struct ConversationListPage {
         .margin({ left: Theme.SpacingMD })
     }
     .width('100%')
-    .padding({ top: Theme.SpacingLG, bottom: Theme.SpacingSM })
+    .padding({ top: 24, bottom: 12 })
   }
 
   @Builder
@@ -1138,9 +1312,13 @@ export struct ConversationListPage {
         .fontColor(Theme.TextTertiary)
     }
     .width('100%')
-    .padding({ top: 14, bottom: 10, left: 4, right: 4 })
+    .padding({ top: 24, bottom: 14, left: 4, right: 4 })
     .onClick(() => {
-      this.toggleCodexProjectExpanded(group.projectName)
+      if (this.tabType === TabType.CLAUDE) {
+        this.toggleClaudeProjectExpanded(group.projectName)
+      } else {
+        this.toggleCodexProjectExpanded(group.projectName)
+      }
     })
   }
 

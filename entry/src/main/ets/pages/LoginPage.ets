@@ -59,7 +59,7 @@ export struct LoginPage {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#101114')
+    .backgroundColor('#000000')
     .scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring)
   }

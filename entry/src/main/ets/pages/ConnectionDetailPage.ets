@@ -100,7 +100,7 @@ struct ConnectionDetailPage {
         enableComponentSafeArea: false,
       })
       .titleMode(HdsNavigationTitleMode.MINI)
-      .backgroundColor('#101114')
+      .backgroundColor('#000000')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
       // 添加配置 Sheet
