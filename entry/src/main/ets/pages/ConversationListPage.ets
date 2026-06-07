@@ -895,13 +895,15 @@ export struct ConversationListPage {
   }
 
   private toggleCodexProjectExpanded(projectName: string): void {
-    const nextExpanded = new Set<string>(this.expandedCodexProjects)
-    if (nextExpanded.has(projectName)) {
-      nextExpanded.delete(projectName)
-    } else {
-      nextExpanded.add(projectName)
-    }
-    this.expandedCodexProjects = nextExpanded
+    animateTo({ duration: 200, curve: Curve.Friction }, () => {
+      const nextExpanded = new Set<string>(this.expandedCodexProjects)
+      if (nextExpanded.has(projectName)) {
+        nextExpanded.delete(projectName)
+      } else {
+        nextExpanded.add(projectName)
+      }
+      this.expandedCodexProjects = nextExpanded
+    })
     void this.saveCodexProjectExpandState()
   }
 
@@ -996,13 +998,15 @@ export struct ConversationListPage {
   }
 
   private toggleClaudeProjectExpanded(projectName: string): void {
-    const nextExpanded = new Set<string>(this.expandedClaudeProjects)
-    if (nextExpanded.has(projectName)) {
-      nextExpanded.delete(projectName)
-    } else {
-      nextExpanded.add(projectName)
-    }
-    this.expandedClaudeProjects = nextExpanded
+    animateTo({ duration: 200, curve: Curve.Friction }, () => {
+      const nextExpanded = new Set<string>(this.expandedClaudeProjects)
+      if (nextExpanded.has(projectName)) {
+        nextExpanded.delete(projectName)
+      } else {
+        nextExpanded.add(projectName)
+      }
+      this.expandedClaudeProjects = nextExpanded
+    })
     void this.saveClaudeProjectExpandState()
   }
 
@@ -1293,6 +1297,7 @@ export struct ConversationListPage {
       SymbolGlyph(expanded ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
         .fontSize(12)
         .fontColor([Theme.TextTertiary])
+        .width(16)
 
       SymbolGlyph($r('sys.symbol.folder'))
         .fontSize(14)
