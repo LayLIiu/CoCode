@@ -1736,6 +1736,24 @@ export class SessionStore {
           droppedTransientCount++
           continue
         }
+        // 流式截断检测：WebSocket 中途的截断/搅乱版 assistant/thinking 消息，
+        // 语义键匹配不上服务端完整版（内容不同），但同类型 + 时间窗口 10 秒内
+        // 必然是同一轮回复的流式产物。Claude 一次只回一条，不会有两条独立消息。
+        if (m.type === 'assistant' || m.type === 'thinking') {
+          const mTime = new Date(m.timestamp).getTime()
+          let matched = false
+          for (let j = 0; j < serverMessages.length; j++) {
+            const sm = serverMessages[j]
+            if (sm.type === m.type && Math.abs(new Date(sm.timestamp).getTime() - mTime) < 10000) {
+              matched = true
+              break
+            }
+          }
+          if (matched) {
+            droppedTransientCount++
+            continue
+          }
+        }
         // 服务端还没承认 —— 保留临时消息，等下次同步替换
         preservedLocal.push(m)
       }
