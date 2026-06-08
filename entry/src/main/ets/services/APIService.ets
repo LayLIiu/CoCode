@@ -1877,6 +1877,54 @@ export class APIService {
   }
 
 
+
+  // OpenCode 会话列表（从 serve API 获取）
+  async getOpenCodeThreads(limit: number = 200): Promise<Record<string, Object>> {
+    return await this.request<Record<string, Object>>(
+      '/api/official-codex-remote/opencode/threads?limit=' + limit,
+      'GET',
+      '',
+      8000
+    )
+  }
+
+  // OpenCode 会话消息
+  async getOpenCodeThreadMessages(threadId: string): Promise<Record<string, Object>> {
+    const encoded = encodeURIComponent(threadId)
+    return await this.request<Record<string, Object>>(
+      '/api/official-codex-remote/opencode/thread/' + encoded,
+      'GET',
+      '',
+      8000
+    )
+  }
+
+  // OpenCode 发送消息到官方桌面端
+  async sendOpenCodeMessage(threadId: string, content: string, model?: string): Promise<Record<string, Object>> {
+    const body = JSON.stringify({
+      sessionId: threadId,
+      content: content,
+      model: model || undefined,
+    })
+    return await this.request<Record<string, Object>>(
+      '/api/official-codex-remote/opencode/send',
+      'POST',
+      body,
+      35000
+    )
+  }
+
+  // OpenCode 创建新会话（通过 OpenCode serve）
+  async createOpenCodeServeSession(workDir: string): Promise<Record<string, Object>> {
+    const body = JSON.stringify({ workDir })
+    return await this.request<Record<string, Object>>(
+      '/api/official-codex-remote/opencode/create-session',
+      'POST',
+      body,
+      15000
+    )
+  }
+
 }
 
 // 单例导出

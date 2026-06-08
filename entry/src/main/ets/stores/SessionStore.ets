@@ -469,6 +469,16 @@ export class SessionStore {
     this.notifySessionsChanged()
 
     try {
+      // OpenCode：通过 OpenCode serve API 创建会话，不走 CChaha 服务器
+      if (providerId === 'opencode') {
+        const sessionId = await this.createOpenCodeSession(workDir)
+        this.isCreating = false
+        if (sessionId) {
+          await storageService.addRecentWorkDir(workDir)
+        }
+        return sessionId
+      }
+
       const response = await apiService.createSessionWithProvider(workDir, providerId)
       await this.fetchSessions()
       this.isCreating = false
@@ -480,6 +490,52 @@ export class SessionStore {
     } catch (e) {
       this.error = String(e)
       this.isCreating = false
+      return null
+    }
+  }
+
+  /**
+   * 通过 OpenCode serve API 创建新会话
+   * 不走 CChaha 服务器，直接在 OpenCode 官方桌面端创建
+   */
+  private async createOpenCodeSession(workDir: string): Promise<string | null> {
+    try {
+      // 调用服务器 API 创建 OpenCode serve 会话
+      const result = await apiService.createOpenCodeServeSession(workDir)
+      const opencodeThreadId = (result['threadId'] as string) || ''
+      const opencodeTitle = (result['title'] as string) || 'OpenCode Session'
+
+      if (opencodeThreadId.length <= 0) {
+        console.error('[createOpenCodeSession] Failed to create OpenCode serve session')
+        return null
+      }
+
+      // 在本地创建 session 记录
+      const sessionId = 'opencode-' + opencodeThreadId.slice(-12)
+      const now = new Date().toISOString()
+
+      const session: Session = {
+        id: sessionId,
+        title: opencodeTitle,
+        projectPath: workDir,
+        workDir: workDir,
+        workDirExists: true,
+        createdAt: now,
+        modifiedAt: now,
+        messageCount: 0,
+        aiTool: 'opencode',
+        officialCodexThreadId: opencodeThreadId,
+      }
+
+      this.sessions.unshift(session)
+      await this.saveSessionsToStorage()
+      this.notifySessionsChanged()
+
+      console.info('[createOpenCodeSession] Created session: ' + sessionId + ', threadId: ' + opencodeThreadId)
+      return sessionId
+    } catch (e) {
+      console.error('[createOpenCodeSession] Error: ' + e)
+      this.error = String(e)
       return null
     }
   }
@@ -1165,6 +1221,461 @@ export class SessionStore {
     }
   }
 
+  // MARK: - OpenCode 线程同步
+
+  private isOpenCodeSyncing: boolean = false
+  private lastOpenCodeSyncAt: number = 0
+
+  async syncOpenCodeThreadsToLocal(limit: number = 1000, force: boolean = false): Promise<void> {
+    if (this.isOpenCodeSyncing) return
+
+    const now = Date.now()
+    if (!force && now - this.lastOpenCodeSyncAt < 5000) return
+
+    this.isOpenCodeSyncing = true
+    this.lastOpenCodeSyncAt = now
+
+    try {
+      const response = await apiService.getOpenCodeThreads(limit)
+      const threads = response['threads'] as Array<Record<string, Object>> || []
+
+      if (threads.length === 0) {
+        console.info('[syncOpenCodeThreadsToLocal] No OpenCode threads found')
+        return
+      }
+
+      let changed = false
+      for (let i = 0; i < threads.length; i++) {
+        const thread = threads[i]
+        const originalThreadId = String(thread['id'] || '')
+        const sessionId = 'opencode-' + originalThreadId.slice(-12)
+
+        // 检查是否已存在
+        let existingIndex = -1
+        for (let j = 0; j < this.sessions.length; j++) {
+          if (this.sessions[j].id === sessionId) {
+            existingIndex = j
+            break
+          }
+        }
+
+        const session: Session = {
+          id: sessionId,
+          title: (thread['title'] as string) || 'OpenCode Session',
+          projectPath: (thread['projectPath'] as string) || '',
+          workDir: (thread['projectPath'] as string) || '',
+          workDirExists: true,
+          createdAt: (thread['createdAt'] as string) || new Date().toISOString(),
+          modifiedAt: (thread['updatedAt'] as string) || new Date().toISOString(),
+          messageCount: (thread['messageCount'] as number) || 0,
+          aiTool: 'opencode',
+          officialCodexThreadId: originalThreadId  // 存储完整原始 thread ID，用于加载消息
+        }
+
+        if (existingIndex >= 0) {
+          const old = this.sessions[existingIndex]
+          const oldModifiedAt = new Date(old.modifiedAt).getTime()
+          const nextModifiedAt = new Date(session.modifiedAt).getTime()
+          if (!Number.isNaN(nextModifiedAt) && nextModifiedAt > oldModifiedAt) {
+            this.sessions[existingIndex] = session
+            changed = true
+          }
+        } else {
+          this.sessions.push(session)
+          changed = true
+        }
+      }
+
+      if (changed) {
+        await this.saveSessionsToStorage()
+        this.notifySessionsChanged()
+      }
+
+      console.info('[syncOpenCodeThreadsToLocal] Synced ' + threads.length + ' OpenCode threads, changed=' + changed)
+    } catch (e) {
+      console.error('[SessionStore] Sync OpenCode threads error: ' + e)
+    } finally {
+      this.isOpenCodeSyncing = false
+    }
+  }
+
+
+  // MARK: - OpenCode 会话消息加载
+
+  private isOpenCodeSession(sessionId: string): boolean {
+    const session = this.sessions.find((s: Session) => s.id === sessionId)
+    return (session?.aiTool || '').toLowerCase() === 'opencode'
+  }
+
+  /**
+   * 通过 OpenCode serve HTTP API 发送消息，然后轮询获取回复
+   */
+  private sendOpenCodeRemoteMessage(sessionId: string, content: string, session: Session | undefined): boolean {
+    const threadId = session?.officialCodexThreadId || ''
+
+    // 添加用户消息到本地
+    const userMessage: Message = {
+      id: 'user-' + Date.now(),
+      type: 'user',
+      content: content,
+      timestamp: new Date().toISOString()
+    }
+    this.addMessage(sessionId, userMessage)
+    this.updateSessionStatus(sessionId, 'thinking')
+
+    if (threadId.length <= 0) {
+      console.error('[sendOpenCodeRemoteMessage] No threadId for session:', sessionId)
+      this.updateSessionStatus(sessionId, 'idle')
+      return true
+    }
+
+    // 获取当前选择的 OpenCode 模型
+    const model = appState.getSelectedModelForProvider('opencode')
+
+    // 异步发送消息并轮询回复
+    void (async () => {
+      try {
+        const result = await apiService.sendOpenCodeMessage(threadId, content, model || undefined)
+        const sent = result['sent'] as boolean
+        const error = result['error'] as string
+        const returnedThreadId = (result['threadId'] as string) || threadId
+
+        if (!sent) {
+          const errMsg: Message = {
+            id: 'err-' + Date.now(),
+            type: 'error',
+            content: error || '发送到 OpenCode 失败',
+            timestamp: new Date().toISOString()
+          }
+          this.addMessage(sessionId, errMsg)
+          this.updateSessionStatus(sessionId, 'idle')
+          return
+        }
+
+        // 如果服务器返回了新的 threadId（原 session 不存在，serve 创建了新的），更新本地映射
+        if (returnedThreadId !== threadId) {
+          console.info('[sendOpenCodeRemoteMessage] Server created new serve session: ' + returnedThreadId + ' (was: ' + threadId + ')')
+          const idx = this.sessions.findIndex(s => s.id === sessionId)
+          if (idx >= 0) {
+            this.sessions[idx] = {
+              id: this.sessions[idx].id,
+              title: this.sessions[idx].title,
+              projectPath: this.sessions[idx].projectPath,
+              workDir: this.sessions[idx].workDir,
+              workDirExists: this.sessions[idx].workDirExists,
+              createdAt: this.sessions[idx].createdAt,
+              modifiedAt: new Date().toISOString(),
+              messageCount: this.sessions[idx].messageCount,
+              aiTool: this.sessions[idx].aiTool,
+              officialCodexThreadId: returnedThreadId,
+            }
+            await this.saveSessionsToStorage()
+          }
+        }
+
+        // 发送成功，开始轮询回复
+        console.info('[sendOpenCodeRemoteMessage] Message sent, polling for reply on thread: ' + returnedThreadId)
+        await this.pollOpenCodeReply(sessionId, returnedThreadId)
+      } catch (e) {
+        console.error('[sendOpenCodeRemoteMessage] Error: ' + e)
+        const errMsg: Message = {
+          id: 'err-' + Date.now(),
+          type: 'error',
+          content: '发送到 OpenCode 失败: ' + (e instanceof Error ? e.message : String(e)),
+          timestamp: new Date().toISOString()
+        }
+        this.addMessage(sessionId, errMsg)
+        this.updateSessionStatus(sessionId, 'idle')
+      }
+    })()
+
+    return true
+  }
+
+  /**
+   * 轮询 OpenCode 会话消息，检测新的 assistant 回复
+   */
+  private async pollOpenCodeReply(sessionId: string, threadId: string): Promise<void> {
+    // 记录当前消息数量作为基准
+    const baselineCount = (this.messages.get(sessionId) || []).length
+    let pollCount = 0
+    const maxPolls = 120 // 最多轮询 120 次（约 2 分钟）
+    const pollInterval = 1000 // 每秒轮询一次
+
+    while (pollCount < maxPolls) {
+      await new Promise<void>(resolve => setTimeout(resolve, pollInterval))
+      pollCount++
+
+      try {
+        // 重新拉取消息
+        const response = await apiService.getOpenCodeThreadMessages(threadId)
+        const rawMessages = (response['messages'] as Array<Record<string, Object>>) || []
+        const importedMessages = this.buildOpenCodeMessagesFromParts(rawMessages)
+
+        if (importedMessages.length > 0) {
+          // 检查是否有新的 assistant 消息
+          const currentMessages = this.messages.get(sessionId) || []
+          const currentAssistantCount = currentMessages.filter(m => m.type === 'assistant').length
+          const importedAssistantCount = importedMessages.filter(m => m.type === 'assistant').length
+
+          // 合并消息
+          const merged = this.mergeOpenCodeMessages(currentMessages, importedMessages)
+          this.messages.set(sessionId, merged)
+          this.notifyMessagesChanged(sessionId)
+
+          // 如果有新的 assistant 消息出现，更新状态
+          if (importedAssistantCount > currentAssistantCount) {
+            const latestTimestamp = this.getLatestMessageTimestamp(merged, new Date().toISOString())
+            this.updateSessionActivity(sessionId, latestTimestamp, merged.length, true)
+          }
+
+          // 检查是否回复完成：assistant 消息数量不再增长
+          if (importedMessages.length > baselineCount && importedAssistantCount > 0) {
+            // 等一秒再检查一次，确认没有更多消息
+            await new Promise<void>(resolve => setTimeout(resolve, 1500))
+            const checkResponse = await apiService.getOpenCodeThreadMessages(threadId)
+            const checkMessages = (checkResponse['messages'] as Array<Record<string, Object>>) || []
+            const checkImported = this.buildOpenCodeMessagesFromParts(checkMessages)
+            const checkAssistantCount = checkImported.filter(m => m.type === 'assistant').length
+
+            if (checkAssistantCount === importedAssistantCount) {
+              // 回复完成
+              const finalMerged = this.mergeOpenCodeMessages(this.messages.get(sessionId) || [], checkImported)
+              this.messages.set(sessionId, finalMerged)
+              await this.persistMessages(sessionId, finalMerged)
+              const latestTimestamp = this.getLatestMessageTimestamp(finalMerged, new Date().toISOString())
+              this.updateSessionActivity(sessionId, latestTimestamp, finalMerged.length, true)
+              this.updateSessionStatus(sessionId, 'idle')
+              this.notifyMessagesChanged(sessionId)
+              console.info('[pollOpenCodeReply] Reply complete, ' + checkImported.length + ' messages')
+              return
+            }
+          }
+        }
+      } catch (e) {
+        console.error('[pollOpenCodeReply] Poll error: ' + e)
+      }
+    }
+
+    // 超时
+    this.updateSessionStatus(sessionId, 'idle')
+    console.info('[pollOpenCodeReply] Polling timed out after ' + maxPolls + ' attempts')
+  }
+
+  /**
+   * 从 OpenCode SQLite 数据库同步会话消息到移动端
+   * 使用 officialCodexThreadId 存储的完整原始 thread ID 请求消息
+   */
+  private async syncOpenCodeSessionMessages(sessionId: string): Promise<void> {
+    try {
+      const session = this.sessions.find((s: Session) => s.id === sessionId)
+      const threadId = session?.officialCodexThreadId || ''
+
+      if (threadId.length <= 0) {
+        console.warn('[syncOpenCodeSessionMessages] No threadId for session:', sessionId)
+        return
+      }
+
+      // 调用 API 获取消息
+      const response = await apiService.getOpenCodeThreadMessages(threadId)
+      const rawMessages = (response['messages'] as Array<Record<string, Object>>) || []
+
+      if (rawMessages.length === 0) {
+        console.info('[syncOpenCodeSessionMessages] No messages found for thread:', threadId)
+        return
+      }
+
+      // 将 OpenCode 消息格式转为移动端 Message 格式
+      const importedMessages = this.buildOpenCodeMessagesFromParts(rawMessages)
+
+      if (importedMessages.length === 0) {
+        console.info('[syncOpenCodeSessionMessages] No parseable messages for thread:', threadId)
+        return
+      }
+
+      // 合并到现有消息
+      const existing = this.messages.get(sessionId) || []
+      const merged = this.mergeOpenCodeMessages(existing, importedMessages)
+
+      this.messages.set(sessionId, merged)
+      await this.persistMessages(sessionId, merged)
+      const latestTimestamp = this.getLatestMessageTimestamp(merged, new Date().toISOString())
+      this.updateSessionActivity(sessionId, latestTimestamp, merged.length, true)
+      this.updateSessionStatus(sessionId, 'idle')
+      this.notifyMessagesChanged(sessionId)
+
+      console.info('[syncOpenCodeSessionMessages] Loaded ' + importedMessages.length + ' messages for ' + threadId)
+    } catch (e) {
+      console.error('[SessionStore] syncOpenCodeSessionMessages error: ' + e)
+    }
+  }
+
+  /**
+   * 将 OpenCode API 返回的消息（含 parts 数组）转为移动端 Message 格式
+   * OpenCode 消息格式: { id, role, parts: [{ type, text, ... }], model, timestamp }
+   */
+  private buildOpenCodeMessagesFromParts(rawMessages: Array<Record<string, Object>>): Message[] {
+    const messages: Message[] = []
+
+    for (let i = 0; i < rawMessages.length; i++) {
+      const raw = rawMessages[i]
+      const id = String(raw['id'] || `opencode-msg-${i}`)
+      const role = String(raw['role'] || '')
+      const timestamp = String(raw['timestamp'] || new Date().toISOString())
+      const parts = raw['parts'] as Array<Record<string, Object>> || []
+
+      if (role === 'user') {
+        // 用户消息：从 parts 中提取文本
+        const text = this.extractOpenCodeTextFromParts(parts)
+        if (text.length > 0) {
+          messages.push({
+            id,
+            type: 'user',
+            content: text,
+            timestamp,
+          })
+        }
+      } else if (role === 'assistant') {
+        // 助手消息：从 parts 中提取 thinking、text、tool_use
+        let hasContent = false
+
+        for (let j = 0; j < parts.length; j++) {
+          const part = parts[j]
+          const partType = String(part['type'] || '')
+
+          if (partType === 'thinking' || partType === 'reasoning') {
+            const text = String(part['text'] || '').trim()
+            if (text.length > 0) {
+              messages.push({
+                id: id + '-thinking-' + j,
+                type: 'thinking',
+                content: text,
+                timestamp,
+              })
+              hasContent = true
+            }
+          } else if (partType === 'text') {
+            const text = String(part['text'] || '').trim()
+            if (text.length > 0) {
+              messages.push({
+                id: id + '-text-' + j,
+                type: 'assistant',
+                content: text,
+                timestamp,
+              })
+              hasContent = true
+            }
+          } else if (partType === 'tool-invocation' || partType === 'tool_use' || partType === 'tool-call') {
+            const toolInvocation = part['toolInvocation'] as Record<string, Object> || {}
+            const toolName = String(toolInvocation['toolName'] || part['name'] || 'unknown')
+            const toolState = String(toolInvocation['state'] || '')
+            const toolId = String(toolInvocation['toolCallId'] || part['id'] || id + '-tool-' + j)
+
+            if (toolState === 'result' || toolState === 'completed') {
+              // 工具结果
+              const toolResult = String(toolInvocation['result'] || '')
+              messages.push({
+                id: toolId,
+                type: 'tool_use',
+                content: '',
+                timestamp,
+                toolName,
+                toolInput: (toolInvocation['args'] as Record<string, Object>) || {},
+                toolResult,
+                toolUseId: toolId,
+                toolStatus: (String(toolState) === 'error') ? 'failed' : 'completed',
+              })
+            } else {
+              // 工具调用
+              messages.push({
+                id: toolId,
+                type: 'tool_use',
+                content: '',
+                timestamp,
+                toolName,
+                toolInput: (toolInvocation['args'] as Record<string, Object>) || {},
+                toolUseId: toolId,
+                toolStatus: 'completed',
+              })
+            }
+            hasContent = true
+          } else if (partType === 'step-start' || partType === 'step-finish') {
+            // 跳过步骤标记
+          }
+        }
+
+        // 如果 parts 中没有提取到任何内容，尝试从整个 parts 做 fallback
+        if (!hasContent) {
+          const fallbackText = this.extractOpenCodeTextFromParts(parts)
+          if (fallbackText.length > 0) {
+            messages.push({
+              id,
+              type: 'assistant',
+              content: fallbackText,
+              timestamp,
+            })
+          }
+        }
+      }
+    }
+
+    return messages
+  }
+
+  /**
+   * 从 OpenCode parts 数组中提取纯文本
+   */
+  private extractOpenCodeTextFromParts(parts: Array<Record<string, Object>>): string {
+    const texts: string[] = []
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]
+      const partType = String(part['type'] || '')
+      if (partType === 'text') {
+        const text = String(part['text'] || '').trim()
+        if (text.length > 0) texts.push(text)
+      }
+    }
+    return texts.join('\n')
+  }
+
+  /**
+   * 合并 OpenCode 消息：以 API 返回的为准，保留本地临时消息
+   */
+  private mergeOpenCodeMessages(existing: Message[], imported: Message[]): Message[] {
+    const merged: Message[] = []
+    const importedIds = new Set<string>()
+
+    // 添加所有 imported 消息
+    for (let i = 0; i < imported.length; i++) {
+      merged.push(imported[i])
+      importedIds.add(imported[i].id)
+    }
+
+    // 保留本地临时消息（不在 imported 中的）
+    for (let i = 0; i < existing.length; i++) {
+      const msg = existing[i]
+      if (!importedIds.has(msg.id) && !this.isStableMessageId(msg.id)) {
+        // 检查语义重复
+        const msgKey = this.messageSemanticKey(msg)
+        let isDuplicate = false
+        for (let j = 0; j < merged.length; j++) {
+          if (this.messageSemanticKey(merged[j]) === msgKey) {
+            isDuplicate = true
+            break
+          }
+        }
+        if (!isDuplicate) {
+          merged.push(msg)
+        }
+      }
+    }
+
+    // 按时间排序
+    merged.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+    return merged
+  }
+
+
   async syncCurrentOfficialCodexSession(): Promise<void> {
     if (!this.currentSessionId) return
     const session = this.sessions.find(s => s.id === this.currentSessionId)
@@ -1688,6 +2199,12 @@ export class SessionStore {
     // Official Codex 会话：主动同步最新状态和消息
     if (this.isOfficialCodexSession(sessionId)) {
       void this.syncOfficialCodexSessionOnLoad(sessionId)
+      return
+    }
+
+    // OpenCode 会话：从服务器 SQLite 拉取消息
+    if (this.isOpenCodeSession(sessionId)) {
+      void this.syncOpenCodeSessionMessages(sessionId)
       return
     }
 
@@ -2492,6 +3009,11 @@ export class SessionStore {
 
     const sessionId = this.currentSessionId
     const session = this.sessions.find(s => s.id === sessionId)
+
+    // OpenCode 会话：通过 OpenCode serve HTTP API 发送
+    if (this.isOpenCodeSession(sessionId)) {
+      return this.sendOpenCodeRemoteMessage(sessionId, content, session)
+    }
 
     if (this.shouldUseOfficialCodexRemote(session, attachments) && this.hasActiveOfficialCodexSend(sessionId)) {
       const lastWarnedAt = this.officialCodexSendBusyWarnedAt.get(sessionId) || 0
