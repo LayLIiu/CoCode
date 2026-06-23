@@ -3,13 +3,12 @@ import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import { SymbolGlyphModifier } from '@kit.ArkUI'
 import { router } from '@kit.ArkUI'
 import { Theme } from '../common/Theme'
-import { Constants, TabIndex } from '../common/Constants'
-import { TabType } from '../viewmodel/ConversationModel'
+import { Constants } from '../common/Constants'
 import { ConversationListPage } from './ConversationListPage'
 import { SettingsPage } from './SettingsPage'
 import { sessionStore } from '../stores/SessionStore'
 import { Session, SessionStatus } from '../models/Models'
-import { PixelMascot, MascotStatus, MascotType, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
+import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
 
 /**
  * 主页面 - 使用 HdsTabs 实现原生液态玻璃Tab栏
@@ -67,19 +66,13 @@ export struct MainPage {
     this.refreshTrigger = Date.now()
   }
 
-  // 获取优先显示的活跃会话：Claude > Codex > OpenCode
+  // 获取优先显示的活跃会话
   private getPriorityActiveSession(): Session | null {
     if (this.activeSessionList.length === 0) return null
 
     // 优先找 Claude 会话
     for (const session of this.activeSessionList) {
       if (!session.aiTool || session.aiTool === 'claude') {
-        return session
-      }
-    }
-    // 没有则找 Codex
-    for (const session of this.activeSessionList) {
-      if (session.aiTool === 'codex') {
         return session
       }
     }
@@ -160,7 +153,6 @@ export struct MainPage {
     // Claude Tab - 真实服务器数据
     TabContent() {
       ConversationListPage({
-        tabType: TabType.CLAUDE,
         pageTitle: Constants.TITLE_CLAUDE
       })
     }
@@ -170,34 +162,6 @@ export struct MainPage {
       selected: new SymbolGlyphModifier($r('sys.symbol.message_fill'))
         .fontColor([$r('sys.color.ohos_id_color_activated')])
     }, 'Claude'))
-
-    // Codex Tab - 真实服务器数据
-    TabContent() {
-      ConversationListPage({
-        tabType: TabType.CODEX,
-        pageTitle: Constants.TITLE_CODEX
-      })
-    }
-    .tabBar(new BottomTabBarStyle({
-      normal: new SymbolGlyphModifier($r('sys.symbol.grid'))
-        .fontColor([$r('sys.color.ohos_id_color_bottom_tab_icon_off')]),
-      selected: new SymbolGlyphModifier($r('sys.symbol.grid'))
-        .fontColor([$r('sys.color.ohos_id_color_activated')])
-    }, 'Codex'))
-
-    // Open Code Tab - 真实服务器数据
-    TabContent() {
-      ConversationListPage({
-        tabType: TabType.OPEN_CODE,
-        pageTitle: Constants.TITLE_OPEN_CODE
-      })
-    }
-    .tabBar(new BottomTabBarStyle({
-      normal: new SymbolGlyphModifier($r('sys.symbol.chevron_right'))
-        .fontColor([$r('sys.color.ohos_id_color_bottom_tab_icon_off')]),
-      selected: new SymbolGlyphModifier($r('sys.symbol.chevron_right'))
-        .fontColor([$r('sys.color.ohos_id_color_activated')])
-    }, 'Open Code'))
 
     // Settings Tab
     TabContent() {

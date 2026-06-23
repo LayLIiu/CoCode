@@ -31,18 +31,6 @@ export struct TabBar {
       activeIcon: $r('app.media.ic_claude_filled')
     },
     {
-      index: TabIndex.CODEX,
-      label: Constants.TAB_CODEX,
-      icon: $r('app.media.ic_codex'),
-      activeIcon: $r('app.media.ic_codex_filled')
-    },
-    {
-      index: TabIndex.OPEN_CODE,
-      label: Constants.TAB_OPEN_CODE,
-      icon: $r('app.media.ic_terminal'),
-      activeIcon: $r('app.media.ic_terminal_filled')
-    },
-    {
       index: TabIndex.SETTINGS,
       label: Constants.TAB_SETTINGS,
       icon: $r('app.media.ic_settings'),

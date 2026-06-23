@@ -306,6 +306,10 @@ export struct LoginPage {
               if (result.e2eePub) {
                 authStore.setRelayE2EEPubKey(result.e2eePub)
               }
+              // 保存 H5 Token（cchaha 桌面端 H5 远程访问凭证）
+              if (result.h5Token) {
+                await authStore.setH5Token(result.h5Token)
+              }
               // 推断扫码得到的连接类型
               if (result.tunnel === result.bestUrl) {
                 this.scannedType = 'tunnel'
@@ -644,6 +648,12 @@ export struct LoginPage {
     try {
       apiService.setBaseUrl(url)
       wsService.setServerUrl(url)
+
+      // 如果有保存的 h5Token，同步到服务（重新连接时使用）
+      if (authStore.h5Token) {
+        apiService.setApiToken(authStore.h5Token)
+        wsService.setH5Token(authStore.h5Token)
+      }
 
       // 测试服务器连通性
       await apiService.getSessions()

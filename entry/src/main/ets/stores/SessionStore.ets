@@ -24,6 +24,10 @@ class OfficialCodexThreadRuntimeSnapshot {
   active: boolean = false
   status: string = ''
   updatedAt: Object = ''
+  mtimeMs: number = 0
+  messageCount: number = 0
+  toolCount: number = 0
+  turnId: string = ''
 }
 
 export class SessionStore {
@@ -34,6 +38,7 @@ export class SessionStore {
   private static readonly OFFICIAL_CODEX_SEND_STALE_MS = 45000
   private static readonly OFFICIAL_CODEX_DISCOVERY_INTERVAL_MS = 20000
   private static readonly OFFICIAL_CODEX_STATUS_SYNC_INTERVAL_MS = 10000
+  private static readonly OFFICIAL_CODEX_ACTIVE_MESSAGE_LIMIT = 160
 
   // 会话列表
   sessions: Session[] = []
@@ -85,6 +90,7 @@ export class SessionStore {
   private syncingOfficialCodexLatest: Set<string> = new Set()
   private officialCodexRecentActivityAt: Map<string, number> = new Map()
   private officialCodexTerminalAt: Map<string, number> = new Map()
+  private officialCodexRuntimeSignatures: Map<string, string> = new Map()
   private officialCodexWarmupInFlight: Promise<void> | null = null
   private lastOfficialCodexWarmupAt: number = 0
   private lastOfficialCodexRuntimeSnapshotAt: number = 0
@@ -107,6 +113,9 @@ export class SessionStore {
   private rawMessageListeners: Array<(sessionId: string, msg: WSMessage) => void> = []
   private sessionsChangedNotifyTimer: number = -1
   private sessionsChangedPending: boolean = false
+  private messagesChangedNotifyTimer: number = -1
+  private messagesChangedPendingSessionIds: Set<string> = new Set()
+  private statusSaveTimer: number = -1
 
   // completed→idle 定时器追踪
   private completedTimers: Map<string, number> = new Map()
@@ -222,6 +231,9 @@ export class SessionStore {
       if (serverUrl) {
         console.info(`[SessionStore] Auto-connecting global WS to ${serverUrl}`)
         wsService.setServerUrl(serverUrl)
+        if (authStore.h5Token) {
+          wsService.setH5Token(authStore.h5Token)
+        }
         wsService.connectGlobal()
       }
     }, 3000)
@@ -1869,6 +1881,45 @@ export class SessionStore {
     return this.officialCodexThreadRuntime.get(threadId) || null
   }
 
+  private buildOfficialCodexRuntimeSignature(thread: Record<string, Object>): string {
+    return [
+      String(thread['mtimeMs'] || ''),
+      String(thread['messageCount'] || ''),
+      String(thread['toolCount'] || ''),
+      String(thread['runtimeStatus'] || thread['status'] || ''),
+      String(thread['runtimeActive'] === true || thread['active'] === true),
+      String(thread['runtimeTurnId'] || ''),
+      String(thread['runtimeUpdatedAt'] || thread['updatedAt'] || '')
+    ].join('|')
+  }
+
+  private async refreshOfficialCodexSingleThreadRuntime(threadId: string): Promise<Record<string, Object> | null> {
+    if (threadId.length <= 0) return null
+    try {
+      const runtime = await apiService.getLocalCodexThreadRuntime(threadId)
+      const thread = (runtime['thread'] as Record<string, Object>) || runtime
+      const merged: Record<string, Object> = {}
+      for (const key of Object.keys(thread)) {
+        merged[key] = thread[key]
+      }
+      merged['id'] = String(runtime['id'] || threadId)
+      merged['status'] = String(runtime['status'] || thread['status'] || 'idle')
+      merged['active'] = runtime['active'] === true || thread['active'] === true
+      merged['runtimeStatus'] = String(runtime['runtimeStatus'] || runtime['status'] || thread['runtimeStatus'] || 'idle')
+      merged['runtimeActive'] = runtime['runtimeActive'] === true || runtime['active'] === true || thread['runtimeActive'] === true
+      merged['runtimeUpdatedAt'] = String(runtime['runtimeUpdatedAt'] || thread['runtimeUpdatedAt'] || runtime['updatedAt'] || '')
+      merged['runtimeTurnId'] = String(runtime['runtimeTurnId'] || thread['runtimeTurnId'] || '')
+      merged['mtimeMs'] = Number(runtime['mtimeMs'] || thread['mtimeMs'] || 0)
+      merged['messageCount'] = Number(runtime['messageCount'] || thread['messageCount'] || 0)
+      merged['toolCount'] = Number(runtime['toolCount'] || thread['toolCount'] || 0)
+      this.updateOfficialCodexThreadRuntimeSnapshot(merged)
+      return merged
+    } catch (e) {
+      console.info(`[SessionStore] refreshOfficialCodexSingleThreadRuntime skipped: ${e}`)
+      return null
+    }
+  }
+
   private markOfficialCodexActivity(sessionId: string): void {
     this.officialCodexRecentActivityAt.set(sessionId, Date.now())
   }
@@ -2208,13 +2259,12 @@ export class SessionStore {
       return
     }
 
-    // 后台静默同步服务器消息（不阻塞页面渲染）
-    // 检查是否已经在同步中，避免重复调用
-    if (!this.syncingSessions.has(sessionId)) {
-      console.info(`[SessionStore] syncMessagesFromServer calling for ${sessionId}`)
-      this.syncMessagesFromServer(sessionId)
-    } else {
-      console.info(`[SessionStore] syncMessagesFromServer: already syncing ${sessionId}, skip`)
+    // 等待服务器消息同步完成，确保页面显示最新消息
+    if (!this.isOfficialCodexSession(sessionId) && !this.isOpenCodeSession(sessionId)) {
+      if (!this.syncingSessions.has(sessionId)) {
+        console.info(`[SessionStore] syncMessagesFromServer calling for ${sessionId}`)
+        await this.syncMessagesFromServer(sessionId)
+      }
     }
   }
 
@@ -2234,7 +2284,13 @@ export class SessionStore {
     }
     this.syncingSessions.add(sessionId)
     try {
-      const serverMessages = await apiService.getMessages(sessionId, 200)
+      // 先用 limit=1 查总数，然后从最新位置拉消息（确保看到最新内容）
+      const probe = await apiService.getMessages(sessionId, 1)
+      const totalOnServer = probe.total
+      const fetchLimit = 200
+      const fetchOffset = Math.max(0, totalOnServer - fetchLimit)
+      const serverResult = await apiService.getMessages(sessionId, fetchLimit, fetchOffset)
+      const serverMessages = serverResult.messages
 
       // 构造服务端消息的语义键集合，用于判断本地临时消息是否已被服务端承认
       const serverSemanticKeys = new Set<string>()
@@ -2248,56 +2304,68 @@ export class SessionStore {
       // 重新获取当前本地消息（可能已被 WebSocket 更新）
       const currentLocal = this.messages.get(sessionId) || []
 
-      // 保留策略：本地消息中，只保留"语义内容在服务端找不到"的临时消息
-      // 这些是用户刚发出 / 流式中 / 服务端 JSONL 尚未落盘的消息，删了用户会看到消息消失
-      const preservedLocal: Message[] = []
-      let droppedTransientCount = 0
+      // 增量合并：以本地已有消息为基底，服务端消息只补充/替换
+      // 核心原则：不丢弃本地已有的消息，只追加新消息、用服务端版本替换同 ID 旧版本
+      const localIds = new Set<string>()
+      for (let i = 0; i < currentLocal.length; i++) {
+        if (currentLocal[i].id) localIds.add(currentLocal[i].id)
+      }
+
+      // 找出服务端有但本地没有的新消息
+      const newFromServer: Message[] = []
+      for (let i = 0; i < serverMessages.length; i++) {
+        const sm = serverMessages[i]
+        if (sm.id && !localIds.has(sm.id)) {
+          newFromServer.push(sm)
+        }
+      }
+
+      // 构建服务端 ID -> 消息映射（用于替换本地旧版本）
+      const serverById = new Map<string, Message>()
+      for (let i = 0; i < serverMessages.length; i++) {
+        if (serverMessages[i].id) {
+          serverById.set(serverMessages[i].id, serverMessages[i])
+        }
+      }
+
+      // 合并：本地消息为基础，替换同 ID 的旧版本，追加新消息
+      const merged: Message[] = []
+      const addedIds = new Set<string>()
       for (let i = 0; i < currentLocal.length; i++) {
         const m = currentLocal[i]
-        const hasStableId = this.isStableMessageId(m.id)
-        // 稳定 ID 消息：如果服务端已返回同 ID，由服务端版本覆盖；否则保留
-        if (hasStableId) {
-          if (!serverIds.has(m.id)) {
-            preservedLocal.push(m)
-          }
-          continue
-        }
-        // 临时 ID 消息：如果服务端已有同语义版本，丢弃临时副本
-        const semKey = this.messageSemanticKey(m)
-        if (serverSemanticKeys.has(semKey)) {
-          droppedTransientCount++
-          continue
-        }
-        // 流式截断检测：WebSocket 中途的截断/搅乱版 assistant/thinking 消息，
-        // 语义键匹配不上服务端完整版（内容不同），但同类型 + 时间窗口 10 秒内
-        // 必然是同一轮回复的流式产物。Claude 一次只回一条，不会有两条独立消息。
-        if (m.type === 'assistant' || m.type === 'thinking') {
-          const mTime = new Date(m.timestamp).getTime()
-          let matched = false
+        // 稳定 ID：用服务端版本替换（服务端数据更完整）
+        if (m.id && serverById.has(m.id)) {
+          merged.push(serverById.get(m.id)!)
+          addedIds.add(m.id)
+        } else if (!this.isStableMessageId(m.id)) {
+          // 临时 ID：检查服务端是否有同语义版本（用服务端正式版替换临时版）
+          const semKey = this.messageSemanticKey(m)
+          let replaced = false
           for (let j = 0; j < serverMessages.length; j++) {
-            const sm = serverMessages[j]
-            if (sm.type === m.type && Math.abs(new Date(sm.timestamp).getTime() - mTime) < 10000) {
-              matched = true
+            if (this.messageSemanticKey(serverMessages[j]) === semKey) {
+              merged.push(serverMessages[j])
+              if (serverMessages[j].id) addedIds.add(serverMessages[j].id)
+              replaced = true
               break
             }
           }
-          if (matched) {
-            droppedTransientCount++
-            continue
+          if (!replaced) {
+            merged.push(m)
           }
+        } else {
+          // 本地独有的稳定 ID 消息（服务端没拉到），保留
+          merged.push(m)
+          if (m.id) addedIds.add(m.id)
         }
-        // 服务端还没承认 —— 保留临时消息，等下次同步替换
-        preservedLocal.push(m)
-      }
-      if (droppedTransientCount > 0) {
-        console.info(`[SessionStore] sync: dropped ${droppedTransientCount} transient-id messages replaced by server`)
       }
 
-      // 合并：服务端消息 + 本地保留消息，按时间排序
-      let merged: Message[] = serverMessages.slice()
-      for (let i = 0; i < preservedLocal.length; i++) {
-        merged.push(preservedLocal[i])
+      // 追加服务端有但本地完全没有的新消息
+      for (let i = 0; i < newFromServer.length; i++) {
+        const sm = newFromServer[i]
+        if (sm.id && addedIds.has(sm.id)) continue
+        merged.push(sm)
       }
+
       merged.sort((a, b) =>
         new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
       )
@@ -2844,7 +2912,6 @@ export class SessionStore {
       if (hasStableId) {
         if (seenById.has(msg.id)) {
           dupCount++
-          console.info(`[SessionStore] getDedupedMessages #${dupCount}: skip by ID type=${msg.type} id=${msg.id}`)
           continue
         }
         seenById.add(msg.id)
@@ -2858,7 +2925,6 @@ export class SessionStore {
           let replaced = false
           for (let j = 0; j < result.length; j++) {
             if (this.messageSemanticKey(result[j]) === semanticKey && !this.isStableMessageId(result[j].id)) {
-              console.info(`[SessionStore] getDedupedMessages: replace transient ${result[j].id} with stable ${msg.id}`)
               result[j] = msg
               replaced = true
               dupCount-- // 替换不算额外删除
@@ -2870,7 +2936,6 @@ export class SessionStore {
             continue
           }
         }
-        console.info(`[SessionStore] getDedupedMessages #${dupCount}: skip by semantic type=${msg.type} id=${msg.id} key=${semanticKey.substring(0, 80)}`)
         continue
       }
       seen.add(semanticKey)
@@ -2893,7 +2958,6 @@ export class SessionStore {
         normKey = msg.type + ':id:' + msg.id
         if (normalizedSeen.has(normKey)) {
           normDupCount++
-          console.info(`[SessionStore] getDedupedMessages normDup #${normDupCount}: skip by stable ID type=${msg.type} id=${msg.id}`)
           continue
         }
         normalizedSeen.add(normKey)
@@ -2905,7 +2969,6 @@ export class SessionStore {
           let replaced = false
           for (let j = 0; j < finalResult.length; j++) {
             if (this.messageSemanticKey(finalResult[j]) === contentKey && !this.isStableMessageId(finalResult[j].id)) {
-              console.info(`[SessionStore] getDedupedMessages normDup: replace transient ${finalResult[j].id} with stable ${msg.id}`)
               finalResult[j] = msg
               replaced = true
               normDupCount-- // 替换不算额外删除
@@ -2915,7 +2978,6 @@ export class SessionStore {
           if (replaced) {
             continue
           }
-          console.info(`[SessionStore] getDedupedMessages normDup #${normDupCount}: skip by content type=${msg.type} id=${msg.id}`)
           continue
         }
         normalizedSeen.add(contentKey)
@@ -2923,7 +2985,6 @@ export class SessionStore {
         normKey = this.messageSemanticKey(msg)
         if (normalizedSeen.has(normKey)) {
           normDupCount++
-          console.info(`[SessionStore] getDedupedMessages normDup #${normDupCount}: skip tool_use type=${msg.type} id=${msg.id}`)
           continue
         }
         normalizedSeen.add(normKey)
@@ -2933,18 +2994,12 @@ export class SessionStore {
         normKey = msg.type + ':content:' + normContent.substring(0, 4000)
         if (normalizedSeen.has(normKey)) {
           normDupCount++
-          console.info(`[SessionStore] getDedupedMessages normDup #${normDupCount}: skip by content type=${msg.type} id=${msg.id}`)
           continue
         }
         normalizedSeen.add(normKey)
       }
 
       finalResult.push(msg)
-    }
-
-    const totalRemoved = dupCount + normDupCount
-    if (totalRemoved > 0) {
-      console.info(`[SessionStore] getDedupedMessages: removed ${totalRemoved} dups from ${source.length} msgs for ${sessionId}`)
     }
 
     return this.removeOverlappingTextMessages(finalResult)
@@ -2983,6 +3038,10 @@ export class SessionStore {
     if (!serverUrl) return
 
     wsService.setServerUrl(serverUrl)
+    // 同步 h5Token（确保 app 重启后 token 不丢失）
+    if (authStore.h5Token) {
+      wsService.setH5Token(authStore.h5Token)
+    }
     wsService.connectGlobal()
     this.wsSubscribed = true
 
@@ -2994,6 +3053,10 @@ export class SessionStore {
     if (!serverUrl) return
 
     wsService.setServerUrl(serverUrl)
+    // 同步 h5Token（确保 app 重启后 token 不丢失）
+    if (authStore.h5Token) {
+      wsService.setH5Token(authStore.h5Token)
+    }
     wsService.addSubscription(sessionId)
     wsService.connectGlobal()
     this.wsSubscribed = true
@@ -3010,12 +3073,16 @@ export class SessionStore {
     const sessionId = this.currentSessionId
     const session = this.sessions.find(s => s.id === sessionId)
 
-    // OpenCode 会话：通过 OpenCode serve HTTP API 发送
-    if (this.isOpenCodeSession(sessionId)) {
+    // 当 WebSocket 连接活跃时，始终走 WebSocket 路径（兼容 cc-haha 服务器）
+    // cc-haha 服务器通过 WebSocket 处理所有消息，不支持 OpenCode/Codex HTTP API
+    const useWebSocket = wsService.isConnected(sessionId)
+
+    // OpenCode 会话：通过 OpenCode serve HTTP API 发送（仅当 WS 未连接时）
+    if (!useWebSocket && this.isOpenCodeSession(sessionId)) {
       return this.sendOpenCodeRemoteMessage(sessionId, content, session)
     }
 
-    if (this.shouldUseOfficialCodexRemote(session, attachments) && this.hasActiveOfficialCodexSend(sessionId)) {
+    if (!useWebSocket && this.shouldUseOfficialCodexRemote(session, attachments) && this.hasActiveOfficialCodexSend(sessionId)) {
       const lastWarnedAt = this.officialCodexSendBusyWarnedAt.get(sessionId) || 0
       if (Date.now() - lastWarnedAt > 10000) {
         this.officialCodexSendBusyWarnedAt.set(sessionId, Date.now())
@@ -3039,7 +3106,7 @@ export class SessionStore {
     }
     this.addMessage(sessionId, userMessage)
 
-    if (this.shouldUseOfficialCodexRemote(session, attachments)) {
+    if (!useWebSocket && this.shouldUseOfficialCodexRemote(session, attachments)) {
       this.sendOfficialCodexRemoteMessage(sessionId, content, session)
       this.updateSessionStatus(sessionId, 'thinking')
       return true
@@ -3203,7 +3270,23 @@ export class SessionStore {
         }
 
         const beforeSignature = this.buildMessagesSignatureForPolling(sessionId)
-        this.syncOfficialCodexThreadMessagesFromLocal(sessionId, threadId)
+        this.refreshOfficialCodexSingleThreadRuntime(threadId)
+          .then((runtime: Record<string, Object> | null) => {
+            if (runtime) {
+              const runtimeSignature = this.buildOfficialCodexRuntimeSignature(runtime)
+              const previousRuntimeSignature = this.officialCodexRuntimeSignatures.get(threadId) || ''
+              this.officialCodexRuntimeSignatures.set(threadId, runtimeSignature)
+              if (previousRuntimeSignature.length > 0 &&
+                runtimeSignature === previousRuntimeSignature) {
+                return false
+              }
+            }
+            return this.syncOfficialCodexThreadMessagesFromLocal(
+              sessionId,
+              threadId,
+              SessionStore.OFFICIAL_CODEX_ACTIVE_MESSAGE_LIMIT
+            )
+          })
           .then((changed: boolean) => {
             const afterSignature = this.buildMessagesSignatureForPolling(sessionId)
             const hasChanged = changed || afterSignature !== beforeSignature || afterSignature !== lastSignature
@@ -3263,13 +3346,18 @@ export class SessionStore {
   }
 
   private getOfficialCodexLocalPollDelayMs(attempt: number, stableTicks: number): number {
-    if (attempt < 20) return 700
-    if (stableTicks < 20) return 1200
-    return 2500
+    if (!appState.isInForeground) return 10000
+    if (attempt < 20) return 1000
+    if (stableTicks < 20) return 2000
+    return 3000
   }
 
   private buildMessagesSignatureForPolling(sessionId: string): string {
     const messages = this.messages.get(sessionId) || []
+    return this.buildMessageArraySignatureForPolling(messages)
+  }
+
+  private buildMessageArraySignatureForPolling(messages: Message[]): string {
     if (messages.length <= 0) return '0'
     const last = messages[messages.length - 1]
     return String(messages.length) + ':' + last.id + ':' + last.type + ':' +
@@ -3590,22 +3678,31 @@ export class SessionStore {
     }
   }
 
-  private async syncOfficialCodexThreadMessagesFromLocal(sessionId: string, threadId: string): Promise<boolean> {
+  private async syncOfficialCodexThreadMessagesFromLocal(
+    sessionId: string,
+    threadId: string,
+    limit: number = 400
+  ): Promise<boolean> {
     try {
       const beforeSignature = this.buildMessagesSignatureForPolling(sessionId)
-      const response = await apiService.getLocalCodexThreadMessages(threadId, 400)
+      const response = await apiService.getLocalCodexThreadMessages(threadId, limit)
       const data = (response['messages'] as Array<Record<string, Object>>) || []
       const importedMessages = this.buildOfficialCodexMessagesFromLocal(data)
       if (importedMessages.length === 0) return false
 
       const mergedMessages = this.mergeOfficialCodexThreadMessages(this.messages.get(sessionId) || [], importedMessages)
+      const nextSignature = this.buildMessageArraySignatureForPolling(mergedMessages)
+      if (nextSignature === beforeSignature) {
+        return false
+      }
+
       this.messages.set(sessionId, mergedMessages)
       await this.persistMessages(sessionId, mergedMessages)
       const latestTimestamp = this.getLatestMessageTimestamp(mergedMessages, new Date().toISOString())
       this.updateSessionActivity(sessionId, latestTimestamp, mergedMessages.length, true)
       this.notifyMessagesChanged(sessionId)
       console.info(`[SessionStore] Loaded ${importedMessages.length} local Codex messages for ${threadId}`)
-      return this.buildMessagesSignatureForPolling(sessionId) !== beforeSignature
+      return true
     } catch (e) {
       console.error(`[SessionStore] Sync local Official Codex thread messages error: ${e}`)
       return false
@@ -4632,10 +4729,30 @@ export class SessionStore {
   }
 
   private async refreshOfficialCodexActiveSession(sessionId: string, threadId: string): Promise<void> {
+    if (this.officialCodexLocalPollingSessions.has(sessionId)) return
     if (this.syncingOfficialCodexLatest.has(sessionId)) return
     this.syncingOfficialCodexLatest.add(sessionId)
     try {
-      const changed = await this.syncOfficialCodexThreadMessagesFromLocal(sessionId, threadId)
+      const runtime = await this.refreshOfficialCodexSingleThreadRuntime(threadId)
+      let runtimeChanged = true
+      if (runtime) {
+        const signature = this.buildOfficialCodexRuntimeSignature(runtime)
+        const previousSignature = this.officialCodexRuntimeSignatures.get(threadId) || ''
+        runtimeChanged = signature !== previousSignature
+        this.officialCodexRuntimeSignatures.set(threadId, signature)
+      }
+
+      const mustLoadMessages = runtimeChanged ||
+        this.currentSessionId === sessionId ||
+        this.hasPendingOfficialCodexWork(sessionId) ||
+        this.hasOfficialCodexActiveTurn(sessionId)
+      const changed = mustLoadMessages
+        ? await this.syncOfficialCodexThreadMessagesFromLocal(
+          sessionId,
+          threadId,
+          SessionStore.OFFICIAL_CODEX_ACTIVE_MESSAGE_LIMIT
+        )
+        : false
       const shouldKeepWorking = this.shouldKeepOfficialCodexWorking(sessionId, threadId)
       if (changed) {
         this.markOfficialCodexActivity(sessionId)
@@ -4736,7 +4853,7 @@ export class SessionStore {
 
     // 只持久化保存稳定状态（idle 和 completed），临时状态不保存
     if (status === 'idle' || status === 'completed') {
-      storageService.saveSessionStatuses(this.sessionStatuses)
+      this.scheduleSessionStatusSave()
     }
 
     // Claude / Codex / OpenCode 统一：completed 短暂停留后回到 idle，
@@ -5628,7 +5745,7 @@ export class SessionStore {
       for (const listener of this.sessionsChangedListeners) {
         listener()
       }
-    }, 16)
+    }, 50)
   }
 
   private flushSessionsChanged(): void {
@@ -5646,15 +5763,38 @@ export class SessionStore {
   }
 
   private notifyMessagesChanged(sessionId: string): void {
-    for (const listener of this.messagesChangedListeners) {
-      listener(sessionId)
+    this.messagesChangedPendingSessionIds.add(sessionId)
+    if (this.messagesChangedNotifyTimer >= 0) {
+      return
     }
+
+    this.messagesChangedNotifyTimer = setTimeout(() => {
+      this.messagesChangedNotifyTimer = -1
+      const sessionIds = Array.from(this.messagesChangedPendingSessionIds.values())
+      this.messagesChangedPendingSessionIds.clear()
+      for (let i = 0; i < sessionIds.length; i++) {
+        for (const listener of this.messagesChangedListeners) {
+          listener(sessionIds[i])
+        }
+      }
+    }, 250)
   }
 
   private notifyStatusChanged(sessionId: string, status: SessionStatus): void {
     for (const listener of this.statusChangedListeners) {
       listener(sessionId, status)
     }
+  }
+
+  private scheduleSessionStatusSave(): void {
+    if (this.statusSaveTimer >= 0) {
+      return
+    }
+
+    this.statusSaveTimer = setTimeout(() => {
+      this.statusSaveTimer = -1
+      void storageService.saveSessionStatuses(this.sessionStatuses)
+    }, 1200)
   }
 
   // MARK: - 任务面板

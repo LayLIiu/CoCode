@@ -1,6 +1,5 @@
 import { Theme } from '../common/Theme'
 import { Constants, TabIndex } from '../common/Constants'
-import { TabType } from '../viewmodel/ConversationModel'
 import { ConversationListPage } from './ConversationListPage'
 import { SettingsPage } from './SettingsPage'
 
@@ -29,18 +28,6 @@ struct LiquidGlassDemoPage {
       activeIcon: $r('app.media.ic_claude_filled')
     },
     {
-      index: TabIndex.CODEX,
-      label: Constants.TAB_CODEX,
-      icon: $r('app.media.ic_codex'),
-      activeIcon: $r('app.media.ic_codex_filled')
-    },
-    {
-      index: TabIndex.OPEN_CODE,
-      label: Constants.TAB_OPEN_CODE,
-      icon: $r('app.media.ic_terminal'),
-      activeIcon: $r('app.media.ic_terminal_filled')
-    },
-    {
       index: TabIndex.SETTINGS,
       label: Constants.TAB_SETTINGS,
       icon: $r('app.media.ic_settings'),
@@ -51,7 +38,7 @@ struct LiquidGlassDemoPage {
   @State currentIndex: number = 0;
   @State sliderTranslateX: number = 0;  // 滑块X轴平移
   @State sliderScale: number = 1.0;     // 滑块缩放（液态弹跳效果）
-  
+
   private tabWidth: number = 64;        // 每个Tab的宽度
   private tabSpacing: number = 12;      // Tab间距
 
@@ -70,8 +57,8 @@ struct LiquidGlassDemoPage {
               SettingsPage()
             } else {
               ConversationListPage({
-                tabType: this.getTabType(item.index),
-                pageTitle: this.getPageTitle(item.index)
+                tabType: TabType.CLAUDE,
+                pageTitle: Constants.TITLE_CLAUDE
               })
             }
           }
@@ -179,7 +166,7 @@ struct LiquidGlassDemoPage {
         .height(24)
         .fillColor(this.currentIndex === item.index ? Theme.AccentBlue : Theme.TextSecondary)
         .animation({ duration: 200, curve: Curve.EaseInOut });
-      
+
       Text(item.label)
         .fontSize(Theme.FontTiny)
         .fontColor(this.currentIndex === item.index ? Theme.AccentBlue : Theme.TextSecondary)
@@ -197,55 +184,23 @@ struct LiquidGlassDemoPage {
         animateTo({ duration: 100 }, () => {
           this.sliderScale = 0.85;
         });
-        
+
         setTimeout(() => {
           animateTo({ duration: 150 }, () => {
             this.sliderScale = 1.15;
           });
-          
+
           setTimeout(() => {
             animateTo({ duration: 100 }, () => {
               this.sliderScale = 1.0;
             });
           }, 150);
         }, 100);
-        
+
         // 更新当前Tab
         this.currentIndex = item.index;
         this.updateSliderPosition(item.index, true);
       }
     });
-  }
-
-  /**
-   * 获取Tab类型
-   */
-  private getTabType(tabIndex: TabIndex): TabType {
-    switch (tabIndex) {
-      case TabIndex.CLAUDE:
-        return TabType.CLAUDE;
-      case TabIndex.CODEX:
-        return TabType.CODEX;
-      case TabIndex.OPEN_CODE:
-        return TabType.OPEN_CODE;
-      default:
-        return TabType.CLAUDE;
-    }
-  }
-
-  /**
-   * 获取页面标题
-   */
-  private getPageTitle(tabIndex: TabIndex): string {
-    switch (tabIndex) {
-      case TabIndex.CLAUDE:
-        return Constants.TITLE_CLAUDE;
-      case TabIndex.CODEX:
-        return Constants.TITLE_CODEX;
-      case TabIndex.OPEN_CODE:
-        return Constants.TITLE_OPEN_CODE;
-      default:
-        return Constants.TITLE_CLAUDE;
-    }
   }
 }

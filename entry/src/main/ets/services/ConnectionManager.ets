@@ -534,7 +534,10 @@ export class ConnectionManager {
       }
     }
 
-    // 重连 WebSocket
+    // 重连 WebSocket（确保 h5Token 已同步）
+    if (authStore.h5Token) {
+      wsService.setH5Token(authStore.h5Token)
+    }
     wsService.forceReconnectAll()
   }
 

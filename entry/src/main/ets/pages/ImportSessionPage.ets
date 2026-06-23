@@ -7,7 +7,6 @@ import { Theme } from '../common/Theme'
 import { Session } from '../models/Models'
 import { sessionStore } from '../stores/SessionStore'
 import { apiService } from '../services/APIService'
-import { TabType } from '../viewmodel/ConversationModel'
 import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import router from '@ohos.router'
@@ -20,8 +19,6 @@ struct ImportSessionPage {
   @State expandedProjects: Set<string> = new Set<string>()  // 展开的项目
   @State isLoading: boolean = true
   @State isImporting: boolean = false
-  @State tabType: TabType = TabType.CLAUDE
-
   private importMenus: Array<HdsNavigationBadgeIconOptions> = [
     {
       content: {
@@ -32,11 +29,6 @@ struct ImportSessionPage {
   ]
 
   aboutToAppear(): void {
-    // 从路由参数获取 tabType
-    const params = router.getParams() as Record<string, Object>
-    if (params && params['tabType']) {
-      this.tabType = params['tabType'] as TabType
-    }
     this.loadServerSessions()
   }
 
@@ -44,12 +36,8 @@ struct ImportSessionPage {
     this.isLoading = true
 
     try {
-      if (this.tabType === TabType.CODEX) {
-        this.sessions = await this.loadOfficialCodexSessions()
-      } else {
-        const allSessions = await apiService.getSessions()
-        this.sessions = allSessions.filter((s: Session) => this.isSessionForTab(s))
-      }
+      const allSessions = await apiService.getSessions()
+      this.sessions = allSessions.filter((s: Session) => this.isSessionForTab(s))
     } catch (e) {
       console.error(`[ImportSessionPage] Load error: ${e}`)
     }
@@ -59,96 +47,10 @@ struct ImportSessionPage {
 
   private isSessionForTab(session: Session): boolean {
     const providerId = session.aiTool || ''
-
-    if (this.tabType === TabType.CLAUDE) {
-      return providerId === '' ||
-        providerId === 'claude' ||
-        providerId === 'anthropic' ||
-        providerId.toLowerCase().includes('claude')
-    } else if (this.tabType === TabType.CODEX) {
-      return providerId === 'codex' ||
-        providerId === 'openai' ||
-        providerId.toLowerCase().includes('codex') ||
-        providerId.toLowerCase().includes('openai')
-    } else if (this.tabType === TabType.OPEN_CODE) {
-      return providerId === 'opencode' ||
-        providerId === 'local' ||
-        providerId.toLowerCase().includes('opencode') ||
-        providerId.toLowerCase().includes('local')
-    }
-    return false
-  }
-
-  private async loadOfficialCodexSessions(): Promise<Session[]> {
-    try {
-      // 优先使用本地快速 API
-      let data: Array<Record<string, Object>> = []
-      try {
-        const localResponse = await apiService.getLocalCodexThreads(120, 15)
-        data = (localResponse['threads'] as Array<Record<string, Object>>) || []
-      } catch {
-        // 降级到远程 API
-        const response = await apiService.listCodexRemoteThreads(120)
-        const result = response['result'] as Record<string, Object>
-        data = ((result && result['data']) as Array<Record<string, Object>>) || []
-      }
-      
-      if (!data || data.length === 0) return []
-
-      const sessions: Session[] = []
-      for (let i = 0; i < data.length; i++) {
-        const thread = data[i]
-        const threadId = (thread['id'] as string) || ''
-        if (threadId.length === 0) continue
-
-        // 兼容本地 API 的 name 字段和远程 API 的 preview 字段
-        const name = ((thread['name'] as string) || '').trim()
-        const preview = ((thread['preview'] as string) || '').trim()
-        const title = name.length > 0 ? name : preview
-        const cwd = ((thread['cwd'] as string) || '').trim()
-        const createdAt = this.formatOfficialCodexTime(thread['createdAt'])
-        const updatedAt = this.formatOfficialCodexTime(
-          thread['effectiveUpdatedAt'] || thread['updatedAt'] || thread['effectiveUpdatedMs'] || thread['mtimeMs']
-        )
-        sessions.push({
-          id: 'official-codex-' + threadId,
-          title: title.length > 0 ? title : 'Codex Desktop 对话',
-          projectPath: cwd.length > 0 ? cwd : 'Codex Desktop',
-          workDir: cwd,
-          workDirExists: true,
-          createdAt,
-          modifiedAt: updatedAt,
-          messageCount: 0,
-          aiTool: 'codex',
-          officialCodexThreadId: threadId
-        })
-      }
-      sessions.sort((a: Session, b: Session): number => {
-        return new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
-      })
-      return sessions
-    } catch (e) {
-      console.error(`[ImportSessionPage] Load Official Codex threads error: ${e}`)
-      return []
-    }
-  }
-
-  private formatOfficialCodexTime(value: Object): string {
-    if (value === undefined || value === null || value === '') {
-      return new Date().toISOString()
-    }
-    if (typeof value === 'string') {
-      const parsed = new Date(value).getTime()
-      if (!isNaN(parsed) && parsed > 0) {
-        return new Date(parsed).toISOString()
-      }
-    }
-    const raw = Number(value)
-    if (isNaN(raw) || raw <= 0) {
-      return new Date().toISOString()
-    }
-    const ms = raw > 1000000000000 ? raw : raw * 1000
-    return new Date(ms).toISOString()
+    return providerId === '' ||
+      providerId === 'claude' ||
+      providerId === 'anthropic' ||
+      providerId.toLowerCase().includes('claude')
   }
 
   // 过滤掉已存在的会话（已删除/归档的会话可以重新导入恢复）
@@ -238,44 +140,26 @@ struct ImportSessionPage {
     try {
       // 将选中的会话添加到本地列表
       const selectedSessions = this.sessions.filter((s: Session) => this.selectedIds.includes(s.id))
-      const officialCodexSessions = selectedSessions.filter((s: Session) => !!s.officialCodexThreadId)
-      const normalSessions = selectedSessions.filter((s: Session) => !s.officialCodexThreadId)
-      
-      // 导入 Official Codex 会话
-      if (officialCodexSessions.length > 0) {
-        await sessionStore.importOfficialCodexThreads(officialCodexSessions)
-        for (let i = 0; i < officialCodexSessions.length; i++) {
-          await sessionStore.unarchiveSession(
-            officialCodexSessions[i].id,
-            officialCodexSessions[i].officialCodexThreadId || ''
-          )
-          await sessionStore.restoreSessionFromDeleted(officialCodexSessions[i].id)
-        }
-        await sessionStore.syncOfficialCodexThreadsToLocal(120)
-      }
 
-      // 导入普通会话
-      if (normalSessions.length > 0) {
-        for (let i = 0; i < normalSessions.length; i++) {
-          const session = normalSessions[i]
-          // 检查是否已存在
-          let exists = false
-          for (let j = 0; j < sessionStore.sessions.length; j++) {
-            if (sessionStore.sessions[j].id === session.id) {
-              exists = true
-              break
-            }
+      for (let i = 0; i < selectedSessions.length; i++) {
+        const session = selectedSessions[i]
+        // 检查是否已存在
+        let exists = false
+        for (let j = 0; j < sessionStore.sessions.length; j++) {
+          if (sessionStore.sessions[j].id === session.id) {
+            exists = true
+            break
           }
-          if (!exists) {
-            sessionStore.sessions.push(session)
-          }
-          // 从已删除列表中移除（恢复会话）
-          await sessionStore.restoreSessionFromDeleted(session.id)
-          await sessionStore.unarchiveSession(session.id, session.officialCodexThreadId || '')
         }
-        // 保存普通会话
-        await sessionStore.saveSessionsToStorage()
+        if (!exists) {
+          sessionStore.sessions.push(session)
+        }
+        // 从已删除列表中移除（恢复会话）
+        await sessionStore.restoreSessionFromDeleted(session.id)
+        await sessionStore.unarchiveSession(session.id, session.officialCodexThreadId || '')
       }
+      // 保存会话
+      await sessionStore.saveSessionsToStorage()
 
       // 清空选择
       this.selectedIds = []

@@ -14,6 +14,7 @@ import { abilityAccessCtrl, common } from '@kit.AbilityKit'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { sessionStore } from '../stores/SessionStore'
 import { authStore } from '../stores/AuthStore'
+
 import { apiService } from '../services/APIService'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { FileAttachmentBubble } from '../components/FileAttachmentBubble'
@@ -200,6 +201,9 @@ struct ChatDetailPage {
   private typewriterTimer: number = -1
   private typewriterFullText: string = ''
   private typewriterIndex: number = 0
+  // 流式节流：合并 WS 帧到 UI 更新
+  private streamingBuffer: string = ''
+  private streamingFlushTimer: number = -1
 
   // 消息去重
   private recentlySentMessages: Set<string> = new Set()
@@ -261,7 +265,6 @@ struct ChatDetailPage {
 
   // 工作中计时（与 iOS StreamingStatusView 一致）
   @State elapsedSeconds: number = 0
-  @State mascotScale: number = 1.0
   private workTimer: number = -1
 
   // 音效：标记本轮 AI 回复是否已播放"已连接"和"已完成"音效，发送新消息时重置
@@ -407,6 +410,7 @@ struct ChatDetailPage {
   aboutToAppear(): void {
     this.getRouterParams()
     this.loadMessages()
+
     // 同步当前会话的工作状态（避免从对话列表页进入时状态显示为"空闲"）
     this.chatStatus = sessionStore.getSessionStatus(this.sessionId || '')
     this.setupCallbacks()
@@ -421,17 +425,20 @@ struct ChatDetailPage {
     this.showPermSheet = false
     this.showAttachSheet = false
 
-    // 初始化语音识别引擎
-    this.initSpeechEngine()
+    // 延迟初始化语音识别，避免进入聊天页时抢首屏渲染
+    setTimeout(() => {
+      if (!this.isDestroyed) {
+        this.initSpeechEngine()
+      }
+    }, 800)
 
     // 键盘避让
     try {
       this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE)
     } catch (e) {}
 
-    // 定时拉取上下文使用率
+    // 定时拉取上下文使用率（仅首次，不轮询）
     setTimeout(() => { if (!this.isDestroyed) this.fetchContextUsage() }, 1000)
-    this.contextPollTimer = setInterval(() => { if (!this.isDestroyed) this.fetchContextUsage() }, 30000)
 
     const draft = sessionStore.inputDrafts.get(this.sessionId)
     if (draft) {
@@ -452,6 +459,8 @@ struct ChatDetailPage {
     sessionStore.streamHeads.delete(this.sessionId)
     this.streamingThinking = ''
     this.streamingAssistant = ''
+    this.streamingBuffer = ''
+    if (this.streamingFlushTimer >= 0) { clearTimeout(this.streamingFlushTimer); this.streamingFlushTimer = -1 }
     this.stopAssistantTypewriter()
     this.stopWorkTimer()
     if (this.touchTimer >= 0) {
@@ -817,7 +826,10 @@ struct ChatDetailPage {
       const msgs = sessionStore.getDedupedMessages(this.sessionId)
       if (msgs && msgs.length > 0) {
         const nextSignature = this.buildMessagesSignature(msgs)
-        if (nextSignature === this.lastMessagesSignature) return
+        if (nextSignature === this.lastMessagesSignature) {
+          console.info(`[ChatDetailPage] messagesChanged: signature unchanged, skip (${msgs.length} msgs)`)
+          return
+        }
         this.lastMessagesSignature = nextSignature
         const previousMessageCount = this.messages.length
         const previousLastMessageId = previousMessageCount > 0 ? this.messages[previousMessageCount - 1].id : ''
@@ -1170,6 +1182,7 @@ struct ChatDetailPage {
 
   private rawMessageListener = (sid: string, msg: WSMessage) => {
     if (sid === this.sessionId) {
+      console.info(`[ChatDetailPage] rawMsg: ${msg.type} for ${sid}`)
       this.handleStreamingMessage(msg)
     }
   }
@@ -1392,13 +1405,20 @@ struct ChatDetailPage {
           this.streamingThinking = ''
         }
         if (msg.text) {
-          this.streamingThinking += msg.text
-          if (!this.userIsViewingHistory && !this.isUserTouchingList) {
-            this.scrollToBottom()
-          }
-          // 流式 thinking 自动滚动到底部（根据内容长度控制速度）
-          if (!this.isUserTouchingList) {
-            this.scheduleThinkingScroll(msg.text.length)
+          // 流式节流：合并到缓冲区，每 80ms 刷新一次 UI
+          this.streamingBuffer += msg.text
+          if (this.streamingFlushTimer < 0) {
+            this.streamingFlushTimer = setTimeout(() => {
+              this.streamingThinking += this.streamingBuffer
+              this.streamingBuffer = ''
+              this.streamingFlushTimer = -1
+              if (!this.userIsViewingHistory && !this.isUserTouchingList) {
+                this.scrollToBottom()
+              }
+              if (!this.isUserTouchingList) {
+                this.scheduleThinkingScroll(0)
+              }
+            }, 80)
           }
         }
         break
@@ -1407,6 +1427,8 @@ struct ChatDetailPage {
         // 流式缓冲已由 SessionStore.flushHeadToTail 持久化，这里只需要清理本地的 thinking @State
         this.streamingThinking = ''
         this.streamingAssistant = ''
+        this.streamingBuffer = ''
+        if (this.streamingFlushTimer >= 0) { clearTimeout(this.streamingFlushTimer); this.streamingFlushTimer = -1 }
         this.inThinkingBlock = false
         break
 
@@ -1418,6 +1440,8 @@ struct ChatDetailPage {
         // 流式缓冲已由 SessionStore.flushHeadToTail 持久化，这里只需要清理本地的 thinking @State
         this.streamingThinking = ''
         this.streamingAssistant = ''
+        this.streamingBuffer = ''
+        if (this.streamingFlushTimer >= 0) { clearTimeout(this.streamingFlushTimer); this.streamingFlushTimer = -1 }
         this.inThinkingBlock = false
         // 状态由 SessionStore 更新，这里只停止计时器和更新 token
         this.stopWorkTimer()
@@ -1436,6 +1460,8 @@ struct ChatDetailPage {
         // 流式缓冲已由 SessionStore.flushHeadToTail 持久化，这里只需要清理本地的 thinking @State
         this.streamingThinking = ''
         this.streamingAssistant = ''
+        this.streamingBuffer = ''
+        if (this.streamingFlushTimer >= 0) { clearTimeout(this.streamingFlushTimer); this.streamingFlushTimer = -1 }
         // 状态由 SessionStore 更新
         // 重置 AskUserQuestion 相关状态
         this.questionHasSubmitted = false
@@ -1450,6 +1476,8 @@ struct ChatDetailPage {
         // 流式缓冲已由 SessionStore.flushHeadToTail 持久化，这里只需要清理本地的 thinking @State
         this.streamingThinking = ''
         this.streamingAssistant = ''
+        this.streamingBuffer = ''
+        if (this.streamingFlushTimer >= 0) { clearTimeout(this.streamingFlushTimer); this.streamingFlushTimer = -1 }
         // 状态由 SessionStore 更新
         this.vibrateAlert()
         break
@@ -1600,12 +1628,7 @@ struct ChatDetailPage {
   }
 
   private startWorkTimer(): void {
-    if (this.workTimer !== -1) return
     this.elapsedSeconds = 0
-    this.workTimer = setInterval(() => {
-      if (this.isDestroyed) return
-      this.elapsedSeconds++
-    }, 1000)
   }
 
   private stopWorkTimer(): void {
@@ -5659,6 +5682,7 @@ struct ChatDetailPage {
   private sendMessage(): void {
     const text = this.inputText.trim()
     if (!text && this.pendingAttachments.length === 0) return
+
     const sent = sessionStore.sendMessage(text, this.pendingAttachments)
     if (sent) {
       this.inputText = ''
@@ -5751,8 +5775,6 @@ struct ChatDetailPage {
       console.error('pickFile error:', e)
     }
   }
-
-  @Builder
 
   @Builder
   InputAreaContent() {

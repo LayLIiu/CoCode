@@ -35,9 +35,7 @@ export interface ConversationModel {
  * Tab类型
  */
 export enum TabType {
-  CLAUDE = 'Claude',
-  CODEX = 'CodeX',
-  OPEN_CODE = 'OpenCode'
+  CLAUDE = 'Claude'
 }
 
 /**

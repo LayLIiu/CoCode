@@ -54,84 +54,12 @@ export class MockDataGenerator {
   }
 
   /**
-   * 生成CodeX会话列表数据
-   */
-  static generateCodeXConversations(): ConversationModel[] {
-    const now = new Date()
-    return [
-      {
-        id: '5',
-        title: '鸿蒙ArkTS开发入门',
-        filePath: '/Users/liujie/harmony/app',
-        messageCount: 120,
-        timestamp: new Date(now.getTime() - 60 * 60 * 1000), // 1小时前
-        status: ConversationStatus.SLEEPING,
-        iconTheme: IconTheme.PURPLE,
-        tabType: TabType.CODEX
-      },
-      {
-        id: '6',
-        title: 'Flutter状态管理方案对比',
-        filePath: '/Users/liujie/flutter/state',
-        messageCount: 89,
-        timestamp: new Date(now.getTime() - 5 * 60 * 60 * 1000), // 5小时前
-        status: ConversationStatus.ACTIVE,
-        iconTheme: IconTheme.BLUE,
-        tabType: TabType.CODEX
-      },
-      {
-        id: '7',
-        title: 'SwiftUI动画效果实现',
-        filePath: '/Users/liujie/ios/swiftui',
-        messageCount: 34,
-        timestamp: new Date(now.getTime() - 24 * 60 * 60 * 1000), // 昨天
-        status: ConversationStatus.SLEEPING,
-        iconTheme: IconTheme.ORANGE,
-        tabType: TabType.CODEX
-      }
-    ]
-  }
-
-  /**
-   * 生成Open Code会话列表数据
-   */
-  static generateOpenCodeConversations(): ConversationModel[] {
-    const now = new Date()
-    return [
-      {
-        id: '8',
-        title: 'VSCode插件开发实战',
-        filePath: '/Users/liujie/vscode/extension',
-        messageCount: 67,
-        timestamp: new Date(now.getTime() - 30 * 60 * 1000), // 30分钟前
-        status: ConversationStatus.SLEEPING,
-        iconTheme: IconTheme.BLUE,
-        tabType: TabType.OPEN_CODE
-      },
-      {
-        id: '9',
-        title: 'Git工作流优化建议',
-        filePath: '/Users/liujie/git/workflow',
-        messageCount: 23,
-        timestamp: new Date(now.getTime() - 4 * 60 * 60 * 1000), // 4小时前
-        status: ConversationStatus.SLEEPING,
-        iconTheme: IconTheme.GREEN,
-        tabType: TabType.OPEN_CODE
-      }
-    ]
-  }
-
-  /**
    * 根据Tab类型获取对应会话列表
    */
   static getConversationsByTab(tabType: TabType): ConversationModel[] {
     switch (tabType) {
       case TabType.CLAUDE:
         return MockDataGenerator.generateClaudeConversations()
-      case TabType.CODEX:
-        return MockDataGenerator.generateCodeXConversations()
-      case TabType.OPEN_CODE:
-        return MockDataGenerator.generateOpenCodeConversations()
       default:
         return []
     }

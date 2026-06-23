@@ -87,11 +87,15 @@ export class WebSocketService {
   private static instance: WebSocketService
   private connections: Map<string, WSSessionConnection> = new Map()
   private serverUrl: string = ''
+  private h5Token: string = ''
   private subscribedSessions: Set<string> = new Set()
   private messageHandler: WSMessageHandler | null = null
   private reconnectTimers: Map<string, number> = new Map()
   private pingTimer: number = -1       // 统一 ping 定时器（替代旧的 heartbeatTimer）
   private pongCheckTimer: number = -1  // pong 超时检测定时器
+  // 调试：最近一次连接错误
+  public lastConnectError: string = ''
+  public lastConnectSuccess: string = ''
   private cleanupTimer: number = -1
   private globalConn: WSSessionConnection | null = null
   private globalMsgHandler: ((msg: WSMessage) => void) | null = null
@@ -122,6 +126,10 @@ export class WebSocketService {
 
   setServerUrl(url: string): void {
     this.serverUrl = UrlUtils.normalizeUrl(url)
+  }
+
+  setH5Token(token: string): void {
+    this.h5Token = token
   }
 
   /** 检查是否已有直接 WebSocket 连接到指定会话（用于避免全局广播重复处理） */
@@ -254,7 +262,7 @@ export class WebSocketService {
     }
 
     const wsUrl = this.buildWsUrl('/ws/' + sessionId)
-    console.info(`[WS] Connecting to ${wsUrl}`)
+    console.info(`[WS] Connecting to ${wsUrl}, h5Token=${this.h5Token ? this.h5Token.substring(0, 10) + '...' : 'NONE'}`)
 
     const ws = webSocket.createWebSocket()
     const conn = new WSSessionConnection()
@@ -278,7 +286,21 @@ export class WebSocketService {
     this.connections.set(sessionId, conn)
     this.notifyConnectionState(sessionId, ConnectionState.CONNECTING)
 
-    ws.connect(wsUrl, (err, value) => {
+    console.info(`[WS] connectSession: url=${wsUrl}, h5Token=${this.h5Token ? this.h5Token.substring(0, 10) + '...' : 'NONE'}`)
+
+    // 构建 WebSocket 连接选项
+    // 只携带 Authorization header，不设置 Origin header
+    // 原因：cchaha 服务端 CORS 逻辑对 Origin=null 放行，
+    // 但 HarmonyOS @ohos.net.webSocket 可能忽略我们设置的 Origin 而发送自己的 Origin，
+    // 导致 CORS 403 拒绝。不设置 Origin 时，库可能不发送该 header，
+    // 服务端看到 Origin=null 就会放行。
+    // Token 已在 URL query 参数中传递，认证不受影响。
+    const wsHeaders: Record<string, string> = {}
+    if (this.h5Token) {
+      wsHeaders['Authorization'] = 'Bearer ' + this.h5Token
+    }
+
+    ws.connect(wsUrl, { header: wsHeaders }, (err, value) => {
       const currentConn = this.connections.get(sessionId)
       if (!currentConn || currentConn.ws !== ws) {
         try {
@@ -290,12 +312,16 @@ export class WebSocketService {
       }
 
       if (err) {
-        console.error(`[WS] Connect failed: ${err.message}`)
+        console.error(`[WS] Connect failed to ${sessionId}: code=${err.code}, message=${err.message}, url=${wsUrl}`)
+        this.lastConnectError = `code=${err.code} msg=${err.message} url=${wsUrl}`
+        // 调试：通过全局回调通知连接失败（UI 层可展示）
         this.notifyConnectionState(sessionId, ConnectionState.ERROR)
         this.handleDisconnect(sessionId)
         return
       }
       console.info(`[WS] Connected to ${sessionId}`)
+      console.info(`[WS-DEBUG] Session WS connected: ${sessionId}, url=${wsUrl}`)
+      this.lastConnectSuccess = `SESSION_OK: sid=${sessionId.substring(0, 8)} url=${wsUrl}`
       this.updateConnectionStatus(sessionId, 'connected')
       conn.lastPongTime = Date.now()
       conn.missedPongs = 0
@@ -313,7 +339,8 @@ export class WebSocketService {
     })
 
     ws.on('close', (err, value) => {
-      console.info(`[WS] Connection closed: ${sessionId}`)
+      console.info(`[WS] Connection closed: ${sessionId}, code=${err?.code}, reason=${err?.message}`)
+      this.lastConnectError = `CLOSED: code=${err?.code} reason=${err?.message} sid=${sessionId.substring(0, 8)} url=${wsUrl}`
       // 只在当前连接未被替换时处理断开（防止旧连接回调影响新连接）
       const currentConn = this.connections.get(sessionId)
       if (currentConn && currentConn.ws === ws) {
@@ -323,6 +350,7 @@ export class WebSocketService {
 
     ws.on('error', (err) => {
       console.error(`[WS] Error: ${err.message}`)
+      this.lastConnectError = `WS_ERROR: code=${err.code} msg=${err.message} sid=${sessionId.substring(0, 8)} url=${wsUrl}`
       // 只在当前连接未被替换时更新状态
       const currentConn = this.connections.get(sessionId)
       if (currentConn && currentConn.ws === ws) {
@@ -391,7 +419,14 @@ export class WebSocketService {
       hostPart = hostPart.substring(7)
     }
 
-    return (isSecure ? 'wss://' : 'ws://') + hostPart + pathSuffix
+    let wsUrl = (isSecure ? 'wss://' : 'ws://') + hostPart + pathSuffix
+
+    // 附加 H5 Token 作为查询参数（cchaha 桌面端要求远程 WebSocket 连接携带 token）
+    if (this.h5Token) {
+      wsUrl += '?token=' + encodeURIComponent(this.h5Token)
+    }
+
+    return wsUrl
   }
 
   private globalConnecting: boolean = false
@@ -418,7 +453,7 @@ export class WebSocketService {
     }
 
     const wsUrl = this.buildWsUrl('/ws/global')
-    console.info(`[WS-Global] Connecting to ${wsUrl}`)
+    console.info(`[WS-Global] Connecting to ${wsUrl}, h5Token=${this.h5Token ? this.h5Token.substring(0, 10) + '...' : 'NONE'}`)
 
     const ws = webSocket.createWebSocket()
     const conn = new WSSessionConnection()
@@ -435,7 +470,15 @@ export class WebSocketService {
     this.globalConn = conn
     this.globalConnecting = true
 
-    ws.connect(wsUrl, (err, value) => {
+    console.info(`[WS-Global] connectGlobal: url=${wsUrl}, h5Token=${this.h5Token ? this.h5Token.substring(0, 10) + '...' : 'NONE'}`)
+
+    // 构建 WebSocket 连接选项：只携带 Authorization，不设 Origin（同 connectSession 逻辑）
+    const wsHeaders: Record<string, string> = {}
+    if (this.h5Token) {
+      wsHeaders['Authorization'] = 'Bearer ' + this.h5Token
+    }
+
+    ws.connect(wsUrl, { header: wsHeaders }, (err, value) => {
       this.globalConnecting = false
       if (!this.globalConn || this.globalConn.ws !== ws) {
         try {
@@ -448,10 +491,12 @@ export class WebSocketService {
 
       if (err) {
         console.error(`[WS-Global] Connect failed: ${err.message}`)
+        this.lastConnectError = `GLOBAL: code=${err.code} msg=${err.message} url=${wsUrl}`
         this.handleGlobalDisconnect()
         return
       }
       console.info('[WS-Global] Connected')
+      this.lastConnectSuccess = `GLOBAL_OK: url=${wsUrl}`
       if (this.globalConn) {
         this.globalConn.status = 'connected'
         this.globalConn.reconnectAttempts = 0
@@ -461,7 +506,8 @@ export class WebSocketService {
     })
 
     ws.on('close', (err, value) => {
-      console.info('[WS-Global] Connection closed')
+      console.info(`[WS-Global] Connection closed: code=${err?.code}, reason=${err?.message}`)
+      this.lastConnectError = `GLOBAL_CLOSED: code=${err?.code} reason=${err?.message} url=${wsUrl}`
       this.globalConnecting = false
       if (this.globalConn && this.globalConn.ws === ws) {
         this.handleGlobalDisconnect()
@@ -470,6 +516,7 @@ export class WebSocketService {
 
     ws.on('error', (err) => {
       console.error(`[WS-Global] Error: ${err.message}`)
+      this.lastConnectError = `GLOBAL_ERROR: code=${err.code} msg=${err.message} url=${wsUrl}`
       this.globalConnecting = false
       if (this.globalConn && this.globalConn.ws === ws) {
         this.globalConn.status = 'error'
@@ -670,7 +717,7 @@ export class WebSocketService {
     const msgHash = this.hashMessage(jsonStr)
 
     if (!conn || !conn.ws || conn.status !== 'connected') {
-      console.info(`[WS] Cannot send: not connected to ${sessionId}, queuing message`)
+      console.warn(`[WS] Cannot send: not connected to ${sessionId}, status=${conn?.status || 'no_conn'}, queuing message`)
       // Paseo 模式：离线时入队，重连后 flush
       if (conn) {
         // 限制队列大小，超过上限时丢弃最旧的消息
@@ -694,10 +741,12 @@ export class WebSocketService {
     }
 
     console.info(`[WS] Sending to ${sessionId}: ${jsonStr.substring(0, 100)}`)
+    console.info(`[WS-DEBUG] Send via session WS, url was: ${conn.ws ? 'ws exists' : 'ws null'}`)
 
     conn.ws.send(jsonStr, (err) => {
       if (err) {
         console.error(`[WS] Send error: ${err.message}`)
+        console.error(`[WS-DEBUG] Send failed: sessionId=${sessionId}, err=${err.message}`)
         // 发送失败入队备重试，但限制重试次数
         const retries = conn.messageRetryCount.get(msgHash) || 0
         if (retries < MAX_SEND_RETRIES) {
@@ -1299,16 +1348,19 @@ export class WebSocketService {
     }
   }
 
-  resumeFromForeground(serverUrl?: string): void {
+  resumeFromForeground(serverUrl?: string, h5Token?: string): void {
     if (serverUrl) {
       this.setServerUrl(serverUrl)
+    }
+    if (h5Token) {
+      this.h5Token = h5Token
     }
     if (!this.serverUrl) {
       console.info('[WS] resumeFromForeground: no serverUrl, skipping')
       return
     }
 
-    console.info('[WS] Resuming websocket activity from foreground')
+    console.info(`[WS] Resuming websocket activity from foreground, h5Token=${this.h5Token ? 'yes' : 'no'}`)
     this.pausedForBackground = false
     this.lastReconnectAllTime = 0
     this.forceReconnectAll()

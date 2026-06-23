@@ -7,11 +7,11 @@
         "material": {
           "certpath": "/Users/liujie/.ohos/config/default_MyApplication2_aaIIvZpJJBevBjB1MY2ztqKI3TktDhP1kigQqC2YJmg=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001B493FDD0FC6FB250B7152B3BE6EC010E27766807CD8A0F6C03CBC507C8E15552CA5147556F86D88",
-          "profile": "/Users/liujie/MyApplication2/signing/debug.p7b",
+          "keyPassword": "0000001BE3F3FC8843AFBE0A5FBCEB7CE8FB04BE97482D4151AC874F3159844C48A285C684705074C1CF1F",
+          "profile": "/Users/liujie/.ohos/config/default_MyApplication2_aaIIvZpJJBevBjB1MY2ztqKI3TktDhP1kigQqC2YJmg=.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "/Users/liujie/.ohos/config/default_MyApplication2_aaIIvZpJJBevBjB1MY2ztqKI3TktDhP1kigQqC2YJmg=.p12",
-          "storePassword": "0000001B9C779B0E40487C59D2C4DB9B89F403DCDD2F742F4117D8273C063751202AAA543854F33DBFAA09"
+          "storePassword": "0000001B7449AEE08DAA3598B44C84A4D476EA683F7F8150DED0350BC5BDD92894FBA718D002112A20EE74"
         }
       }
     ],

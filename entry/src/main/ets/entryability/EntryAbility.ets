@@ -219,7 +219,7 @@ export default class EntryAbility extends UIAbility {
       this.foregroundReconnectTimer = setTimeout(() => {
         this.foregroundReconnectTimer = -1
         connectionManager.quickStart()
-        wsService.resumeFromForeground(authStore.serverUrl)
+        wsService.resumeFromForeground(authStore.serverUrl, authStore.h5Token)
         hilog.info(DOMAIN, 'testTag', 'WebSocket resumed on foreground')
       }, 1200)
     }

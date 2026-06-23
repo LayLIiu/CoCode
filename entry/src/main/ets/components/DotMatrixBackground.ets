@@ -19,8 +19,10 @@ const SPACING = 16
 const DISPLACEMENT = 4
 const TIME_SPEED = 0.018
 const ROTATION_SPEED = 0.3
-const FPS_INTERVAL = 16          // ~60fps 全速
-const ECO_FPS_INTERVAL = 50      // ~20fps 节能模式
+const ENABLE_DYNAMIC_DOT_BACKGROUND = false
+
+const FPS_INTERVAL = 66          // ~15fps 装饰背景足够
+const ECO_FPS_INTERVAL = 100     // 不可见时心跳检测
 
 @Component
 export struct DotMatrixBackground {
@@ -65,6 +67,11 @@ export struct DotMatrixBackground {
 
   private startAnimation(): void {
     if (this.isAnimating) return
+    if (!ENABLE_DYNAMIC_DOT_BACKGROUND) {
+      this.drawFrame()
+      this.hasDrawnOnce = true
+      return
+    }
     this.isAnimating = true
     this.time = 0
     this.frameCount = 0
@@ -80,6 +87,7 @@ export struct DotMatrixBackground {
   }
 
   private resumeAnimation(): void {
+    if (!ENABLE_DYNAMIC_DOT_BACKGROUND) return
     if (this.isAnimating) return
     if (this.hasDrawnOnce) {
       this.isAnimating = true
@@ -91,10 +99,12 @@ export struct DotMatrixBackground {
   private animate(): void {
     if (!this.isAnimating) return
 
-    // 节能策略：非可见区域或内容被覆盖时降帧
-    const interval = (!this.isVisible || !this.active)
-      ? ECO_FPS_INTERVAL
-      : FPS_INTERVAL
+    // 不可见或非活跃时彻底停止动画，等 resumeAnimation 恢复
+    if (!this.isVisible || !this.active) {
+      this.isAnimating = false
+      this.animId = -1
+      return
+    }
 
     // 降帧绘制：只在关键帧重绘，减少 GPU 负载
     this.frameCount++
@@ -103,7 +113,7 @@ export struct DotMatrixBackground {
     }
     this.hasDrawnOnce = true
 
-    this.animId = setTimeout(() => { this.animate() }, interval)
+    this.animId = setTimeout(() => { this.animate() }, FPS_INTERVAL)
   }
 
   private drawFrame(): void {

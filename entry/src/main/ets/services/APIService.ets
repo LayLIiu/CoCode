@@ -73,6 +73,14 @@ export class SessionsResponse {
 
 export class MessagesResponse {
   messages: RawMessage[] = []
+  total: number = 0
+  offset: number = 0
+  limit: number = 0
+}
+
+export class MessagesPage {
+  messages: Message[] = []
+  total: number = 0
 }
 
 export class CreateSessionResponse {
@@ -516,6 +524,7 @@ export class APIError extends Error {
 export class APIService {
   private static instance: APIService
   private baseUrl: string = ''
+  private apiToken: string = ''
 
   static getInstance(): APIService {
     if (!APIService.instance) {
@@ -527,6 +536,10 @@ export class APIService {
   setBaseUrl(url: string): void {
     this.baseUrl = UrlUtils.normalizeUrl(url)
     console.info(`[APIService] baseUrl: ${this.baseUrl}`)
+  }
+
+  setApiToken(token: string): void {
+    this.apiToken = token
   }
 
   getBaseUrl(): string {
@@ -593,13 +606,23 @@ export class APIService {
     await this.request<Object>('/api/sessions/' + sessionId, 'PATCH', JSON.stringify(req))
   }
 
-  async getMessages(sessionId: string, limit?: number): Promise<Message[]> {
+  async getMessages(sessionId: string, limit?: number, offset?: number): Promise<MessagesPage> {
     let path = '/api/sessions/' + sessionId + '/messages'
+    const params: string[] = []
     if (limit !== undefined && limit > 0) {
-      path += '?limit=' + limit
+      params.push('limit=' + limit)
+    }
+    if (offset !== undefined && offset > 0) {
+      params.push('offset=' + offset)
+    }
+    if (params.length > 0) {
+      path += '?' + params.join('&')
     }
     const response = await this.request<MessagesResponse>(path, 'GET', '')
-    return this.transformMessages(response.messages)
+    const page = new MessagesPage()
+    page.messages = this.transformMessages(response.messages)
+    page.total = response.total || 0
+    return page
   }
 
   // 从服务器获取任务列表
@@ -1374,6 +1397,9 @@ export class APIService {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json'
     }
+    if (this.apiToken.length > 0) {
+      headers['Authorization'] = 'Bearer ' + this.apiToken
+    }
     if (method === 'PATCH') {
       headers['X-HTTP-Method-Override'] = 'PATCH'
     }
@@ -1566,6 +1592,36 @@ export class APIService {
   /**
    * 从本地 Codex session 文件读取线程历史，作为 Official turns API 的兜底
    */
+  async getLocalCodexThreadRuntime(threadId: string): Promise<Record<string, Object>> {
+    const encoded = encodeURIComponent(threadId)
+    const response = await this.request<Record<string, Object>>(
+      `/api/threads/${encoded}/runtime`,
+      'GET',
+      '',
+      6000
+    )
+    const normalized: Record<string, Object> = {}
+    const emptyThread: Record<string, Object> = {}
+    const emptyContext: Record<string, Object> = {}
+    normalized['ok'] = response['ok'] === true
+    normalized['id'] = String(response['threadId'] || threadId)
+    normalized['status'] = String(response['status'] || 'idle')
+    normalized['active'] = response['active'] === true
+    normalized['runtimeStatus'] = String(response['runtimeStatus'] || response['status'] || 'idle')
+    normalized['runtimeActive'] = response['runtimeActive'] === true || response['active'] === true
+    normalized['runtimeStartedAt'] = String(response['runtimeStartedAt'] || '')
+    normalized['runtimeCompletedAt'] = String(response['runtimeCompletedAt'] || '')
+    normalized['runtimeUpdatedAt'] = String(response['runtimeUpdatedAt'] || response['updatedAt'] || '')
+    normalized['runtimeTurnId'] = String(response['runtimeTurnId'] || '')
+    normalized['updatedAt'] = String(response['updatedAt'] || response['runtimeUpdatedAt'] || '')
+    normalized['mtimeMs'] = Number(response['mtimeMs'] || 0)
+    normalized['messageCount'] = Number(response['messageCount'] || 0)
+    normalized['toolCount'] = Number(response['toolCount'] || 0)
+    normalized['context'] = (response['context'] as Record<string, Object>) || emptyContext
+    normalized['thread'] = response['thread'] || emptyThread
+    return normalized
+  }
+
   async getLocalCodexThreadMessages(threadId: string, limit: number = 400): Promise<Record<string, Object>> {
     const encoded = encodeURIComponent(threadId)
     return await this.request<Record<string, Object>>(

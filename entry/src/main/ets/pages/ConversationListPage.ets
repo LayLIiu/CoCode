@@ -5,8 +5,8 @@
 import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
 import { hdsMaterial } from '@hms.hds.hdsMaterial'
 import { Theme } from '../common/Theme'
-import { Constants, TabIndex } from '../common/Constants'
-import { TabType, DateGroup } from '../viewmodel/ConversationModel'
+import { Constants } from '../common/Constants'
+import { DateGroup } from '../viewmodel/ConversationModel'
 import { Session, SessionStatus } from '../models/Models'
 import { sessionStore } from '../stores/SessionStore'
 import { storageService } from '../services/StorageService'
@@ -351,25 +351,15 @@ struct SessionItemView {
 
 @Component
 export struct ConversationListPage {
-  private static readonly CODEX_PROJECT_EXPANDED_KEY: string = 'codex_project_expanded_groups'
   private static readonly CLAUDE_PROJECT_EXPANDED_KEY: string = 'claude_project_expanded_groups'
-  private static readonly OPENCODE_PROJECT_EXPANDED_KEY: string = 'opencode_project_expanded_groups'
 
-  @Prop tabType: TabType = TabType.CLAUDE
   @Prop pageTitle: string = Constants.TITLE_CLAUDE
   @State searchText: string = ''
   @State sessions: Session[] = []
-  @State expandedCodexProjects: Set<string> = new Set<string>()
-  @State codexExpandedStateReady: boolean = false
-  @State codexExpandedStateHasSavedValue: boolean = false
   @State expandedClaudeProjects: Set<string> = new Set<string>()
   @State claudeExpandedStateReady: boolean = false
   @State claudeExpandedStateHasSavedValue: boolean = false
-  @State expandedOpenCodeProjects: Set<string> = new Set<string>()
-  @State openCodeExpandedStateReady: boolean = false
-  @State openCodeExpandedStateHasSavedValue: boolean = false
   @State isLoading: boolean = false
-  @State isSyncingOfficialCodex: boolean = false
   @State refreshTrigger: number = 0
   @State showNewSessionDialog: boolean = false
 
@@ -381,7 +371,6 @@ export struct ConversationListPage {
   private scroller: Scroller = new Scroller()
   private sessionsChangedListener: () => void = () => {}
   private statusChangedListener: (sessionId: string, status: SessionStatus) => void = () => {}
-  private lastOfficialCodexSyncAt: number = 0
 
   private menus: Array<HdsNavigationBadgeIconOptions> = [
     {
@@ -428,16 +417,11 @@ export struct ConversationListPage {
     }
 
     this.loadRecentDirs()
-    void this.loadCodexProjectExpandState()
     void this.loadClaudeProjectExpandState()
-    void this.loadOpenCodeProjectExpandState()
-    this.syncOfficialCodexThreadsIfNeeded(false)
   }
 
   onPageShow(): void {
     this.refreshSessionsFromStore()
-    sessionStore.warmOfficialCodexControllerIfNeeded()
-    this.syncOfficialCodexThreadsIfNeeded(true)
     // 每次页面显示时重新设置键盘避让模式
     try {
       this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET)
@@ -447,46 +431,8 @@ export struct ConversationListPage {
   private refreshSessionsFromStore(): void {
     this.sessions = [...(sessionStore.sessions || [])]
     this.isLoading = sessionStore.isLoading
-    this.ensureExpandedCodexProjects()
     this.ensureExpandedClaudeProjects()
-    this.ensureExpandedOpenCodeProjects()
     this.refreshTrigger = Date.now()
-  }
-
-  private syncOfficialCodexThreadsIfNeeded(force: boolean = false): void {
-    this.refreshSessionsFromStore()
-
-    // Codex tab: 同步 Codex Desktop 线程
-    if (this.tabType === TabType.CODEX && !this.isSyncingOfficialCodex) {
-      const now = Date.now()
-      if (!force && now - this.lastOfficialCodexSyncAt < 30000 && this.getFilteredSessions().length > 0) {
-        return
-      }
-
-      this.isSyncingOfficialCodex = true
-      this.lastOfficialCodexSyncAt = now
-      void sessionStore.syncOfficialCodexThreadsToLocal(120)
-        .then(() => {
-          this.refreshSessionsFromStore()
-        })
-        .catch((e: Error) => {
-          console.error(`[ConversationListPage] Sync Official Codex threads error: ${e.message}`)
-        })
-        .finally(() => {
-          this.isSyncingOfficialCodex = false
-        })
-    }
-
-    // OpenCode tab: 同步 OpenCode 本地线程
-    if (this.tabType === TabType.OPEN_CODE) {
-      void sessionStore.syncOpenCodeThreadsToLocal(1000, force)
-        .then(() => {
-          this.refreshSessionsFromStore()
-        })
-        .catch((e: Error) => {
-          console.error(`[ConversationListPage] Sync OpenCode threads error: ${e.message}`)
-        })
-    }
   }
 
   aboutToDisappear(): void {
@@ -521,10 +467,7 @@ export struct ConversationListPage {
   }
 
   private getProviderId(): string {
-    if (this.tabType === TabType.CLAUDE) return 'claude'
-    if (this.tabType === TabType.CODEX) return 'codex'
-    if (this.tabType === TabType.OPEN_CODE) return 'opencode'
-    return ''
+    return 'claude'
   }
 
   private async loadSessions(): Promise<void> {
@@ -542,23 +485,11 @@ export struct ConversationListPage {
   // 导入会话 - 跳转到导入页面
   private importSessions(): void {
     router.pushUrl({
-      url: 'pages/ImportSessionPage',
-      params: {
-        tabType: this.tabType
-      }
+      url: 'pages/ImportSessionPage'
     })
   }
 
   private getSubIcon(): HdsNavigationBadgeIconOptions {
-    if (this.tabType === TabType.CODEX) {
-      return {
-        content: {
-          icon: $r('sys.symbol.arrow_clockwise'),
-          action: () => { this.syncOfficialCodexThreadsIfNeeded(true) }
-        }
-      }
-    }
-
     return {
       content: {
         icon: $r('sys.symbol.arrow_down_circle'),
@@ -570,27 +501,10 @@ export struct ConversationListPage {
   // 根据 Tab 类型判断会话是否属于该 Tab
   private isSessionForTab(session: Session): boolean {
     const providerId = (session.aiTool || '').toLowerCase()
-
-    if (this.tabType === TabType.CLAUDE) {
-      return providerId === '' ||
-        providerId === 'claude' ||
-        providerId === 'anthropic' ||
-        providerId.includes('claude')
-    } else if (this.tabType === TabType.CODEX) {
-      // Codex 会话：必须有 officialCodexThreadId 且 aiTool 不是 opencode
-      // （OpenCode 会话复用了 officialCodexThreadId 字段存储其 thread ID）
-      if (providerId === 'opencode' || providerId.includes('opencode')) {
-        return false
-      }
-      return !!session.officialCodexThreadId || providerId === 'codex' || providerId.includes('codex')
-    } else if (this.tabType === TabType.OPEN_CODE) {
-      return providerId === 'opencode' ||
-        providerId === 'local' ||
-        providerId.includes('opencode') ||
-        providerId.includes('local')
-    }
-
-    return false
+    return providerId === '' ||
+      providerId === 'claude' ||
+      providerId === 'anthropic' ||
+      providerId.includes('claude')
   }
 
   private getFilteredSessions(): Session[] {
@@ -788,56 +702,6 @@ export struct ConversationListPage {
     return 1  // 默认优先级
   }
 
-  private getCodexProjectGroups(): ProjectSessionGroup[] {
-    const groups = new Map<string, ProjectSessionGroup>()
-    const sessions = this.getFilteredSessions()
-
-    for (let i = 0; i < sessions.length; i++) {
-      const session = sessions[i]
-      const projectName = this.getSessionProjectName(session)
-      let group = groups.get(projectName)
-      if (!group) {
-        group = new ProjectSessionGroup()
-        group.projectName = projectName
-        groups.set(projectName, group)
-      }
-      group.sessions.push(session)
-
-      const modifiedAt = this.getSessionSortTimestamp(session)
-      if (modifiedAt > group.latestModifiedAt) {
-        group.latestModifiedAt = modifiedAt
-        group.latestSessionTitle = session.title
-      }
-    }
-
-    const result = Array.from(groups.values())
-    // 先按活跃状态优先级排序，再按时间排序
-    result.sort((a: ProjectSessionGroup, b: ProjectSessionGroup) => {
-      // 未知项目放最后
-      if (a.projectName === '未知项目') return 1
-      if (b.projectName === '未知项目') return -1
-      // 按活跃优先级排序
-      const priorityDiff = this.getProjectGroupPriority(b) - this.getProjectGroupPriority(a)
-      if (priorityDiff !== 0) {
-        return priorityDiff
-      }
-      // 同优先级按时间排序
-      return b.latestModifiedAt - a.latestModifiedAt
-    })
-
-    for (let i = 0; i < result.length; i++) {
-      result[i].sessions.sort((a: Session, b: Session) => {
-        return this.compareSessionsForList(a, b)
-      })
-      if (result[i].sessions.length > 0) {
-        result[i].latestSessionTitle = result[i].sessions[0].title
-        result[i].latestModifiedAt = this.getSessionSortTimestamp(result[i].sessions[0])
-      }
-    }
-
-    return result
-  }
-
   // Claude 项目分组：按 workDir/projectPath 分组
   private getClaudeProjectGroups(): ProjectSessionGroup[] {
     const groups = new Map<string, ProjectSessionGroup>()
@@ -885,117 +749,7 @@ export struct ConversationListPage {
     return result
   }
 
-  private ensureExpandedCodexProjects(): void {
-    if (this.tabType !== TabType.CODEX) {
-      return
-    }
-
-    if (!this.codexExpandedStateReady) {
-      return
-    }
-
-    if (this.expandedCodexProjects.size > 0 || this.codexExpandedStateHasSavedValue) {
-      return
-    }
-
-    const groups = this.getCodexProjectGroups()
-    if (groups.length <= 0) {
-      return
-    }
-
-    const nextExpanded = new Set<string>()
-    for (let i = 0; i < groups.length; i++) {
-      nextExpanded.add(groups[i].projectName)
-    }
-    this.expandedCodexProjects = nextExpanded
-    void this.saveCodexProjectExpandState()
-  }
-
-  private isCodexProjectExpanded(projectName: string): boolean {
-    return this.expandedCodexProjects.has(projectName)
-  }
-
-  private toggleCodexProjectExpanded(projectName: string): void {
-    animateTo({ duration: 200, curve: Curve.Friction }, () => {
-      const nextExpanded = new Set<string>(this.expandedCodexProjects)
-      if (nextExpanded.has(projectName)) {
-        nextExpanded.delete(projectName)
-      } else {
-        nextExpanded.add(projectName)
-      }
-      this.expandedCodexProjects = nextExpanded
-    })
-    void this.saveCodexProjectExpandState()
-  }
-
-  private async loadCodexProjectExpandState(): Promise<void> {
-    if (this.tabType !== TabType.CODEX) {
-      this.codexExpandedStateReady = true
-      return
-    }
-
-    try {
-      const raw = await storageService.loadString(ConversationListPage.CODEX_PROJECT_EXPANDED_KEY, '')
-      const groups = this.getCodexProjectGroups()
-      this.codexExpandedStateHasSavedValue = raw.trim().length > 0
-      if (raw.trim().length <= 0) {
-        const expanded = new Set<string>()
-        for (let i = 0; i < groups.length; i++) {
-          expanded.add(groups[i].projectName)
-        }
-        this.expandedCodexProjects = expanded
-      } else {
-        const parsed = JSON.parse(raw) as string[]
-        const expanded = new Set<string>()
-        for (let i = 0; i < parsed.length; i++) {
-          const name = (parsed[i] || '').trim()
-          if (name.length > 0) {
-            expanded.add(name)
-          }
-        }
-        for (let i = 0; i < groups.length; i++) {
-          const projectName = groups[i].projectName
-          if (!expanded.has(projectName) && raw.trim().length <= 0) {
-            expanded.add(projectName)
-          }
-        }
-        this.expandedCodexProjects = expanded
-      }
-    } catch (e) {
-      console.error(`[ConversationListPage] loadCodexProjectExpandState error: ${e}`)
-      const groups = this.getCodexProjectGroups()
-      const expanded = new Set<string>()
-      for (let i = 0; i < groups.length; i++) {
-        expanded.add(groups[i].projectName)
-      }
-      this.expandedCodexProjects = expanded
-    } finally {
-      this.codexExpandedStateReady = true
-      this.ensureExpandedCodexProjects()
-      this.refreshTrigger = Date.now()
-    }
-  }
-
-  private async saveCodexProjectExpandState(): Promise<void> {
-    if (this.tabType !== TabType.CODEX) {
-      return
-    }
-
-    try {
-      const values = Array.from(this.expandedCodexProjects.values())
-      await storageService.saveString(ConversationListPage.CODEX_PROJECT_EXPANDED_KEY, JSON.stringify(values))
-      this.codexExpandedStateHasSavedValue = true
-    } catch (e) {
-      console.error(`[ConversationListPage] saveCodexProjectExpandState error: ${e}`)
-    }
-  }
-
-  // ========== Claude 项目分组展开/折叠状态管理 ==========
-
   private ensureExpandedClaudeProjects(): void {
-    if (this.tabType !== TabType.CLAUDE) {
-      return
-    }
     if (!this.claudeExpandedStateReady) {
       return
     }
@@ -1032,10 +786,6 @@ export struct ConversationListPage {
   }
 
   private async loadClaudeProjectExpandState(): Promise<void> {
-    if (this.tabType !== TabType.CLAUDE) {
-      this.claudeExpandedStateReady = true
-      return
-    }
     try {
       const raw = await storageService.loadString(ConversationListPage.CLAUDE_PROJECT_EXPANDED_KEY, '')
       const groups = this.getClaudeProjectGroups()
@@ -1079,162 +829,12 @@ export struct ConversationListPage {
   }
 
   private async saveClaudeProjectExpandState(): Promise<void> {
-    if (this.tabType !== TabType.CLAUDE) {
-      return
-    }
     try {
       const values = Array.from(this.expandedClaudeProjects.values())
       await storageService.saveString(ConversationListPage.CLAUDE_PROJECT_EXPANDED_KEY, JSON.stringify(values))
       this.claudeExpandedStateHasSavedValue = true
     } catch (e) {
       console.error(`[ConversationListPage] saveClaudeProjectExpandState error: ${e}`)
-    }
-  }
-
-  // ========== OpenCode 项目分组展开/折叠状态管理 ==========
-
-  private ensureExpandedOpenCodeProjects(): void {
-    if (this.tabType !== TabType.OPEN_CODE) {
-      return
-    }
-    if (!this.openCodeExpandedStateReady) {
-      return
-    }
-    if (this.expandedOpenCodeProjects.size > 0 || this.openCodeExpandedStateHasSavedValue) {
-      return
-    }
-    const groups = this.getOpenCodeProjectGroups()
-    if (groups.length <= 0) {
-      return
-    }
-    const nextExpanded = new Set<string>()
-    for (let i = 0; i < groups.length; i++) {
-      nextExpanded.add(groups[i].projectName)
-    }
-    this.expandedOpenCodeProjects = nextExpanded
-    void this.saveOpenCodeProjectExpandState()
-  }
-
-  private isOpenCodeProjectExpanded(projectName: string): boolean {
-    return this.expandedOpenCodeProjects.has(projectName)
-  }
-
-  private toggleOpenCodeProjectExpanded(projectName: string): void {
-    animateTo({ duration: 200, curve: Curve.Friction }, () => {
-      const nextExpanded = new Set<string>(this.expandedOpenCodeProjects)
-      if (nextExpanded.has(projectName)) {
-        nextExpanded.delete(projectName)
-      } else {
-        nextExpanded.add(projectName)
-      }
-      this.expandedOpenCodeProjects = nextExpanded
-    })
-    void this.saveOpenCodeProjectExpandState()
-  }
-
-  private getOpenCodeProjectGroups(): ProjectSessionGroup[] {
-    const groups = new Map<string, ProjectSessionGroup>()
-    const sessions = this.getFilteredSessions()
-
-    for (let i = 0; i < sessions.length; i++) {
-      const session = sessions[i]
-      const projectName = this.getSessionProjectName(session)
-      let group = groups.get(projectName)
-      if (!group) {
-        group = new ProjectSessionGroup()
-        group.projectName = projectName
-        groups.set(projectName, group)
-      }
-      group.sessions.push(session)
-
-      const modifiedAt = this.getSessionSortTimestamp(session)
-      if (modifiedAt > group.latestModifiedAt) {
-        group.latestModifiedAt = modifiedAt
-        group.latestSessionTitle = session.title
-      }
-    }
-
-    const result = Array.from(groups.values())
-    result.sort((a: ProjectSessionGroup, b: ProjectSessionGroup) => {
-      if (a.projectName === '未知项目') return 1
-      if (b.projectName === '未知项目') return -1
-      const priorityDiff = this.getProjectGroupPriority(b) - this.getProjectGroupPriority(a)
-      if (priorityDiff !== 0) {
-        return priorityDiff
-      }
-      return b.latestModifiedAt - a.latestModifiedAt
-    })
-
-    for (let i = 0; i < result.length; i++) {
-      result[i].sessions.sort((a: Session, b: Session) => {
-        return this.compareSessionsForList(a, b)
-      })
-      if (result[i].sessions.length > 0) {
-        result[i].latestSessionTitle = result[i].sessions[0].title
-        result[i].latestModifiedAt = this.getSessionSortTimestamp(result[i].sessions[0])
-      }
-    }
-
-    return result
-  }
-
-  private async loadOpenCodeProjectExpandState(): Promise<void> {
-    if (this.tabType !== TabType.OPEN_CODE) {
-      this.openCodeExpandedStateReady = true
-      return
-    }
-    try {
-      const raw = await storageService.loadString(ConversationListPage.OPENCODE_PROJECT_EXPANDED_KEY, '')
-      const groups = this.getOpenCodeProjectGroups()
-      this.openCodeExpandedStateHasSavedValue = raw.trim().length > 0
-      if (raw.trim().length <= 0) {
-        const expanded = new Set<string>()
-        for (let i = 0; i < groups.length; i++) {
-          expanded.add(groups[i].projectName)
-        }
-        this.expandedOpenCodeProjects = expanded
-      } else {
-        const parsed = JSON.parse(raw) as string[]
-        const expanded = new Set<string>()
-        for (let i = 0; i < parsed.length; i++) {
-          const name = (parsed[i] || '').trim()
-          if (name.length > 0) {
-            expanded.add(name)
-          }
-        }
-        for (let i = 0; i < groups.length; i++) {
-          const projectName = groups[i].projectName
-          if (!expanded.has(projectName) && raw.trim().length <= 0) {
-            expanded.add(projectName)
-          }
-        }
-        this.expandedOpenCodeProjects = expanded
-      }
-    } catch (e) {
-      console.error(`[ConversationListPage] loadOpenCodeProjectExpandState error: ${e}`)
-      const groups = this.getOpenCodeProjectGroups()
-      const expanded = new Set<string>()
-      for (let i = 0; i < groups.length; i++) {
-        expanded.add(groups[i].projectName)
-      }
-      this.expandedOpenCodeProjects = expanded
-    } finally {
-      this.openCodeExpandedStateReady = true
-      this.ensureExpandedOpenCodeProjects()
-      this.refreshTrigger = Date.now()
-    }
-  }
-
-  private async saveOpenCodeProjectExpandState(): Promise<void> {
-    if (this.tabType !== TabType.OPEN_CODE) {
-      return
-    }
-    try {
-      const values = Array.from(this.expandedOpenCodeProjects.values())
-      await storageService.saveString(ConversationListPage.OPENCODE_PROJECT_EXPANDED_KEY, JSON.stringify(values))
-      this.openCodeExpandedStateHasSavedValue = true
-    } catch (e) {
-      console.error(`[ConversationListPage] saveOpenCodeProjectExpandState error: ${e}`)
     }
   }
 
@@ -1318,73 +918,27 @@ export struct ConversationListPage {
               this.LoadingState()
             }
           } else if (this.hasFilteredSessions()) {
-            if (this.tabType === TabType.CODEX) {
-              ForEach(this.getCodexProjectGroups(), (group: ProjectSessionGroup) => {
-                ListItemGroup({
-                  header: this.ProjectHeader(group, this.isCodexProjectExpanded(group.projectName))
-                }) {
-                  if (this.isCodexProjectExpanded(group.projectName)) {
-                    ForEach(group.sessions, (session: Session) => {
-                      ListItem() {
-                        SessionItemView({
-                          session: session,
-                          compactMode: false,
-                          refreshTrigger: this.refreshTrigger
-                        })
-                      }
-                      .swipeAction({
-                        end: this.SwipeActions(session),
-                        edgeEffect: SwipeEdgeEffect.Spring
+            ForEach(this.getClaudeProjectGroups(), (group: ProjectSessionGroup) => {
+              ListItemGroup({
+                header: this.ProjectHeader(group, this.isClaudeProjectExpanded(group.projectName))
+              }) {
+                if (this.isClaudeProjectExpanded(group.projectName)) {
+                  ForEach(group.sessions, (session: Session) => {
+                    ListItem() {
+                      SessionItemView({
+                        session: session,
+                        compactMode: false,
+                        refreshTrigger: this.refreshTrigger
                       })
-                    }, (session: Session) => session.id)
-                  }
+                    }
+                    .swipeAction({
+                      end: this.SwipeActions(session),
+                      edgeEffect: SwipeEdgeEffect.Spring
+                    })
+                  }, (session: Session) => session.id)
                 }
-              }, (group: ProjectSessionGroup) => group.projectName)
-            } else if (this.tabType === TabType.CLAUDE) {
-              ForEach(this.getClaudeProjectGroups(), (group: ProjectSessionGroup) => {
-                ListItemGroup({
-                  header: this.ProjectHeader(group, this.isClaudeProjectExpanded(group.projectName))
-                }) {
-                  if (this.isClaudeProjectExpanded(group.projectName)) {
-                    ForEach(group.sessions, (session: Session) => {
-                      ListItem() {
-                        SessionItemView({
-                          session: session,
-                          compactMode: false,
-                          refreshTrigger: this.refreshTrigger
-                        })
-                      }
-                      .swipeAction({
-                        end: this.SwipeActions(session),
-                        edgeEffect: SwipeEdgeEffect.Spring
-                      })
-                    }, (session: Session) => session.id)
-                  }
-                }
-              }, (group: ProjectSessionGroup) => group.projectName)
-            } else {
-              ForEach(this.getOpenCodeProjectGroups(), (group: ProjectSessionGroup) => {
-                ListItemGroup({
-                  header: this.ProjectHeader(group, this.isOpenCodeProjectExpanded(group.projectName))
-                }) {
-                  if (this.isOpenCodeProjectExpanded(group.projectName)) {
-                    ForEach(group.sessions, (session: Session) => {
-                      ListItem() {
-                        SessionItemView({
-                          session: session,
-                          compactMode: false,
-                          refreshTrigger: this.refreshTrigger
-                        })
-                      }
-                      .swipeAction({
-                        end: this.SwipeActions(session),
-                        edgeEffect: SwipeEdgeEffect.Spring
-                      })
-                    }, (session: Session) => session.id)
-                  }
-                }
-              }, (group: ProjectSessionGroup) => group.projectName)
-            }
+              }
+            }, (group: ProjectSessionGroup) => group.projectName)
           } else {
             ListItem() {
               this.EmptyState()
@@ -1489,13 +1043,7 @@ export struct ConversationListPage {
     .width('100%')
     .padding({ top: 24, bottom: 14, left: 4, right: 4 })
     .onClick(() => {
-      if (this.tabType === TabType.CLAUDE) {
-        this.toggleClaudeProjectExpanded(group.projectName)
-      } else if (this.tabType === TabType.OPEN_CODE) {
-        this.toggleOpenCodeProjectExpanded(group.projectName)
-      } else {
-        this.toggleCodexProjectExpanded(group.projectName)
-      }
+      this.toggleClaudeProjectExpanded(group.projectName)
     })
   }
 
@@ -1528,14 +1076,10 @@ export struct ConversationListPage {
   }
 
   private getEmptyTitle(): string {
-    if (this.tabType === TabType.CODEX) return '暂无 Codex Desktop 对话'
-    if (this.tabType === TabType.OPEN_CODE) return '暂无 OpenCode 对话'
     return '暂无会话'
   }
 
   private getEmptySubtitle(): string {
-    if (this.tabType === TabType.CODEX) return '正在自动加载 Codex Desktop 对话'
-    if (this.tabType === TabType.OPEN_CODE) return '正在自动加载 OpenCode 对话'
     return '点击右上角 + 开始新对话'
   }
 

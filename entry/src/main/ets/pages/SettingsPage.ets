@@ -13,6 +13,7 @@ import router from '@ohos.router'
 import http from '@ohos.net.http'
 import { openScanner, ScannedAddresses } from '../services/ScanService'
 import { connectionManager, ConnectionType, ConnectionQuality } from '../services/ConnectionManager'
+
 import { apiService, DesktopCapabilityItem } from '../services/APIService'
 
 class OfficialCodexControllerAccountItem {
@@ -87,7 +88,7 @@ export struct SettingsPage {
   @State isLoadingModels: boolean = false
 
   private readonly appVersion: string = '1.0.0'
-  private readonly buildTime: string = '2026-05-08'
+  private readonly buildTime: string = '2026-06-24'
   private modelsChangedListener: (() => void) | null = null
 
   aboutToAppear(): void {
@@ -1129,12 +1130,15 @@ export struct SettingsPage {
 
   @Builder
   FooterView() {
-    Text(`Claude Code HarmonyOS v${this.appVersion} (${this.buildTime})`)
-      .fontSize(Theme.FontCaption)
-      .fontColor(Theme.TextTertiary)
-      .width('100%')
-      .textAlign(TextAlign.Center)
-      .padding({ top: Theme.SpacingXL, bottom: Theme.SpacingXL })
+    Column({ space: 8 }) {
+      Text(`Claude Code HarmonyOS v${this.appVersion} (${this.buildTime})`)
+        .fontSize(Theme.FontCaption)
+        .fontColor(Theme.TextTertiary)
+        .width('100%')
+        .textAlign(TextAlign.Center)
+    }
+    .width('100%')
+    .padding({ top: Theme.SpacingXL, bottom: Theme.SpacingXL })
   }
 
   @Builder

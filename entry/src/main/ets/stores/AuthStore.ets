@@ -30,6 +30,9 @@ export class AuthStore {
   serverProfiles: ServerProfile[] = []
   activeProfileId: string = ''
 
+  // H5 远程访问 Token（扫码时从 cchaha 桌面端二维码获取）
+  h5Token: string = ''
+
   // E2EE: 桌面端公钥（扫码时从 QR 码获取，云中继端到端加密用）
   relayE2EEPubKey: string | null = null
 
@@ -77,6 +80,9 @@ export class AuthStore {
         this.user = JSON.parse(userData) as User
         this.isLoggedIn = true
       }
+
+      // 加载 H5 Token
+      this.h5Token = await this.preferences.get('h5Token', '') as string
 
       // 加载 E2EE 桌面端公钥
       this.relayE2EEPubKey = await this.preferences.get('relayE2EEPubKey', '') as string || null
@@ -308,6 +314,29 @@ export class AuthStore {
     }
   }
 
+  /**
+   * 设置 H5 远程访问 Token（扫码时从 cchaha 桌面端二维码解析）
+   */
+  async setH5Token(token: string): Promise<void> {
+    this.h5Token = token
+    if (this.preferences) {
+      await this.preferences.put('h5Token', token)
+      await this.preferences.flush()
+    }
+    // 同步到 API 和 WS 服务
+    this.updateServicesWithToken()
+  }
+
+  /**
+   * 将 h5Token 同步到 API 和 WS 服务
+   */
+  private updateServicesWithToken(): void {
+    if (this.h5Token) {
+      apiService.setApiToken(this.h5Token)
+      wsService.setH5Token(this.h5Token)
+    }
+  }
+
   async setOfficialCodexSendMode(mode: 'auto' | 'remote_control' | 'script_fallback'): Promise<void> {
     this.officialCodexSendMode = mode
     if (this.preferences) {
@@ -322,6 +351,8 @@ export class AuthStore {
       apiService.setBaseUrl(url)
       wsService.setServerUrl(url)
     }
+    // 同步 h5Token（首次加载或切换服务器时）
+    this.updateServicesWithToken()
   }
 
   }
