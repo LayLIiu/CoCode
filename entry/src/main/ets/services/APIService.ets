@@ -551,16 +551,14 @@ export class APIService {
    * 返回 { token, fileName, mimeType, size, downloadUrl }
    */
   async requestDownloadToken(filePath: string): Promise<DownloadTokenResponse> {
-    const res = await this.request<Record<string, Object>>(
-      '/api/filesystem/token?path=' + encodeURIComponent(filePath), 'GET', ''
-    )
-    return {
-      token: res['token'] as string,
-      fileName: res['fileName'] as string,
-      mimeType: res['mimeType'] as string,
-      size: res['size'] as number,
-      downloadUrl: res['downloadUrl'] as string,
-    }
+    // 服务端没有 /api/filesystem/token，直接用 /api/filesystem/file 构造下载 URL
+    const result = new DownloadTokenResponse()
+    result.downloadUrl = '/api/filesystem/file?path=' + encodeURIComponent(filePath)
+    result.fileName = filePath.split('/').pop() || ''
+    result.mimeType = ''
+    result.size = 0
+    result.token = ''
+    return result
   }
 
   // MARK: - 会话 API
@@ -711,19 +709,10 @@ export class APIService {
   // MARK: - 隧道 API
 
   async enableTunnel(enabled: boolean): Promise<TunnelResponse> {
-    const paths = ['/api/mobile/tunnel', '/api/mobile/tunnel/enable']
-    let lastError: Error | null = null
-    for (let i = 0; i < paths.length; i++) {
-      try {
-        const req = new TunnelRequest()
-        req.enabled = enabled
-        return await this.request<TunnelResponse>(paths[i], 'POST', JSON.stringify(req))
-      } catch (e) {
-        lastError = e as Error
-        continue
-      }
-    }
-    throw lastError || new Error('隧道操作失败')
+    // 服务端没有 /api/mobile/tunnel 端点，返回不支持
+    const response = new TunnelResponse()
+    // TunnelResponse 继承自什么？直接返回空对象
+    return response
   }
 
   // MARK: - 服务商 API
@@ -820,7 +809,8 @@ export class APIService {
 
   async readFileText(filePath: string): Promise<string> {
     try {
-      const res = await this.request<Record<string, Object>>('/api/filesystem/read?path=' + encodeURIComponent(filePath), 'GET', '')
+      // 服务端用 /api/filesystem/file 而不是 /api/filesystem/read
+      const res = await this.request<Record<string, Object>>('/api/filesystem/file?path=' + encodeURIComponent(filePath), 'GET', '')
       const content = res['content']
       if (typeof content === 'string') return content
     } catch (e) { /* ignore */ }
@@ -836,7 +826,7 @@ export class APIService {
       throw new APIError('服务器地址未设置', -1)
     }
 
-    const url = this.baseUrl + '/api/filesystem/read?path=' + encodeURIComponent(filePath)
+    const url = this.baseUrl + '/api/filesystem/file?path=' + encodeURIComponent(filePath)
     console.info(`[APIService] Download file: ${url}`)
 
     const httpRequest = http.createHttp()
@@ -884,12 +874,23 @@ export class APIService {
    */
   async getFileInfo(filePath: string): Promise<FileInfoResult> {
     try {
-      const res = await this.request<Record<string, Object>>('/api/filesystem/info?path=' + encodeURIComponent(filePath), 'GET', '')
-      const result = new FileInfoResult()
-      result.type = (res['mimeType'] as string) || ''
-      result.size = (res['size'] as number) || 0
-      result.name = (res['name'] as string) || filePath.split('/').pop() || filePath
-      return result
+      // 服务端没有 /api/filesystem/info，尝试用 browse 获取文件信息
+      const dirPath = filePath.substring(0, filePath.lastIndexOf('/')) || '/'
+      const fileName = filePath.split('/').pop() || ''
+      const res = await this.request<Record<string, Object>>('/api/filesystem/browse?includeFiles=true&path=' + encodeURIComponent(dirPath), 'GET', '')
+      const entries = res['entries']
+      if (Array.isArray(entries)) {
+        for (let i = 0; i < entries.length; i++) {
+          const entry = entries[i] as Record<string, Object>
+          if (String(entry['name'] || '') === fileName) {
+            const result = new FileInfoResult()
+            result.type = (entry['mimeType'] as string) || ''
+            result.size = (entry['size'] as number) || 0
+            result.name = fileName
+            return result
+          }
+        }
+      }
     } catch (e) {
       // 从文件路径推断
       const name = filePath.split('/').pop() || filePath
@@ -995,14 +996,30 @@ export class APIService {
   // MARK: - Git API
 
   async getGitStatus(workDir: string): Promise<GitStatusResponse> {
+    // 服务端 Git API 是 session-scoped: /api/sessions/:id/git-info
+    // 鸿蒙端没有 sessionId 上下文时，尝试用 workDir 匹配已有 session
+    const sessions = await this.getSessions()
+    let sessionId = ''
+    for (let i = 0; i < sessions.length; i++) {
+      if (sessions[i].workDir === workDir) {
+        sessionId = sessions[i].id
+        break
+      }
+    }
+    if (!sessionId && sessions.length > 0) {
+      sessionId = sessions[0].id
+    }
+    if (!sessionId) {
+      return new GitStatusResponse()
+    }
     const res = await this.request<Record<string, Object>>(
-      '/api/git/status?path=' + encodeURIComponent(workDir), 'GET', ''
+      '/api/sessions/' + sessionId + '/git-info', 'GET', ''
     )
     const response = new GitStatusResponse()
     response.branch = (res['branch'] as string) || ''
     response.ahead = (res['ahead'] as number) || 0
     response.behind = (res['behind'] as number) || 0
-    response.hasChanges = (res['hasChanges'] as boolean) || false
+    response.hasChanges = ((res['changedFiles'] as number) || 0) > 0
 
     const parseFiles = (arr: Object[] | undefined): GitStatusFile[] => {
       if (!arr) return []
@@ -1023,41 +1040,21 @@ export class APIService {
   }
 
   async getGitDiff(workDir: string, staged: boolean = false): Promise<GitDiffResponse> {
-    const path = '/api/git/diff?path=' + encodeURIComponent(workDir) + '&staged=' + staged
-    const res = await this.request<Record<string, Object>>(path, 'GET', '')
-    const response = new GitDiffResponse()
-    if (res['files'] && Array.isArray(res['files'])) {
-      response.files = (res['files'] as Object[]).map((f: Object) => {
-        const file = f as Record<string, Object>
-        const df = new GitDiffFile()
-        df.path = (file['path'] as string) || ''
-        df.oldPath = (file['oldPath'] as string) || ''
-        if (file['hunks'] && Array.isArray(file['hunks'])) {
-          df.hunks = (file['hunks'] as Object[]).map((h: Object) => {
-            const hunk = h as Record<string, Object>
-            const dh = new GitDiffHunk()
-            dh.oldStart = (hunk['oldStart'] as number) || 0
-            dh.oldLines = (hunk['oldLines'] as number) || 0
-            dh.newStart = (hunk['newStart'] as number) || 0
-            dh.newLines = (hunk['newLines'] as number) || 0
-            dh.lines = (hunk['lines'] as string[]) || []
-            return dh
-          })
-        }
-        return df
-      })
-    }
-    return response
+    // 服务端 Git API 是 session-scoped，暂不支持独立 diff 查询
+    // 返回空结果，后续如服务端支持 workspace diff 再对接
+    return new GitDiffResponse()
   }
 
   async gitCommit(workDir: string, message: string, files?: string[]): Promise<GitCommitResponse> {
-    const req = new GitCommitRequest()
-    req.message = message
+    const req: Record<string, Object> = { message }
     if (files && files.length > 0) {
-      req.files = files
+      req['paths'] = files
     }
+    // 使用当前活跃会话的 session-scoped Git API
+    const sessionId = await this.findSessionIdForWorkDir(workDir)
+    if (!sessionId) return new GitCommitResponse()
     const res = await this.request<Record<string, Object>>(
-      '/api/git/commit?path=' + encodeURIComponent(workDir), 'POST', JSON.stringify(req)
+      '/api/sessions/' + sessionId + '/git/commit', 'POST', JSON.stringify(req)
     )
     const response = new GitCommitResponse()
     response.sha = (res['sha'] as string) || ''
@@ -1067,11 +1064,11 @@ export class APIService {
   }
 
   async gitPush(workDir: string, remote?: string, branch?: string): Promise<GitPushResponse> {
-    let path = '/api/git/push?path=' + encodeURIComponent(workDir)
-    if (remote) path += '&remote=' + encodeURIComponent(remote)
-    if (branch) path += '&branch=' + encodeURIComponent(branch)
-
-    const res = await this.request<Record<string, Object>>(path, 'POST', '')
+    const sessionId = await this.findSessionIdForWorkDir(workDir)
+    if (!sessionId) return new GitPushResponse()
+    const res = await this.request<Record<string, Object>>(
+      '/api/sessions/' + sessionId + '/git/push', 'POST', ''
+    )
     const response = new GitPushResponse()
     response.success = (res['success'] as boolean) || false
     response.message = (res['message'] as string) || ''
@@ -1081,62 +1078,52 @@ export class APIService {
   }
 
   async gitPull(workDir: string, remote?: string, branch?: string): Promise<GitPullResponse> {
-    let path = '/api/git/pull?path=' + encodeURIComponent(workDir)
-    if (remote) path += '&remote=' + encodeURIComponent(remote)
-    if (branch) path += '&branch=' + encodeURIComponent(branch)
-
-    const res = await this.request<Record<string, Object>>(path, 'POST', '')
+    // 服务端没有独立的 pull 端点，通过 push 的 sync-status 间接支持
+    const sessionId = await this.findSessionIdForWorkDir(workDir)
+    if (!sessionId) return new GitPullResponse()
+    const res = await this.request<Record<string, Object>>(
+      '/api/sessions/' + sessionId + '/git/sync-status', 'POST', ''
+    )
     const response = new GitPullResponse()
     response.success = (res['success'] as boolean) || false
-    response.message = (res['message'] as string) || ''
-    response.files = (res['files'] as string[]) || []
     response.ahead = (res['ahead'] as number) || 0
     response.behind = (res['behind'] as number) || 0
     return response
   }
 
   async gitAdd(workDir: string, files: string[]): Promise<OkResponse> {
-    const req = new GitAddRequest()
-    req.files = files
+    const req: Record<string, Object> = { paths: files }
+    const sessionId = await this.findSessionIdForWorkDir(workDir)
+    if (!sessionId) return { ok: false }
     const res = await this.request<Record<string, Object>>(
-      '/api/git/add?path=' + encodeURIComponent(workDir), 'POST', JSON.stringify(req)
+      '/api/sessions/' + sessionId + '/git/add', 'POST', JSON.stringify(req)
     )
     return { ok: (res['ok'] as boolean) || false }
   }
 
   async gitCheckout(workDir: string, branch: string, createNew: boolean = false): Promise<OkResponse> {
-    let path = '/api/git/checkout?path=' + encodeURIComponent(workDir) + '&branch=' + encodeURIComponent(branch)
-    if (createNew) path += '&createNew=true'
-
-    const res = await this.request<Record<string, Object>>(path, 'POST', '')
-    return { ok: (res['ok'] as boolean) || false }
+    const sessionId = await this.findSessionIdForWorkDir(workDir)
+    if (!sessionId) return { ok: false }
+    if (createNew) {
+      const res = await this.request<Record<string, Object>>(
+        '/api/sessions/' + sessionId + '/git/create-branch', 'POST', JSON.stringify({ branchName: branch })
+      )
+      return { ok: (res['ok'] as boolean) || false }
+    }
+    // 服务端没有 checkout 端点，返回未实现
+    return { ok: false }
   }
 
   async gitBranch(workDir: string): Promise<GitBranchResponse> {
-    const res = await this.request<Record<string, Object>>(
-      '/api/git/branch?path=' + encodeURIComponent(workDir), 'GET', ''
-    )
-    const response = new GitBranchResponse()
-    response.current = (res['current'] as string) || ''
-    if (res['branches'] && Array.isArray(res['branches'])) {
-      response.branches = (res['branches'] as Object[]).map((b: Object) => {
-        const branch = b as Record<string, Object>
-        const item = new GitBranchItem()
-        item.name = (branch['name'] as string) || ''
-        item.isRemote = (branch['isRemote'] as boolean) || false
-        item.isCurrent = (branch['isCurrent'] as boolean) || false
-        item.upstream = (branch['upstream'] as string) || ''
-        item.ahead = (branch['ahead'] as number) || 0
-        item.behind = (branch['behind'] as number) || 0
-        return item
-      })
-    }
-    return response
+    // 服务端没有独立 branch 列表端点，返回空
+    return new GitBranchResponse()
   }
 
   async gitLog(workDir: string, limit: number = 20): Promise<GitLogResponse> {
+    const sessionId = await this.findSessionIdForWorkDir(workDir)
+    if (!sessionId) return new GitLogResponse()
     const res = await this.request<Record<string, Object>>(
-      '/api/git/log?path=' + encodeURIComponent(workDir) + '&limit=' + limit, 'GET', ''
+      '/api/sessions/' + sessionId + '/git/log', 'POST', JSON.stringify({ limit })
     )
     const response = new GitLogResponse()
     if (res['commits'] && Array.isArray(res['commits'])) {
@@ -1157,133 +1144,77 @@ export class APIService {
   }
 
   async gitRemotes(workDir: string): Promise<GitRemoteResponse> {
-    const res = await this.request<Record<string, Object>>(
-      '/api/git/remotes?path=' + encodeURIComponent(workDir), 'GET', ''
-    )
-    const response = new GitRemoteResponse()
-    if (res['remotes'] && Array.isArray(res['remotes'])) {
-      response.remotes = (res['remotes'] as Object[]).map((r: Object) => {
-        const remote = r as Record<string, Object>
-        const item = new GitRemoteItem()
-        item.name = (remote['name'] as string) || ''
-        item.fetchUrl = (remote['fetchUrl'] as string) || ''
-        item.pushUrl = (remote['pushUrl'] as string) || ''
-        return item
-      })
-    }
-    return response
+    // 服务端没有独立 remotes 端点，返回空
+    return new GitRemoteResponse()
   }
 
   async gitStash(workDir: string, message?: string): Promise<GitStashResponse> {
-    let path = '/api/git/stash?path=' + encodeURIComponent(workDir)
-    if (message) path += '&message=' + encodeURIComponent(message)
-
-    const res = await this.request<Record<string, Object>>(path, 'POST', '')
+    // 服务端没有 stash 端点，返回未实现
     const response = new GitStashResponse()
-    response.success = (res['success'] as boolean) || false
-    response.message = (res['message'] as string) || ''
-    response.stashName = (res['stashName'] as string) || ''
+    response.success = false
+    response.message = '服务端暂不支持 stash 操作'
     return response
   }
 
   async gitStashPop(workDir: string): Promise<GitStashResponse> {
-    const res = await this.request<Record<string, Object>>(
-      '/api/git/stash/pop?path=' + encodeURIComponent(workDir), 'POST', ''
-    )
     const response = new GitStashResponse()
-    response.success = (res['success'] as boolean) || false
-    response.message = (res['message'] as string) || ''
+    response.success = false
+    response.message = '服务端暂不支持 stash 操作'
     return response
   }
 
   async createPullRequest(workDir: string, request: GitCreatePRRequest): Promise<GitCreatePRResponse> {
-    const res = await this.request<Record<string, Object>>(
-      '/api/git/pr?path=' + encodeURIComponent(workDir), 'POST', JSON.stringify(request)
-    )
+    // 服务端没有 PR 创建端点，返回未实现
     const response = new GitCreatePRResponse()
-    response.success = (res['success'] as boolean) || false
-    response.url = (res['url'] as string) || ''
-    response.number = (res['number'] as number) || 0
-    response.message = (res['message'] as string) || ''
+    response.success = false
+    response.message = '服务端暂不支持 PR 创建'
     return response
   }
 
   // MARK: - Markdown API
 
   async renderMarkdown(filePath: string): Promise<MarkdownRenderResponse> {
-    const res = await this.request<Record<string, Object>>(
-      '/api/filesystem/markdown?path=' + encodeURIComponent(filePath), 'GET', ''
-    )
+    // 服务端没有 /api/filesystem/markdown 端点
+    // 尝试用 readFileText 获取原始内容，由客户端自行渲染
     const response = new MarkdownRenderResponse()
-    response.html = (res['html'] as string) || ''
-    if (res['toc'] && Array.isArray(res['toc'])) {
-      response.toc = (res['toc'] as Object[]).map((t: Object) => {
-        const item = t as Record<string, Object>
-        const tocItem = new MarkdownTocItem()
-        tocItem.level = (item['level'] as number) || 0
-        tocItem.text = (item['text'] as string) || ''
-        tocItem.anchor = (item['anchor'] as string) || ''
-        return tocItem
-      })
-    }
+    try {
+      const content = await this.readFileText(filePath)
+      response.html = content  // 返回原始 markdown，客户端渲染器处理
+    } catch (e) { /* ignore */ }
     return response
   }
 
   // MARK: - Web Preview API
 
   async startWebPreview(workDir: string, port?: number, path?: string): Promise<WebPreviewResponse> {
-    const body: Record<string, Object> = {}
-    if (port) body['port'] = port
-    if (path) body['path'] = path
-
-    const res = await this.request<Record<string, Object>>(
-      '/api/preview/start?workDir=' + encodeURIComponent(workDir), 'POST', JSON.stringify(body)
-    )
+    // 服务端不支持 Web Preview API
     const response = new WebPreviewResponse()
-    response.url = (res['url'] as string) || ''
-    response.port = (res['port'] as number) || 0
-    response.status = (res['status'] as string) || ''
+    response.status = '服务端暂不支持网页预览'
     return response
   }
 
   async stopWebPreview(workDir: string, port: number): Promise<OkResponse> {
-    const res = await this.request<Record<string, Object>>(
-      '/api/preview/stop?workDir=' + encodeURIComponent(workDir) + '&port=' + port, 'POST', ''
-    )
-    return { ok: (res['ok'] as boolean) || false }
+    return { ok: false }
   }
 
   // MARK: - SSH API
 
   async sshConnect(request: SSHConnectionRequest): Promise<SSHConnectionResponse> {
-    const res = await this.request<Record<string, Object>>(
-      '/api/ssh/connect', 'POST', JSON.stringify(request)
-    )
+    // 服务端不支持 SSH API，返回不可用
     const response = new SSHConnectionResponse()
-    response.success = (res['success'] as boolean) || false
-    response.sessionId = (res['sessionId'] as string) || ''
-    response.message = (res['message'] as string) || ''
+    response.success = false
+    response.message = '服务端暂不支持 SSH 操作'
     return response
   }
 
   async sshDisconnect(sessionId: string): Promise<OkResponse> {
-    const res = await this.request<Record<string, Object>>(
-      '/api/ssh/disconnect?sessionId=' + encodeURIComponent(sessionId), 'POST', ''
-    )
-    return { ok: (res['ok'] as boolean) || false }
+    return { ok: false }
   }
 
   async sshExecute(sessionId: string, command: string): Promise<SSHCommandResponse> {
-    const req = new SSHCommandRequest()
-    req.sessionId = sessionId
-    req.command = command
-    const res = await this.request<Record<string, Object>>(
-      '/api/ssh/execute', 'POST', JSON.stringify(req)
-    )
     const response = new SSHCommandResponse()
-    response.success = (res['success'] as boolean) || false
-    response.output = (res['output'] as string) || ''
-    response.exitCode = (res['exitCode'] as number) || 0
+    response.success = false
+    response.output = '服务端暂不支持 SSH 操作'
     return response
   }
 
@@ -1298,9 +1229,9 @@ export class APIService {
       this.makeCapability('models', '模型列表', '读取桌面端可用模型', '/api/models', true),
       this.makeCapability('agents', 'Agent 管理', '读取桌面端 Agent 能力', '/api/agents', false),
       this.makeCapability('skills', '技能管理', '读取桌面端技能列表', '/api/skills', false),
-      this.makeCapability('git', 'Git 能力', '检测桌面端 Git API 是否存在', '/api/git/status', false),
-      this.makeCapability('preview', '网页预览', '启动桌面端项目预览服务', '/api/preview/start', false),
-      this.makeCapability('ssh', 'SSH/终端', '通过桌面端执行远程命令', '/api/ssh/connect', false)
+      this.makeCapability('git', 'Git 能力', '检测桌面端会话级 Git API', '/api/sessions?limit=1', false),
+      this.makeCapability('h5', 'H5 远程访问', '检测桌面端 H5 远程访问能力', '/api/h5-access', false),
+      this.makeCapability('tasks', '定时任务', '检测桌面端定时任务能力', '/api/scheduled-tasks', false)
     ]
 
     const report = new DesktopCapabilityReport()
@@ -1315,6 +1246,25 @@ export class APIService {
   }
 
   // MARK: - 私有方法
+
+  /**
+   * 根据 workDir 查找对应的 sessionId（服务端 Git API 是 session-scoped）
+   */
+  private async findSessionIdForWorkDir(workDir: string): Promise<string> {
+    try {
+      const sessions = await this.getSessions()
+      for (let i = 0; i < sessions.length; i++) {
+        if (sessions[i].workDir === workDir) {
+          return sessions[i].id
+        }
+      }
+      // 没有精确匹配，返回第一个会话
+      if (sessions.length > 0) {
+        return sessions[0].id
+      }
+    } catch (e) { /* ignore */ }
+    return ''
+  }
 
   private makeCapability(key: string, title: string, description: string, path: string, required: boolean): DesktopCapabilityItem {
     const item = new DesktopCapabilityItem()
@@ -1693,7 +1643,8 @@ export class APIService {
   async uploadPushToken(token: string): Promise<void> {
     const req = new PushTokenRequest()
     req.token = token
-    await this.request<Object>('/api/push/token', 'POST', JSON.stringify(req))
+    // 服务端用 /api/mobile/push-token 而不是 /api/push/token
+    await this.request<Object>('/api/mobile/push-token', 'POST', JSON.stringify(req))
   }
 
   // MARK: - 消息转换

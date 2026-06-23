@@ -88,7 +88,7 @@ export struct SettingsPage {
   @State isLoadingModels: boolean = false
 
   private readonly appVersion: string = '1.0.0'
-  private readonly buildTime: string = '2026-06-24'
+  private readonly buildTime: string = '2026-06-25'
   private modelsChangedListener: (() => void) | null = null
 
   aboutToAppear(): void {
