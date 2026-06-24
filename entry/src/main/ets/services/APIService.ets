@@ -710,8 +710,7 @@ export class APIService {
 
   async enableTunnel(enabled: boolean): Promise<TunnelResponse> {
     // 服务端没有 /api/mobile/tunnel 端点，返回不支持
-    const response = new TunnelResponse()
-    // TunnelResponse 继承自什么？直接返回空对象
+    const response: TunnelResponse = { ok: false, error: '服务端暂不支持隧道操作' }
     return response
   }
 
@@ -891,6 +890,12 @@ export class APIService {
           }
         }
       }
+      // browse 结果中未找到匹配文件，返回默认信息
+      const fallback = new FileInfoResult()
+      fallback.name = filePath.split('/').pop() || filePath
+      fallback.type = 'application/octet-stream'
+      fallback.size = 0
+      return fallback
     } catch (e) {
       // 从文件路径推断
       const name = filePath.split('/').pop() || filePath
@@ -1046,9 +1051,10 @@ export class APIService {
   }
 
   async gitCommit(workDir: string, message: string, files?: string[]): Promise<GitCommitResponse> {
-    const req: Record<string, Object> = { message }
+    const req = new GitCommitRequest()
+    req.message = message
     if (files && files.length > 0) {
-      req['paths'] = files
+      req.files = files
     }
     // 使用当前活跃会话的 session-scoped Git API
     const sessionId = await this.findSessionIdForWorkDir(workDir)
@@ -1092,7 +1098,8 @@ export class APIService {
   }
 
   async gitAdd(workDir: string, files: string[]): Promise<OkResponse> {
-    const req: Record<string, Object> = { paths: files }
+    const req = new GitAddRequest()
+    req.files = files
     const sessionId = await this.findSessionIdForWorkDir(workDir)
     if (!sessionId) return { ok: false }
     const res = await this.request<Record<string, Object>>(
@@ -1660,12 +1667,27 @@ export class APIService {
       // 用户消息
       if (msg.type === 'user') {
         const text = this.extractText(msg.content)
-        if (text.trim()) {
+        // 提取用户消息中的图片 content blocks
+        const userImages: MessageImage[] = []
+        if (Array.isArray(msg.content)) {
+          const blocks = msg.content as ContentBlock[]
+          for (let bi = 0; bi < blocks.length; bi++) {
+            const block = blocks[bi]
+            if (block.type === 'image' && block.source) {
+              const source = block.source
+              if (source['data'] && source['media_type']) {
+                userImages.push({ data: String(source['data']), mediaType: String(source['media_type']) })
+              }
+            }
+          }
+        }
+        if (text.trim() || userImages.length > 0) {
           const userMsg: Message = {
             id: msgId,
             type: 'user',
             content: text.trim(),
-            timestamp: timestamp
+            timestamp: timestamp,
+            images: userImages.length > 0 ? userImages : undefined
           }
           result.push(userMsg)
         }
@@ -1704,7 +1726,7 @@ export class APIService {
                 }
               }
             }
-            // 再遍历 text 和 tool_use 块
+            // 再遍历 text、image 和 tool_use 块
             for (let blockIdx = 0; blockIdx < blocks.length; blockIdx++) {
               const block = blocks[blockIdx]
 
@@ -1718,6 +1740,19 @@ export class APIService {
                     timestamp: timestamp
                   }
                   result.push(textMsg)
+                }
+              } else if (block.type === 'image' && block.source) {
+                // assistant 消息中的图片 content block
+                const source = block.source
+                if (source['data'] && source['media_type']) {
+                  const imgMsg: Message = {
+                    id: msgId + '-image-' + blockIdx,
+                    type: 'assistant',
+                    content: '',
+                    timestamp: timestamp,
+                    images: [{ data: String(source['data']), mediaType: String(source['media_type']) }]
+                  }
+                  result.push(imgMsg)
                 }
               } else if (block.type === 'tool_use') {
                 const toolUseId = block.id || block.tool_use_id || block.toolUseId || ''

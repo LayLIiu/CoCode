@@ -2259,11 +2259,11 @@ export class SessionStore {
       return
     }
 
-    // 等待服务器消息同步完成，确保页面显示最新消息
+    // 服务器同步改为后台执行：页面先展示本地缓存，同步完成后自动刷新 UI
     if (!this.isOfficialCodexSession(sessionId) && !this.isOpenCodeSession(sessionId)) {
       if (!this.syncingSessions.has(sessionId)) {
-        console.info(`[SessionStore] syncMessagesFromServer calling for ${sessionId}`)
-        await this.syncMessagesFromServer(sessionId)
+        console.info(`[SessionStore] syncMessagesFromServer calling (background) for ${sessionId}`)
+        void this.syncMessagesFromServer(sessionId)
       }
     }
   }

@@ -1,5 +1,6 @@
 /**
  * 会话列表页面 - 根据 Tab 类型过滤显示会话
+ * 参考项目分组+简洁对话列表风格
  */
 
 import { HdsNavigation, ScrollEffectType, HdsNavigationBadgeIconOptions, HdsNavigationTitleMode } from '@hms.hds.hdsBaseComponent'
@@ -11,7 +12,6 @@ import { Session, SessionStatus } from '../models/Models'
 import { sessionStore } from '../stores/SessionStore'
 import { storageService } from '../services/StorageService'
 import { SearchBar } from '../components/SearchBar'
-import { PixelMascot, MascotStatus, getMascotColorForSession, getMascotTypeForProvider } from '../components/PixelMascot'
 import { ConversationListSkeleton } from '../components/SkeletonLoading'
 import { toastManager } from '../services/ToastManager'
 import router from '@ohos.router'
@@ -26,140 +26,87 @@ class SessionGroup {
 
 class ProjectSessionGroup {
   projectName: string = ''
+  projectPath: string = ''
   sessions: Session[] = []
   latestModifiedAt: number = 0
   latestSessionTitle: string = ''
 }
 
-// 会话项组件
+// 会话项组件 - 简洁风格：标题 + 时间 + 状态指示器
 @Component
 struct SessionItemView {
   @Prop session: Session
-  @Prop compactMode: boolean = false
-  @Prop @Watch('onRefresh') refreshTrigger: number = 0
+  @Prop hasUnreadCompletion: boolean = false
+  onOpen?: (session: Session) => void
   @State currentStatus: SessionStatus = 'idle'
+  private statusListener: ((sessionId: string, status: SessionStatus) => void) | null = null
 
   aboutToAppear(): void {
     this.refreshStatus()
+    this.statusListener = (sessionId: string, status: SessionStatus) => {
+      if (sessionId === this.session.id) {
+        this.currentStatus = status
+      }
+    }
+    sessionStore.addStatusChangedListener(this.statusListener)
   }
 
-  onRefresh(): void {
-    this.refreshStatus()
+  aboutToDisappear(): void {
+    if (this.statusListener) {
+      sessionStore.removeStatusChangedListener(this.statusListener)
+      this.statusListener = null
+    }
   }
 
   private refreshStatus(): void {
     this.currentStatus = sessionStore.getSessionStatus(this.session.id)
   }
 
-  private getSessionStatusText(): string {
-    if (this.currentStatus !== 'idle' && this.currentStatus !== 'completed') {
-      return this.getStatusText(this.currentStatus)
-    }
-    if (this.currentStatus === 'completed') {
-      return '已完成'
-    }
-    return '空闲'
-  }
-
-  private getStatusText(status: SessionStatus): string {
-    switch (status) {
-      case 'thinking': return '思考中'
-      case 'streaming': return '工作中'
-      case 'tool_executing': return '执行中'
-      case 'permission_pending': return '等待权限'
-      case 'question_pending': return '等待回答'
-      default: return ''
-    }
-  }
-
-  private getStatusColor(): string {
-    switch (this.currentStatus) {
-      case 'thinking':
-      case 'streaming':
-      case 'tool_executing':
-        return Theme.AccentBlue
-      case 'permission_pending':
-      case 'question_pending':
-        return Theme.AccentOrange
-      case 'completed':
-        return Theme.AccentGreen
-      default:
-        return Theme.TextTertiary
-    }
-  }
-
-  private getStatusBackground(): string {
-    switch (this.currentStatus) {
-      case 'thinking':
-      case 'streaming':
-      case 'tool_executing':
-        return 'rgba(10, 132, 255, 0.14)'
-      case 'permission_pending':
-      case 'question_pending':
-        return 'rgba(255, 159, 10, 0.16)'
-      case 'completed':
-        return 'rgba(48, 209, 88, 0.13)'
-      default:
-        return 'rgba(255, 255, 255, 0.06)'
-    }
-  }
-
-  private getStatusBorderColor(): string {
-    switch (this.currentStatus) {
-      case 'thinking':
-      case 'streaming':
-      case 'tool_executing':
-        return 'rgba(10, 132, 255, 0.32)'
-      case 'permission_pending':
-      case 'question_pending':
-        return 'rgba(255, 159, 10, 0.34)'
-      case 'completed':
-        return 'rgba(48, 209, 88, 0.30)'
-      default:
-        return 'rgba(255, 255, 255, 0.07)'
-    }
-  }
-
-  private getMascotFrameBackground(): string {
-    switch (this.currentStatus) {
-      case 'thinking':
-      case 'streaming':
-      case 'tool_executing':
-        return 'rgba(10, 132, 255, 0.12)'
-      case 'permission_pending':
-      case 'question_pending':
-        return 'rgba(255, 159, 10, 0.14)'
-      case 'completed':
-        return 'rgba(48, 209, 88, 0.11)'
-      default:
-        return 'rgba(255, 255, 255, 0.045)'
-    }
-  }
-
   private getRelativeTime(): string {
+    // 优先使用 modifiedAt，回退到 createdAt
     const modified = new Date(this.session.modifiedAt)
-    const modifiedTime = modified.getTime()
-    if (modifiedTime !== modifiedTime) return ''
-    const diff = Date.now() - modifiedTime
-    if (diff < 60 * 1000) return '刚刚'
-    if (diff < 60 * 60 * 1000) return `${Math.floor(diff / 60000)}分钟前`
-    if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / 3600000)}小时前`
-    if (diff < 7 * 24 * 60 * 60 * 1000) return `${Math.floor(diff / 86400000)}天前`
-    return `${modified.getMonth() + 1}/${modified.getDate()}`
+    let modifiedTime = modified.getTime()
+    if (Number.isNaN(modifiedTime) || modifiedTime <= 0) {
+      const created = new Date(this.session.createdAt)
+      modifiedTime = created.getTime()
+    }
+    if (Number.isNaN(modifiedTime) || modifiedTime <= 0) return ''
+    const diff = Math.max(0, Date.now() - modifiedTime)
+    const minute = 60 * 1000
+    const hour = 60 * minute
+    const day = 24 * hour
+    const week = 7 * day
+    const month = 30 * day
+    const year = 365 * day
+    if (diff >= year) return `${Math.floor(diff / year)}年前`
+    if (diff >= month) return `${Math.floor(diff / month)}个月前`
+    if (diff >= week) return `${Math.floor(diff / week)}周前`
+    if (diff >= day) return `${Math.floor(diff / day)}天前`
+    if (diff >= hour) return `${Math.floor(diff / hour)}小时前`
+    if (diff >= minute) return `${Math.floor(diff / minute)}分钟前`
+    return '刚刚'
   }
 
-  private getMascotStatus(): MascotStatus {
-    if (this.currentStatus === 'thinking' || this.currentStatus === 'streaming' || this.currentStatus === 'tool_executing') {
-      return MascotStatus.PROCESSING
-    } else if (this.currentStatus === 'permission_pending' || this.currentStatus === 'question_pending') {
-      return MascotStatus.WAITING_APPROVAL
-    } else if (this.currentStatus === 'completed') {
-      return MascotStatus.COMPLETED
+  private isWorking(): boolean {
+    return this.currentStatus === 'thinking' ||
+      this.currentStatus === 'streaming' ||
+      this.currentStatus === 'tool_executing' ||
+      this.currentStatus === 'permission_pending' ||
+      this.currentStatus === 'question_pending'
+  }
+
+  private isHighlighted(): boolean {
+    if (sessionStore.currentSessionId === this.session.id) {
+      return true
     }
-    return MascotStatus.IDLE
+    return this.isWorking()
   }
 
   private openSession(): void {
+    if (this.onOpen) {
+      this.onOpen(this.session)
+      return
+    }
     sessionStore.setCurrentSession(this.session.id)
     sessionStore.subscribeToSession(this.session.id)
 
@@ -172,193 +119,61 @@ struct SessionItemView {
     })
   }
 
-  private isCompactHighlighted(): boolean {
-    if (sessionStore.currentSessionId === this.session.id) {
-      return true
-    }
-    return this.currentStatus === 'thinking' ||
-      this.currentStatus === 'streaming' ||
-      this.currentStatus === 'tool_executing' ||
-      this.currentStatus === 'permission_pending' ||
-      this.currentStatus === 'question_pending'
-  }
-
-  private isCodexSession(): boolean {
-    if (this.session.officialCodexThreadId) return true
-    return (this.session.aiTool || '').toLowerCase().indexOf('codex') >= 0
-  }
-
-  private getLargeMascotSize(): number {
-    return 38
-  }
-
-  private getLargeCardTopPadding(): number {
-    return 14
-  }
-
-  private getLargeCardBottomPadding(): number {
-    return 14
-  }
-
-  private getLargeCardBottomMargin(): number {
-    return Theme.SpacingMD
-  }
-
   build() {
-    if (this.compactMode) {
-      Row({ space: 10 }) {
-        Column() {
-          PixelMascot({
-            mascotSize: 30,
-            status: this.getMascotStatus(),
-            bodyColor: getMascotColorForSession(this.session.id),
-            mascotType: getMascotTypeForProvider(this.session.aiTool || '')
-          })
-        }
-        .width(36)
-        .height(36)
-        .justifyContent(FlexAlign.Center)
-        .alignItems(HorizontalAlign.Center)
-        .backgroundColor(this.getMascotFrameBackground())
-        .border({ width: 0.5, color: this.getStatusBorderColor() })
-        .borderRadius(12)
+    Row() {
+      Text(this.session.title)
+        .fontSize(Theme.FontBody)
+        .fontColor(Theme.TextPrimary)
+        .fontWeight(this.isHighlighted() ? FontWeight.Medium : FontWeight.Regular)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
 
-        Text(this.session.title)
-          .fontSize(Theme.FontBody)
-          .fontColor(Theme.TextPrimary)
-          .fontWeight(this.isCompactHighlighted() ? FontWeight.Medium : FontWeight.Regular)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
-
-        Row({ space: 6 }) {
-          if (this.isCompactHighlighted()) {
-            SymbolGlyph($r('sys.symbol.chevron_right'))
-              .fontSize(11)
-              .fontColor([Theme.TextTertiary])
-          }
-
-          Text(this.getRelativeTime())
-            .fontSize(Theme.FontCaption)
-            .fontColor(Theme.TextTertiary)
+      // 工作状态指示器
+      Row() {
+        if (this.isWorking()) {
+          LoadingProgress()
+            .width(16)
+            .height(16)
+            .color(Theme.AccentBlue)
+        } else if (this.hasUnreadCompletion) {
+          Circle()
+            .width(8)
+            .height(8)
+            .fill(Theme.AccentBlue)
         }
       }
-      .width('100%')
-      .height(54)
-      .padding({ left: 16, right: 16 })
-      .backgroundColor(this.isCompactHighlighted() ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.02)')
-      .borderRadius(16)
-      .onClick(() => {
-        this.openSession()
-      })
-    } else {
-      Column() {
-        Row() {
-          if (!this.isCodexSession()) {
-            Row()
-              .width(3)
-              .height(46)
-              .borderRadius(2)
-              .backgroundColor(this.getStatusColor())
-              .opacity(this.currentStatus === 'idle' ? 0.28 : 1)
-              .margin({ right: Theme.SpacingMD })
-          }
+      .width(24)
+      .height(24)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(VerticalAlign.Center)
+      .margin({ left: 10 })
 
-          Column() {
-            PixelMascot({
-              mascotSize: this.getLargeMascotSize(),
-              status: this.getMascotStatus(),
-              bodyColor: getMascotColorForSession(this.session.id),
-              mascotType: getMascotTypeForProvider(this.session.aiTool || '')
-            })
-          }
-          .width(42)
-          .height(42)
-          .justifyContent(FlexAlign.Center)
-          .alignItems(HorizontalAlign.Center)
-          .backgroundColor(Color.Transparent)
-          .border({
-            width: 0,
-            color: Color.Transparent
-          })
-          .borderRadius(0)
-
-          Column({ space: 6 }) {
-            Text(this.session.title)
-              .fontSize(Theme.FontBody)
-              .fontColor(Theme.TextPrimary)
-              .fontWeight(FontWeight.Medium)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-            Row({ space: 6 }) {
-              SymbolGlyph($r('sys.symbol.folder'))
-                .fontSize(12)
-                .fontColor([this.session.workDirExists ? Theme.TextTertiary : Theme.AccentOrange])
-
-              Text(this.session.projectPath || this.session.workDir || '未设置工作目录')
-                .fontSize(Theme.FontTiny)
-                .fontColor(this.session.workDirExists ? Theme.TextSecondary : Theme.AccentOrange)
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .layoutWeight(1)
-            }
-            .width('100%')
-          }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start)
-          .margin({ left: Theme.SpacingMD })
-
-          Column({ space: 8 }) {
-            Text(this.getSessionStatusText())
-              .fontSize(11)
-              .fontColor(this.getStatusColor())
-              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-              .backgroundColor(this.getStatusBackground())
-              .borderRadius(8)
-
-            Row({ space: 6 }) {
-              Text(`${this.session.messageCount}`)
-                .fontSize(Theme.FontTiny)
-                .fontColor(Theme.TextTertiary)
-
-              Text(this.getRelativeTime())
-                .fontSize(Theme.FontTiny)
-                .fontColor(Theme.TextTertiary)
-            }
-          }
-          .alignItems(HorizontalAlign.End)
-        }
-        .width('100%')
-        .padding({
-          left: Theme.SpacingMD,
-          right: Theme.SpacingMD,
-          top: this.getLargeCardTopPadding(),
-          bottom: this.getLargeCardBottomPadding()
-        })
-      }
-      .width('100%')
-      .backgroundColor('rgba(14, 14, 16, 0.82)')
-      .border({ width: 0.5, color: this.getStatusBorderColor() })
-      .borderRadius(Theme.RadiusMedium)
-      .margin({ bottom: this.getLargeCardBottomMargin() })
-      .onClick(() => {
-        this.openSession()
-      })
+      Text(this.getRelativeTime())
+        .fontSize(Theme.FontCaption)
+        .fontColor(Theme.TextTertiary)
+        .margin({ left: 6 })
+        .flexShrink(0)
     }
+    .width('100%')
+    .height(44)
+    .padding({ left: Theme.SpacingMD, right: Theme.SpacingMD })
+    .onClick(() => {
+      this.openSession()
+    })
   }
 }
 
 @Component
 export struct ConversationListPage {
-  private static readonly CLAUDE_PROJECT_EXPANDED_KEY: string = 'claude_project_expanded_groups'
+  private static readonly PROJECT_EXPANDED_KEY: string = 'project_expanded_groups'
 
   @Prop pageTitle: string = Constants.TITLE_CLAUDE
   @State searchText: string = ''
   @State sessions: Session[] = []
-  @State expandedClaudeProjects: Set<string> = new Set<string>()
-  @State claudeExpandedStateReady: boolean = false
-  @State claudeExpandedStateHasSavedValue: boolean = false
+  @State expandedProjects: Set<string> = new Set<string>()
+  @State expandedStateReady: boolean = false
+  @State expandedStateHasSavedValue: boolean = false
   @State isLoading: boolean = false
   @State refreshTrigger: number = 0
   @State showNewSessionDialog: boolean = false
@@ -386,13 +201,12 @@ export struct ConversationListPage {
       this.sessions = []
     }
 
-    // 键盘避让：使用 OFFSET 模式，让 Tab Bar 保持固定
+    // 键盘避让：使用 OFFSET 模式
     try {
       this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET)
     } catch (e) {}
 
     this.sessionsChangedListener = () => {
-      // 创建新数组引用，确保 @State 响应式更新
       this.sessions = [...(sessionStore.sessions || [])]
       this.isLoading = sessionStore.isLoading
       this.refreshTrigger = Date.now()
@@ -401,7 +215,6 @@ export struct ConversationListPage {
 
     this.statusChangedListener = (sessionId: string, status: SessionStatus) => {
       console.info(`[ConversationListPage] Status changed: ${sessionId} -> ${status}`)
-      // 状态变化时也需要刷新 sessions 数组，确保排序重新计算
       this.sessions = [...(sessionStore.sessions || [])]
       this.refreshTrigger = Date.now()
     }
@@ -410,19 +223,17 @@ export struct ConversationListPage {
     if (sessionStore.sessions && sessionStore.sessions.length > 0) {
       this.refreshSessionsFromStore()
       this.isLoading = false
-      // 每次出现时同步 stale 状态（WS 断开的工作状态重置为 idle）
       sessionStore.syncSessionStatuses()
     } else {
       this.loadSessions()
     }
 
     this.loadRecentDirs()
-    void this.loadClaudeProjectExpandState()
+    void this.loadProjectExpandState()
   }
 
   onPageShow(): void {
     this.refreshSessionsFromStore()
-    // 每次页面显示时重新设置键盘避让模式
     try {
       this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET)
     } catch (e) {}
@@ -431,7 +242,7 @@ export struct ConversationListPage {
   private refreshSessionsFromStore(): void {
     this.sessions = [...(sessionStore.sessions || [])]
     this.isLoading = sessionStore.isLoading
-    this.ensureExpandedClaudeProjects()
+    this.ensureExpandedProjects()
     this.refreshTrigger = Date.now()
   }
 
@@ -457,32 +268,67 @@ export struct ConversationListPage {
     if (sessionId) {
       this.showNewSessionDialog = false
       this.sessionWorkDir = ''
-      sessionStore.setCurrentSession(sessionId)
-      sessionStore.subscribeToSession(sessionId)
-      router.pushUrl({
-        url: 'pages/ChatDetailPage',
-        params: { sessionId: sessionId, title: '新对话' }
-      })
+      this.openSessionById(sessionId, '新对话')
     }
+  }
+
+  private async createSessionForProject(projectPath: string): Promise<void> {
+    const path = projectPath.trim()
+    if (path.length <= 0 || path === '未知项目') {
+      this.showNewSessionDialog = true
+      return
+    }
+
+    this.sessionLoading = true
+    const sessionId = await sessionStore.createSessionWithProvider(path, this.getProviderId())
+    this.sessionLoading = false
+    if (!sessionId) {
+      toastManager.error('新建对话失败')
+      return
+    }
+
+    this.openSessionById(sessionId, '新对话')
   }
 
   private getProviderId(): string {
     return 'claude'
   }
 
+  private openSession(session: Session): void {
+    sessionStore.setCurrentSession(session.id)
+    sessionStore.subscribeToSession(session.id)
+    router.pushUrl({
+      url: 'pages/ChatDetailPage',
+      params: {
+        sessionId: session.id,
+        title: session.title
+      }
+    })
+  }
+
+  private openSessionById(sessionId: string, title: string): void {
+    sessionStore.setCurrentSession(sessionId)
+    sessionStore.subscribeToSession(sessionId)
+    router.pushUrl({
+      url: 'pages/ChatDetailPage',
+      params: {
+        sessionId: sessionId,
+        title: title
+      }
+    })
+  }
+
   private async loadSessions(): Promise<void> {
     this.isLoading = true
-
     try {
       await sessionStore.fetchSessions()
     } catch (e) {
       console.error(`[ConversationListPage] Load error: ${e}`)
     }
-
     this.isLoading = false
   }
 
-  // 导入会话 - 跳转到导入页面
+  // 导入会话
   private importSessions(): void {
     router.pushUrl({
       url: 'pages/ImportSessionPage'
@@ -498,7 +344,8 @@ export struct ConversationListPage {
     }
   }
 
-  // 根据 Tab 类型判断会话是否属于该 Tab
+  // MARK: - 会话过滤
+
   private isSessionForTab(session: Session): boolean {
     const providerId = (session.aiTool || '').toLowerCase()
     return providerId === '' ||
@@ -515,7 +362,8 @@ export struct ConversationListPage {
     let filtered: Session[] = []
     for (let i = 0; i < this.sessions.length; i++) {
       if (sessionStore.isSessionArchived(this.sessions[i].id) ||
-        (!!this.sessions[i].officialCodexThreadId && sessionStore.isOfficialCodexThreadArchived(this.sessions[i].officialCodexThreadId || ''))) {
+        (!!this.sessions[i].officialCodexThreadId &&
+          sessionStore.isOfficialCodexThreadArchived(this.sessions[i].officialCodexThreadId || ''))) {
         continue
       }
       if (this.isSessionForTab(this.sessions[i])) {
@@ -531,12 +379,10 @@ export struct ConversationListPage {
     const result: Session[] = []
     for (let i = 0; i < filtered.length; i++) {
       const s = filtered[i]
-      // 匹配标题、项目路径、工作目录
       if (s.title.toLowerCase().includes(lowerSearch) ||
         s.projectPath.toLowerCase().includes(lowerSearch) ||
         (s.workDir && s.workDir.toLowerCase().includes(lowerSearch))) {
         result.push(s)
-        continue
       }
     }
     return result
@@ -546,33 +392,15 @@ export struct ConversationListPage {
     return this.getFilteredSessions().length > 0
   }
 
-  private getDateGroup(timestamp: string): DateGroup {
-    const date = new Date(timestamp)
-    const now = new Date()
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000)
-    const sevenDaysAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
-
-    const targetDate = new Date(date.getFullYear(), date.getMonth(), date.getDate())
-
-    if (targetDate.getTime() >= today.getTime()) {
-      return DateGroup.TODAY
-    } else if (targetDate.getTime() >= yesterday.getTime()) {
-      return DateGroup.YESTERDAY
-    } else if (targetDate.getTime() >= sevenDaysAgo.getTime()) {
-      return DateGroup.LAST_SEVEN_DAYS
-    } else {
-      return DateGroup.EARLIER
-    }
-  }
+  // MARK: - 排序
 
   private getSessionSortTimestamp(session: Session): number {
     const modifiedAt = new Date(session.modifiedAt).getTime()
-    if (modifiedAt === modifiedAt && modifiedAt > 0) {
+    if (!Number.isNaN(modifiedAt) && modifiedAt > 0) {
       return modifiedAt
     }
     const createdAt = new Date(session.createdAt).getTime()
-    if (createdAt === createdAt && createdAt > 0) {
+    if (!Number.isNaN(createdAt) && createdAt > 0) {
       return createdAt
     }
     return 0
@@ -600,84 +428,13 @@ export struct ConversationListPage {
     return this.getSessionSortTimestamp(b) - this.getSessionSortTimestamp(a)
   }
 
-  private getRelativeSessionTimeFromMs(timestampMs: number): string {
-    if (timestampMs <= 0) return ''
-    const diff = Date.now() - timestampMs
-    if (diff < 60 * 1000) return '刚刚更新'
-    if (diff < 60 * 60 * 1000) return `${Math.floor(diff / 60000)}分钟前`
-    if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / 3600000)}小时前`
-    if (diff < 7 * 24 * 60 * 60 * 1000) return `${Math.floor(diff / 86400000)}天前`
-    const modified = new Date(timestampMs)
-    return `${modified.getMonth() + 1}/${modified.getDate()}`
-  }
-
-  private getGroupedSessionArray(): SessionGroup[] {
-    const result: SessionGroup[] = []
-
-    const todayGroup = new SessionGroup()
-    todayGroup.groupName = DateGroup.TODAY
-    todayGroup.sessions = []
-
-    const yesterdayGroup = new SessionGroup()
-    yesterdayGroup.groupName = DateGroup.YESTERDAY
-    yesterdayGroup.sessions = []
-
-    const weekGroup = new SessionGroup()
-    weekGroup.groupName = DateGroup.LAST_SEVEN_DAYS
-    weekGroup.sessions = []
-
-    const earlierGroup = new SessionGroup()
-    earlierGroup.groupName = DateGroup.EARLIER
-    earlierGroup.sessions = []
-
-    const filtered = this.getFilteredSessions()
-    if (!filtered || filtered.length === 0) {
-      return result
-    }
-
-    const sorted: Session[] = []
-    for (let i = 0; i < filtered.length; i++) {
-      sorted.push(filtered[i])
-    }
-
-    sorted.sort((a, b) => this.compareSessionsForList(a, b))
-
-    for (let i = 0; i < sorted.length; i++) {
-      const session = sorted[i]
-      const group = this.getDateGroup(session.modifiedAt)
-      if (group === DateGroup.TODAY) {
-        todayGroup.sessions.push(session)
-      } else if (group === DateGroup.YESTERDAY) {
-        yesterdayGroup.sessions.push(session)
-      } else if (group === DateGroup.LAST_SEVEN_DAYS) {
-        weekGroup.sessions.push(session)
-      } else {
-        earlierGroup.sessions.push(session)
-      }
-    }
-
-    if (todayGroup.sessions.length > 0) {
-      result.push(todayGroup)
-    }
-    if (yesterdayGroup.sessions.length > 0) {
-      result.push(yesterdayGroup)
-    }
-    if (weekGroup.sessions.length > 0) {
-      result.push(weekGroup)
-    }
-    if (earlierGroup.sessions.length > 0) {
-      result.push(earlierGroup)
-    }
-
-    return result
-  }
+  // MARK: - 项目分组
 
   private getSessionProjectName(session: Session): string {
     const rawProject = (session.workDir && session.workDir.length > 0) ? session.workDir : session.projectPath
     if (!rawProject || rawProject.length === 0 || rawProject === 'Codex Desktop') {
       return '未知项目'
     }
-
     const parts = rawProject.split('/').filter((part: string) => part.length > 0)
     if (parts.length === 0) {
       return rawProject
@@ -685,25 +442,27 @@ export struct ConversationListPage {
     return parts[parts.length - 1]
   }
 
+  private getSessionProjectPath(session: Session): string {
+    return (session.workDir && session.workDir.length > 0) ? session.workDir : (session.projectPath || '')
+  }
+
   private getProjectGroupPriority(group: ProjectSessionGroup): number {
-    // 检查分组内是否有活跃线程
     for (let i = 0; i < group.sessions.length; i++) {
       const status = sessionStore.getSessionStatus(group.sessions[i].id)
       if (status === 'thinking' || status === 'streaming' || status === 'tool_executing') {
-        return 4  // 最高优先级：有正在运行的线程
+        return 4
       }
       if (status === 'permission_pending' || status === 'question_pending') {
-        return 3  // 次高优先级：有等待权限的线程
+        return 3
       }
       if (status === 'completed') {
-        return 2  // 刚完成的线程
+        return 2
       }
     }
-    return 1  // 默认优先级
+    return 1
   }
 
-  // Claude 项目分组：按 workDir/projectPath 分组
-  private getClaudeProjectGroups(): ProjectSessionGroup[] {
+  private getProjectGroups(): ProjectSessionGroup[] {
     const groups = new Map<string, ProjectSessionGroup>()
     const sessions = this.getFilteredSessions()
 
@@ -714,7 +473,10 @@ export struct ConversationListPage {
       if (!group) {
         group = new ProjectSessionGroup()
         group.projectName = projectName
+        group.projectPath = this.getSessionProjectPath(session)
         groups.set(projectName, group)
+      } else if (group.projectPath.length <= 0) {
+        group.projectPath = this.getSessionProjectPath(session)
       }
       group.sessions.push(session)
 
@@ -749,14 +511,16 @@ export struct ConversationListPage {
     return result
   }
 
-  private ensureExpandedClaudeProjects(): void {
-    if (!this.claudeExpandedStateReady) {
+  // MARK: - 项目展开/折叠状态
+
+  private ensureExpandedProjects(): void {
+    if (!this.expandedStateReady) {
       return
     }
-    if (this.expandedClaudeProjects.size > 0 || this.claudeExpandedStateHasSavedValue) {
+    if (this.expandedProjects.size > 0 || this.expandedStateHasSavedValue) {
       return
     }
-    const groups = this.getClaudeProjectGroups()
+    const groups = this.getProjectGroups()
     if (groups.length <= 0) {
       return
     }
@@ -764,38 +528,38 @@ export struct ConversationListPage {
     for (let i = 0; i < groups.length; i++) {
       nextExpanded.add(groups[i].projectName)
     }
-    this.expandedClaudeProjects = nextExpanded
-    void this.saveClaudeProjectExpandState()
+    this.expandedProjects = nextExpanded
+    void this.saveProjectExpandState()
   }
 
-  private isClaudeProjectExpanded(projectName: string): boolean {
-    return this.expandedClaudeProjects.has(projectName)
+  private isProjectExpanded(projectName: string): boolean {
+    return this.expandedProjects.has(projectName)
   }
 
-  private toggleClaudeProjectExpanded(projectName: string): void {
+  private toggleProjectExpanded(projectName: string): void {
     animateTo({ duration: 200, curve: Curve.Friction }, () => {
-      const nextExpanded = new Set<string>(this.expandedClaudeProjects)
+      const nextExpanded = new Set<string>(this.expandedProjects)
       if (nextExpanded.has(projectName)) {
         nextExpanded.delete(projectName)
       } else {
         nextExpanded.add(projectName)
       }
-      this.expandedClaudeProjects = nextExpanded
+      this.expandedProjects = nextExpanded
     })
-    void this.saveClaudeProjectExpandState()
+    void this.saveProjectExpandState()
   }
 
-  private async loadClaudeProjectExpandState(): Promise<void> {
+  private async loadProjectExpandState(): Promise<void> {
     try {
-      const raw = await storageService.loadString(ConversationListPage.CLAUDE_PROJECT_EXPANDED_KEY, '')
-      const groups = this.getClaudeProjectGroups()
-      this.claudeExpandedStateHasSavedValue = raw.trim().length > 0
+      const raw = await storageService.loadString(ConversationListPage.PROJECT_EXPANDED_KEY, '')
+      const groups = this.getProjectGroups()
+      this.expandedStateHasSavedValue = raw.trim().length > 0
       if (raw.trim().length <= 0) {
         const expanded = new Set<string>()
         for (let i = 0; i < groups.length; i++) {
           expanded.add(groups[i].projectName)
         }
-        this.expandedClaudeProjects = expanded
+        this.expandedProjects = expanded
       } else {
         const parsed = JSON.parse(raw) as string[]
         const expanded = new Set<string>()
@@ -811,32 +575,34 @@ export struct ConversationListPage {
             expanded.add(projectName)
           }
         }
-        this.expandedClaudeProjects = expanded
+        this.expandedProjects = expanded
       }
     } catch (e) {
-      console.error(`[ConversationListPage] loadClaudeProjectExpandState error: ${e}`)
-      const groups = this.getClaudeProjectGroups()
+      console.error(`[ConversationListPage] loadProjectExpandState error: ${e}`)
+      const groups = this.getProjectGroups()
       const expanded = new Set<string>()
       for (let i = 0; i < groups.length; i++) {
         expanded.add(groups[i].projectName)
       }
-      this.expandedClaudeProjects = expanded
+      this.expandedProjects = expanded
     } finally {
-      this.claudeExpandedStateReady = true
-      this.ensureExpandedClaudeProjects()
+      this.expandedStateReady = true
+      this.ensureExpandedProjects()
       this.refreshTrigger = Date.now()
     }
   }
 
-  private async saveClaudeProjectExpandState(): Promise<void> {
+  private async saveProjectExpandState(): Promise<void> {
     try {
-      const values = Array.from(this.expandedClaudeProjects.values())
-      await storageService.saveString(ConversationListPage.CLAUDE_PROJECT_EXPANDED_KEY, JSON.stringify(values))
-      this.claudeExpandedStateHasSavedValue = true
+      const values = Array.from(this.expandedProjects.values())
+      await storageService.saveString(ConversationListPage.PROJECT_EXPANDED_KEY, JSON.stringify(values))
+      this.expandedStateHasSavedValue = true
     } catch (e) {
-      console.error(`[ConversationListPage] saveClaudeProjectExpandState error: ${e}`)
+      console.error(`[ConversationListPage] saveProjectExpandState error: ${e}`)
     }
   }
+
+  // MARK: - 复制对话 ID
 
   private getCopyableConversationId(session: Session): string {
     return session.officialCodexThreadId || session.id
@@ -896,21 +662,21 @@ export struct ConversationListPage {
       .borderRadius(25)
       .backgroundColor('#FF3B30')
       .onClick(async () => {
-        // 本地隐藏，服务端保留，可通过导入恢复
         await sessionStore.deleteLocalSession(session.id)
       })
     }
     .margin({ right: 8 })
   }
 
+  // MARK: - 页面构建
+
   build() {
     Stack() {
       HdsNavigation() {
-        // 会话列表（延伸到屏幕最顶部，向上滑时内容可延伸到标题栏后面）
         List({ space: 0, scroller: this.scroller }) {
-          // 顶部占位：让列表内容默认从搜索框下方开始
+          // 顶部占位
           ListItem() {
-            Column().width('100%').height(146)
+            Column().width('100%').height(156)
           }
 
           if (this.isLoading && !this.hasFilteredSessions()) {
@@ -918,17 +684,17 @@ export struct ConversationListPage {
               this.LoadingState()
             }
           } else if (this.hasFilteredSessions()) {
-            ForEach(this.getClaudeProjectGroups(), (group: ProjectSessionGroup) => {
+            ForEach(this.getProjectGroups(), (group: ProjectSessionGroup) => {
               ListItemGroup({
-                header: this.ProjectHeader(group, this.isClaudeProjectExpanded(group.projectName))
+                header: this.ProjectHeader(group, this.isProjectExpanded(group.projectName))
               }) {
-                if (this.isClaudeProjectExpanded(group.projectName)) {
+                if (this.isProjectExpanded(group.projectName)) {
                   ForEach(group.sessions, (session: Session) => {
                     ListItem() {
                       SessionItemView({
                         session: session,
-                        compactMode: false,
-                        refreshTrigger: this.refreshTrigger
+                        hasUnreadCompletion: false,
+                        onOpen: (target: Session) => this.openSession(target)
                       })
                     }
                     .swipeAction({
@@ -966,7 +732,7 @@ export struct ConversationListPage {
           },
           systemMaterialEffect: {
             materialType: hdsMaterial.MaterialType.ADAPTIVE,
-            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE,
+            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
           },
         },
         avoidLayoutSafeArea: true,
@@ -977,7 +743,7 @@ export struct ConversationListPage {
       .backgroundColor(Color.Transparent)
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
-      // 浮动搜索框（在导航栏下方，不随列表滚动）
+      // 浮动搜索框
       SearchBar({
         searchText: $searchText,
         onSearchChange: () => {
@@ -986,65 +752,55 @@ export struct ConversationListPage {
         .width('100%')
         .padding({ left: Theme.SpacingLG, right: Theme.SpacingLG })
         .position({ x: 0, y: 96 })
-
-      // 新建对话弹窗改为 bindSheet
     }
     .bindSheet($$this.showNewSessionDialog, this.NewSessionSheet(), {
       height: 400, backgroundColor: '#0E0E10', dragBar: true, showClose: false, blurStyle: BlurStyle.NONE
     })
     .width('100%')
     .height('100%')
-    .backgroundColor('#0A0A0C')
-  }
-
-  @Builder
-  GroupHeader(groupName: DateGroup) {
-    Row() {
-      Text(groupName)
-        .fontSize(Theme.FontCaption)
-        .fontColor(Theme.TextSecondary)
-        .fontWeight(FontWeight.Medium)
-
-      Row()
-        .height(1)
-        .layoutWeight(1)
-        .backgroundColor('rgba(255, 255, 255, 0.06)')
-        .margin({ left: Theme.SpacingMD })
-    }
-    .width('100%')
-    .padding({ top: 24, bottom: 12 })
+    .backgroundColor('#000000')
   }
 
   @Builder
   ProjectHeader(group: ProjectSessionGroup, expanded: boolean) {
-    Row({ space: 8 }) {
-      SymbolGlyph(expanded ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
-        .fontSize(12)
-        .fontColor([Theme.TextTertiary])
-        .width(16)
+    Row() {
+      Row({ space: 10 }) {
+        SymbolGlyph($r('sys.symbol.folder'))
+          .fontSize(21)
+          .fontColor(['#8E8E93'])
 
-      SymbolGlyph($r('sys.symbol.folder'))
-        .fontSize(14)
-        .fontColor([Theme.TextSecondary])
+        Text(group.projectName)
+          .fontSize(18)
+          .fontColor('#8E8E93')
+          .fontWeight(FontWeight.Medium)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-      Text(group.projectName)
-        .fontSize(15)
-        .fontColor(Theme.TextSecondary)
-        .fontWeight(FontWeight.Medium)
-        .layoutWeight(1)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        SymbolGlyph(expanded ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
+          .fontSize(14)
+          .fontColor(['#8E8E93'])
+      }
+      .layoutWeight(1)
+      .height(44)
+      .onClick(() => {
+        this.toggleProjectExpanded(group.projectName)
+      })
 
-      // 显示线程数量
-      Text(`${group.sessions.length} 条`)
-        .fontSize(12)
-        .fontColor(Theme.TextTertiary)
+      Button() {
+        SymbolGlyph($r('sys.symbol.square_and_pencil'))
+          .fontSize(20)
+          .fontColor(['#8E8E93'])
+      }
+      .width(44)
+      .height(44)
+      .backgroundColor(Color.Transparent)
+      .onClick(() => {
+        void this.createSessionForProject(group.projectPath)
+      })
     }
     .width('100%')
-    .padding({ top: 24, bottom: 14, left: 4, right: 4 })
-    .onClick(() => {
-      this.toggleClaudeProjectExpanded(group.projectName)
-    })
+    .height(56)
+    .padding({ top: 12, bottom: 0, left: 4, right: 0 })
   }
 
   @Builder
@@ -1060,12 +816,12 @@ export struct ConversationListPage {
         .fontColor([Theme.PrimaryColor])
         .margin({ bottom: Theme.SpacingLG })
 
-      Text(this.getEmptyTitle())
+      Text('暂无会话')
         .fontSize(Theme.FontHeading)
         .fontColor(Theme.TextPrimary)
         .margin({ bottom: Theme.SpacingSM })
 
-      Text(this.getEmptySubtitle())
+      Text('点击右上角 + 开始新对话')
         .fontSize(Theme.FontCaption)
         .fontColor(Theme.TextSecondary)
     }
@@ -1073,14 +829,6 @@ export struct ConversationListPage {
     .height(300)
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
-  }
-
-  private getEmptyTitle(): string {
-    return '暂无会话'
-  }
-
-  private getEmptySubtitle(): string {
-    return '点击右上角 + 开始新对话'
   }
 
   @Builder
@@ -1101,7 +849,6 @@ export struct ConversationListPage {
         .fontColor(Theme.TextPrimary).fontSize(15)
         .onChange((value: string) => { this.sessionWorkDir = value })
 
-      // 最近使用目录
       if (this.sessionRecentDirs.length > 0) {
         Text('最近使用')
           .fontSize(14).fontColor(Theme.TextSecondary).width('100%').margin({ top: 12, bottom: 8 })
