@@ -6,6 +6,7 @@
 import { Theme } from '../common/Theme'
 import { Message } from '../models/Models'
 import { MarkdownRenderer } from './MarkdownRenderer'
+import { StatusIcon, WorkStatus } from './StatusIcon'
 
 // ─────────────────────────────────────────────────────────────
 // 渐变边框容器
@@ -72,7 +73,7 @@ export struct EnhancedUserBubble {
             Text(this.message.content)
               .fontSize(15)
               .fontColor(Theme.TextPrimary)
-              .lineHeight(22)
+              .lineHeight(21)
 
             // 操作按钮
             if (this.activeCopyMessageId === this.message.id) {
@@ -328,10 +329,7 @@ export struct EnhancedToolBubble {
 
           // 状态图标
           if (this.toolStatus === 'running') {
-            LoadingProgress()
-              .width(18)
-              .height(18)
-              .color(this.getStatusColor())
+            StatusIcon({ status: WorkStatus.TOOL_EXECUTING, iconSize: 18 })
           } else {
             SymbolGlyph(this.getStatusIcon())
               .fontSize(18)

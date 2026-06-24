@@ -183,6 +183,8 @@ export struct HdsLiquidGlassContainer {
         .barHeight(this.barHeight)
         .barOverlap(this.barOverlap)
         .barPosition(this.barPosition)
+        .scrollable(false)
+        .animationDuration(0)
         .barFloatingStyle({
           gradientMask: {
             maskColor: this.maskColor
@@ -220,6 +222,8 @@ export struct HdsLiquidGlassContainer {
         .barHeight(this.barHeight)
         .barOverlap(this.barOverlap)
         .barPosition(this.barPosition)
+        .scrollable(false)
+        .animationDuration(0)
         .barFloatingStyle({
           gradientMask: {
             maskColor: this.maskColor
@@ -238,6 +242,7 @@ export struct HdsLiquidGlassContainer {
       }
     }
     .size(this.getComputedContainerSize())
+    .backgroundColor(Color.Transparent)
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center)
     .clip(false)

@@ -10,16 +10,18 @@ import { Constants, TabIndex } from '../common/Constants'
 @Component
 export struct LiquidGlassTabBar {
   // Tab数据
-  private tabList: string[] = ['Claude', '设置'];
-
+  private tabList: string[] = ['Claude', 'Codex', 'Open Code', '设置'];
+  
   // 状态管理
   @State currentIndex: number = 0;
   @State tabSelectedIndexes: number[] = [0];
-
+  
   // SegmentButton配置
   @State tabOptions: SegmentButtonOptions = SegmentButtonOptions.tab({
     buttons: [
       { text: 'Claude' },
+      { text: 'Codex' },
+      { text: 'Open Code' },
       { text: '设置' }
     ] as ItemRestriction<SegmentButtonTextItem>,
     textPadding: 6

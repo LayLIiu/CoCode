@@ -16,7 +16,7 @@ interface TabItem {
  */
 @Component
 export struct TabBar {
-  @Prop currentTab: TabIndex = TabIndex.CLAUDE
+  @Prop currentTab: TabIndex = TabIndex.CODEX
   onTabChange: (tabIndex: TabIndex) => void = () => {}
   @State scaleValue: number = 1.0
   @State offsetY: number = 0
@@ -25,10 +25,22 @@ export struct TabBar {
 
   private tabItems: TabItem[] = [
     {
-      index: TabIndex.CLAUDE,
-      label: Constants.TAB_CLAUDE,
+      index: TabIndex.CODEX,
+      label: Constants.TAB_CODEX,
       icon: $r('app.media.ic_claude'),
       activeIcon: $r('app.media.ic_claude_filled')
+    },
+    {
+      index: TabIndex.CODEX,
+      label: Constants.TAB_CODEX,
+      icon: $r('app.media.ic_codex'),
+      activeIcon: $r('app.media.ic_codex_filled')
+    },
+    {
+      index: TabIndex.CODEX,
+      label: Constants.TAB_CODEX,
+      icon: $r('app.media.ic_terminal'),
+      activeIcon: $r('app.media.ic_terminal_filled')
     },
     {
       index: TabIndex.SETTINGS,

@@ -89,9 +89,9 @@ export struct RunningIndicator {
 @Component
 export struct PulseIndicator {
   @Prop color: string = Theme.AccentGreen
-  @Prop size: number = 8
-  @State scale: number = 1.0
-  @State opacity: number = 1.0
+  @Prop indicatorSize: number = 8
+  @State pulseScale: number = 1.0
+  @State pulseOpacity: number = 1.0
 
   private animationTimer: number = -1
 
@@ -111,13 +111,13 @@ export struct PulseIndicator {
     this.animationTimer = setInterval(() => {
       if (expanding) {
         animateTo({ duration: 300, curve: Curve.EaseOut }, () => {
-          this.scale = 1.3
-          this.opacity = 0.6
+          this.pulseScale = 1.3
+          this.pulseOpacity = 0.6
         })
       } else {
         animateTo({ duration: 300, curve: Curve.EaseIn }, () => {
-          this.scale = 1.0
-          this.opacity = 1.0
+          this.pulseScale = 1.0
+          this.pulseOpacity = 1.0
         })
       }
       expanding = !expanding
@@ -126,11 +126,11 @@ export struct PulseIndicator {
 
   build() {
     Circle()
-      .width(this.size)
-      .height(this.size)
+      .width(this.indicatorSize)
+      .height(this.indicatorSize)
       .fill(this.color)
-      .scale({ x: this.scale, y: this.scale })
-      .opacity(this.opacity)
+      .scale({ x: this.pulseScale, y: this.pulseScale })
+      .opacity(this.pulseOpacity)
   }
 }
 
@@ -139,10 +139,10 @@ export struct PulseIndicator {
  */
 @Component
 export struct RingActivityIndicator {
-  @Prop size: number = 16
+  @Prop indicatorSize: number = 16
   @Prop strokeWidth: number = 2
   @Prop color: string = Theme.PrimaryColor
-  @State rotation: number = 0
+  @State ringRotation: number = 0
 
   private animationTimer: number = -1
 
@@ -159,36 +159,35 @@ export struct RingActivityIndicator {
 
   private startRotation(): void {
     this.animationTimer = setInterval(() => {
-      this.rotation = (this.rotation + 15) % 360
-    }, 30)
+      this.ringRotation = (this.ringRotation + 15) % 360
+    }, 80)
   }
 
   build() {
     Stack() {
       // 背景环
       Circle()
-        .width(this.size)
-        .height(this.size)
+        .width(this.indicatorSize)
+        .height(this.indicatorSize)
         .fill('transparent')
-        .stroke('rgba(255, 255, 255, 0.1)', { width: this.strokeWidth })
+        .border({ width: this.strokeWidth, color: 'rgba(255, 255, 255, 0.1)' })
 
       // 进度弧（模拟）
       Row() {
         Circle()
-          .width(this.size * 0.5)
-          .height(this.size * 0.5)
+          .width(this.indicatorSize * 0.5)
+          .height(this.indicatorSize * 0.5)
           .fill(this.color)
       }
-      .width(this.size)
-      .height(this.size)
+      .width(this.indicatorSize)
+      .height(this.indicatorSize)
       .justifyContent(FlexAlign.Start)
       .alignItems(VerticalAlign.Top)
       .padding({ top: this.strokeWidth })
-      .rotate({ angle: this.rotation })
-      .clip(new Circle({ width: this.size, height: this.size }))
+      .rotate({ angle: this.ringRotation })
     }
-    .width(this.size)
-    .height(this.size)
+    .width(this.indicatorSize)
+    .height(this.indicatorSize)
   }
 }
 

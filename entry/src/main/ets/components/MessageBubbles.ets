@@ -8,6 +8,7 @@ import { Message, MessageImage, TaskItem } from '../models/Models'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { FileAttachmentBubble } from './FileAttachmentBubble'
 import { getToolIcon, ToolIconInfo } from '../viewmodel/ChatDetailViewModel'
+import { StatusIcon, WorkStatus } from './StatusIcon'
 
 // ─────────────────────────────────────────────────────────────
 // 用户消息气泡
@@ -25,7 +26,7 @@ export struct UserBubble {
       Text(this.message.content)
         .fontSize(15)
         .fontColor(Theme.TextPrimary)
-        .lineHeight(22)
+        .lineHeight(21)
 
       if (this.activeCopyMessageId === this.message.id) {
         Row({ space: 4 }) {
@@ -331,7 +332,9 @@ export struct ToolUseBubble {
   }
 
   private isToolExpandable(toolName?: string): boolean {
-    return toolName === 'Bash' || toolName === 'Read' || toolName === 'Edit' || toolName === 'Write'
+    return toolName === 'Bash' || toolName === 'Read' || toolName === 'Edit' || toolName === 'Write' ||
+      toolName === 'MCP' || toolName === 'NetworkAccess' || toolName === 'ComputerUse' ||
+      toolName === 'ImageGeneration' || toolName === 'LoadDeps' || toolName === 'Skill'
   }
 
   private getToolDisplayName(toolName?: string): string {
@@ -342,8 +345,18 @@ export struct ToolUseBubble {
       case 'Edit': return '编辑'
       case 'Grep': return '搜索'
       case 'Glob': return '查找'
+      case 'WebSearch': return '网页搜索'
       case 'WebFetch': return '网页'
       case 'Agent': return '代理'
+      case 'MCP': return '工具'
+      case 'NetworkAccess': return '网络'
+      case 'ComputerUse': return '操控'
+      case 'ImageGeneration': return '图片'
+      case 'Permission': return '权限'
+      case 'UserInput': return '输入'
+      case 'LoadDeps': return '依赖'
+      case 'OpenInCodex': return '打开'
+      case 'Skill': return '技能'
       default: return toolName || '工具'
     }
   }
@@ -575,10 +588,7 @@ export struct ToolUseBubble {
 
   @Builder ToolStatusIcon() {
     if (this.message.toolStatus === 'running') {
-      LoadingProgress()
-        .width(14)
-        .height(14)
-        .color(Theme.AccentBlue)
+      StatusIcon({ status: WorkStatus.TOOL_EXECUTING, iconSize: 14 })
     } else if (this.message.toolStatus === 'completed') {
       SymbolGlyph($r('sys.symbol.checkmark_circle_fill'))
         .fontSize(14)

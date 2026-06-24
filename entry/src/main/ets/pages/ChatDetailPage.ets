@@ -37,6 +37,8 @@ import vibrator from '@ohos.vibrator'
 import photoViewPicker from '@ohos.file.picker'
 import fileIo from '@ohos.file.fs'
 import util from '@ohos.util'
+import { ToolNameNormalizer } from '../utils/ToolNameNormalizer'
+import { hapticFeedback } from '../services/HapticFeedback'
 
 // 斜杠命令定义
 class SlashCommand {
@@ -62,6 +64,19 @@ class DiffStats {
   added: number = 0
   removed: number = 0
 }
+
+class TurnFileChangeEntry {
+  path: string = ''
+  additions: number = 0
+  deletions: number = 0
+}
+
+class TurnFileChangeSummary {
+  entries: TurnFileChangeEntry[] = []
+  additions: number = 0
+  deletions: number = 0
+}
+
 
 function getToolIcon(toolName: string): ToolIconInfo {
   switch (normalizeToolNameForDisplay(toolName)) {
@@ -91,21 +106,9 @@ function getToolIcon(toolName: string): ToolIconInfo {
 }
 
 function normalizeToolNameForDisplay(toolName: string): string {
-  const raw = (toolName || '').trim()
-  const lower = raw.replace(/[-_ ]/g, '').toLowerCase()
-  if (lower === 'execcommand' || lower === 'shellcommand' || lower === 'runcommand' ||
-    lower === 'terminal' || lower === 'shell' || lower === 'exec' || lower === 'command' ||
-    lower === 'localcommand') {
-    return 'Bash'
-  }
-  if (lower === 'readfile' || lower === 'openfile' || lower === 'viewfile' || lower === 'catfile') return 'Read'
-  if (lower === 'search' || lower === 'grepsearch' || lower === 'codesearch' || lower === 'searchcontent' ||
-    lower === 'ripgrep') return 'Grep'
-  if (lower === 'globsearch' || lower === 'findfiles' || lower === 'listfiles' || lower === 'lsfiles') return 'Glob'
-  if (lower === 'editfile' || lower === 'applypatch' || lower === 'patchfile' || lower === 'fileedit') return 'Edit'
-  if (lower === 'writefile' || lower === 'createfile' || lower === 'savefile') return 'Write'
-  return raw
+  return ToolNameNormalizer.normalize(toolName)
 }
+  
 
 function classifyBashCommandForDisplay(command: string): string {
   const trimmed = command.trim()
@@ -258,6 +261,14 @@ struct ChatDetailPage {
   @State contextUsage: number = 0
   @State showContextDetail: boolean = false
   @State contextModel: string = ''
+
+  // Turn 文件变更汇总折叠状态
+  @State collapsedTurnFileChangeSummaryIds: Set<string> = new Set()
+  // 文件变更预览展开状态
+  @State expandedFileChangePreviewIds: Set<string> = new Set()
+  // 流式光标动画
+  @State streamingCursorVisible: boolean = true
+  private streamingCursorTimer: number = -1
   @State contextTotal: number = 0
   @State contextMax: number = 0
   private contextPollTimer: number = -1
@@ -315,6 +326,34 @@ struct ChatDetailPage {
 
   private getInputAreaWidth(): number {
     return this.inputAreaWidth > 1 ? this.inputAreaWidth : 1
+  }
+
+  // MARK: - 表面样式方法（与参考项目对齐）
+
+  private getUserBubbleMaxWidth(): number {
+    const width = this.getInputAreaWidth()
+    if (width <= 1) return 320
+    return Math.max(180, Math.floor(width * 0.84))
+  }
+
+  private getUserBubbleTextMaxWidth(): number {
+    return Math.max(140, this.getUserBubbleMaxWidth() - 28)
+  }
+
+  private getOfficialSurfaceBackground(): string {
+    return 'rgba(12, 12, 14, 0.96)'
+  }
+
+  private getOfficialSurfaceBorder(): string {
+    return 'rgba(255, 255, 255, 0.08)'
+  }
+
+  private getOfficialMutedSurfaceBackground(): string {
+    return 'rgba(255, 255, 255, 0.035)'
+  }
+
+  private getOfficialSurfaceRadius(): number {
+    return 14
   }
 
   private getInputAreaContentWidth(): number {
@@ -799,7 +838,7 @@ struct ChatDetailPage {
 
   private async loadMessages(): Promise<void> {
     await sessionStore.loadMessages(this.sessionId)
-    
+
     // Official Codex 会话：强制从本地文件同步消息（解决第三方模型 AI 回复不推送的问题）
     const session = sessionStore.sessions.find(s => s.id === this.sessionId)
     const threadId = session?.officialCodexThreadId || sessionStore.getOfficialCodexThreadId(this.sessionId)
@@ -807,8 +846,8 @@ struct ChatDetailPage {
       console.info(`[ChatDetailPage] Syncing local messages for Official Codex thread: ${threadId}`)
       await sessionStore.syncCurrentOfficialCodexSession()
     }
-    
-    // 使用 getDedupedMessages 确保加载时就是去重的（防御性）
+
+    // 立即用本地缓存展示（服务器同步在后台进行，完成后自动刷新 UI）
     const msgs = sessionStore.getDedupedMessages(this.sessionId)
     this.messages = [...msgs]
     this.lastMessagesSignature = this.buildMessagesSignature(msgs)
@@ -2734,6 +2773,10 @@ struct ChatDetailPage {
           this.UserBubble(message)
         } else if (message.type === 'assistant') {
           this.AssistantBubble(this.getAssistantDisplayMessage(message))
+          // Turn 文件变更汇总（在助手消息后显示）
+          if (this.shouldShowTurnFileChangeSummary(this.getAssistantDisplayMessage(message))) {
+            this.TurnFileChangeSummaryPanel(this.getAssistantDisplayMessage(message))
+          }
         } else if (message.type === 'thinking') {
           this.ThinkingBubble(message)
         } else if (message.type === 'tool_use') {
@@ -2869,11 +2912,19 @@ struct ChatDetailPage {
 
   @Builder
   UserBubble(message: Message) {
-    Column({ space: 4 }) {
-      Text(message.content)
-        .fontSize(15)
-        .fontColor(Theme.TextPrimary)
-        .lineHeight(22)
+    Column({ space: 6 }) {
+      // 附件预览条（与 iOS 端 UserAttachmentStrip 对齐）
+      if (message.attachments && message.attachments.length > 0) {
+        this.UserAttachmentStrip(message)
+      }
+
+      // 文本内容
+      if (message.content && message.content.trim().length > 0) {
+        Text(message.content)
+          .fontSize(16)
+          .fontColor('#FFFFFF')
+          .lineHeight(24)
+      }
 
       if (message.sendStatus === 'sending') {
         Row({ space: 4 }) {
@@ -2903,11 +2954,12 @@ struct ChatDetailPage {
         this.MessageQuickActions(message)
       }
     }
-    .constraintSize({ maxWidth: '82%' })
-    .padding({ left: 14, right: 14, top: 11, bottom: 11 })
-    .backgroundColor('#0C0C0E')
-    .borderRadius(10)
-    .border({ width: 0.5, color: 'rgba(255,255,255,0.11)' })
+    .constraintSize({ maxWidth: this.getUserBubbleMaxWidth() })
+    .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+    .backgroundColor('rgba(28, 28, 30, 0.95)')
+    .borderRadius(22)
+    .border({ width: 0.5, color: 'rgba(255, 255, 255, 0.12)' })
+    .clip(true)
     .gesture(
       LongPressGesture()
         .onAction(() => {
@@ -2918,45 +2970,43 @@ struct ChatDetailPage {
           }
         })
     )
+
+    // 长按操作菜单（iOS 式弹出在气泡下方）
+    if (this.activeCopyMessageId === message.id) {
+      this.MessageQuickActions(message)
+    }
   }
 
   @Builder
   AssistantBubble(message: Message) {
-    Column({ space: 8 }) {
-      if (message.isStreaming) {
-        Row({ space: 6 }) {
-          SymbolGlyph($r('sys.symbol.clock'))
-            .fontSize(10)
-            .fontColor([Theme.TextTertiary])
-          Text('正在生成')
-            .fontSize(10)
-            .fontColor(Theme.TextTertiary)
-        }
-        .padding({ bottom: 4 })
-      }
-
+    Column({ space: 6 }) {
       if (this.shouldHideContent(message.content)) {
         // 隐藏工具调用 JSON
       } else {
-        MarkdownRenderer({ content: message.content, onLinkClick: (url: string) => { this.openExternalLink(url) } })
+        this.AssistantSegmentedContent(message)
       }
 
+      // 流式光标动画（与 iOS 端 TerminalRunningIndicator 对齐）
       if (message.isStreaming) {
         Row({ space: 0 }) {
           Column()
             .width(2)
-            .height(14)
-            .backgroundColor(Theme.TextTertiary)
+            .height(16)
+            .backgroundColor(Theme.PrimaryColor)
             .borderRadius(1)
+            .opacity(this.streamingCursorVisible ? 1.0 : 0.0)
+            .animation({ duration: 530, curve: Curve.EaseInOut })
         }
+        .margin({ top: 2 })
       }
 
-      if (this.activeCopyMessageId === message.id) {
-        this.MessageQuickActions(message)
+      // 尾部操作栏（与 iOS CopyBlockButton 对齐）
+      if (this.activeCopyMessageId === message.id && !message.isStreaming && message.content && message.content.trim().length > 0) {
+        this.AssistantTrailingActions(message)
       }
     }
     .width('100%')
-    .padding({ left: 2, right: 4, top: 2, bottom: 2 })
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
     .gesture(
       LongPressGesture()
         .onAction(() => {
@@ -3005,6 +3055,105 @@ struct ChatDetailPage {
         this.activeCopyMessageId = ''
         this.translateMessageContent(message.content)
       })
+    }
+  }
+
+  @Builder
+  AssistantSegmentedContent(message: Message) {
+    // assistant 消息中的图片（如 Claude 直接返回的图片）
+    if (message.images && message.images.length > 0) {
+      ForEach(message.images, (img: MessageImage, idx: number) => {
+        Image('data:' + img.mediaType + ';base64,' + img.data)
+          .width('100%')
+          .constraintSize({ maxHeight: 300 })
+          .objectFit(ImageFit.Contain)
+          .borderRadius(8)
+          .onClick(() => {
+            this.openFilePreview('data:' + img.mediaType + ';base64,' + img.data,
+              'Claude 图片', 'assistant_image_' + idx + '.png')
+          })
+      }, (img: MessageImage, idx: number) => 'asst-img-' + idx)
+    }
+    MarkdownRenderer({ content: message.content, onLinkClick: (url: string) => { this.openExternalLink(url) } })
+  }
+
+  // 与 iOS 端 CopyBlockButton 对齐：助手消息尾部操作栏
+  @Builder
+  AssistantTrailingActions(message: Message) {
+    Row({ space: 6 }) {
+      Row({ space: 4 }) {
+        SymbolGlyph($r('sys.symbol.doc_text'))
+          .fontSize(12)
+          .fontColor([Theme.TextTertiary])
+        Text('复制')
+          .fontSize(11)
+          .fontColor(Theme.TextTertiary)
+      }
+      .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+      .backgroundColor('rgba(255,255,255,0.06)')
+      .borderRadius(8)
+      .onClick(() => {
+        this.copyToClipboard(message.content)
+      })
+
+      Row({ space: 4 }) {
+        SymbolGlyph($r('sys.symbol.character'))
+          .fontSize(12)
+          .fontColor([Theme.AccentBlue])
+        Text('翻译')
+          .fontSize(11)
+          .fontColor(Theme.AccentBlue)
+      }
+      .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+      .backgroundColor('rgba(10,132,255,0.10)')
+      .borderRadius(8)
+      .onClick(() => {
+        this.translateMessageContent(message.content)
+      })
+    }
+    .margin({ top: 2 })
+  }
+
+  // 与 iOS 端 UserAttachmentStrip 对齐：用户消息附件预览
+  @Builder
+  UserAttachmentStrip(message: Message) {
+    if (message.attachments && message.attachments.length > 0) {
+      Column({ space: 6 }) {
+        ForEach(message.attachments, (att: AttachmentRef, idx: number) => {
+          if (att.type === 'image' && att.data) {
+            Image('data:' + (att.mimeType || 'image/png') + ';base64,' + att.data)
+              .width(48)
+              .height(48)
+              .objectFit(ImageFit.Cover)
+              .borderRadius(8)
+              .border({ width: 0.5, color: 'rgba(255,255,255,0.12)' })
+          } else if (att.type === 'image' && att.path) {
+            FileAttachmentBubble({
+              filePath: att.path,
+              onImageTap: (src: string, alt: string, name: string) => {
+                this.openFilePreview(src, alt, name)
+              }
+            })
+          } else {
+            Row({ space: 4 }) {
+              SymbolGlyph($r('sys.symbol.doc_text'))
+                .fontSize(12)
+                .fontColor([Theme.AccentBlue])
+              Text(att.name || '文件')
+                .fontSize(11)
+                .fontColor(Theme.AccentBlue)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+            .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+            .backgroundColor('rgba(10,132,255,0.10)')
+            .borderRadius(8)
+          }
+        }, (att: AttachmentRef, idx: number) => 'att-' + idx + '-' + (att.name || att.type))
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .padding({ bottom: 4 })
     }
   }
 
@@ -3389,6 +3538,11 @@ struct ChatDetailPage {
     return '-' + stats.removed + ' 行'
   }
 
+  private getSingleToolDiffStats(message: Message): DiffStats {
+    const diffText = message.toolResult || ''
+    return this.getFileChangeStats(message, diffText)
+  }
+
   private getToolBlockPreview(message: Message): string {
     const toolName = this.getEffectiveToolName(message)
     if (toolName === 'Bash' && this.getBashCommand(message).length > 0) {
@@ -3408,69 +3562,521 @@ struct ChatDetailPage {
     return result.substring(0, 1200) + '\n... 已截断，桌面端可查看完整输出'
   }
 
+  private isFileChangeTool(message: Message): boolean {
+    if (message.type !== 'tool_use') return false
+    const toolName = this.getEffectiveToolName(message)
+    return toolName === 'Edit' || toolName === 'Write'
+  }
+
+  private getFileChangeTools(messages: Message[]): Message[] {
+    const result: Message[] = []
+    for (let i = 0; i < messages.length; i++) {
+      if (this.isFileChangeTool(messages[i])) {
+        result.push(messages[i])
+      }
+    }
+    return result
+  }
+
+  private getCompactFilePathForDisplay(path: string): string {
+    const normalized = path.trim()
+    if (normalized.length <= 0) return 'file'
+    const parts = normalized.split('/').filter((part: string) => part.length > 0)
+    if (parts.length <= 2) return normalized
+    return '.../' + parts[parts.length - 3] + '/' + parts[parts.length - 2] + '/' + parts[parts.length - 1]
+  }
+
+  private isFileChangePreviewExpanded(message: Message): boolean {
+    return this.expandedFileChangePreviewIds.has(message.id)
+  }
+
+  private toggleFileChangePreview(id: string): void {
+    const next = new Set(this.expandedFileChangePreviewIds)
+    if (next.has(id)) {
+      next.delete(id)
+    } else {
+      next.add(id)
+    }
+    this.expandedFileChangePreviewIds = next
+  }
+
+  private getFileChangePreviewMeta(message: Message): string {
+    const parts: string[] = []
+    parts.push(this.getToolStatusLabel(message.toolStatus))
+    const stats = this.getSingleToolDiffStatsText(message)
+    if (stats.length > 0) parts.push(stats)
+    const previewCount = this.getDiffPreviewLineItems(message).length
+    if (previewCount > 0) parts.push(previewCount + ' 行预览')
+    return parts.join(' · ')
+  }
+
+  private getDiffPreviewLineItems(message: Message): string[] {
+    const result: string[] = []
+    const toolResult = message.toolResult || ''
+    if (toolResult.trim().length <= 0) return result
+
+    const lines = toolResult.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if (line.startsWith('@@') || line.startsWith('+') || line.startsWith('-')) {
+        if (!line.startsWith('+++') && !line.startsWith('---')) {
+          result.push(line)
+        }
+      }
+      if (result.length >= 8) break
+    }
+
+    if (result.length <= 0) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trimEnd()
+        if (line.length <= 0) continue
+        result.push(line)
+        if (result.length >= 6) break
+      }
+    }
+    return result
+  }
+
+  private hasMoreDiffPreviewLines(message: Message): boolean {
+    const toolResult = message.toolResult || ''
+    if (toolResult.trim().length <= 0) return false
+    const lines = toolResult.split('\n')
+    let count = 0
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      if ((line.startsWith('@@') || line.startsWith('+') || line.startsWith('-')) &&
+        !line.startsWith('+++') && !line.startsWith('---')) {
+        count++
+      }
+    }
+    return count > this.getDiffPreviewLineItems(message).length
+  }
+
+  private getDiffPreviewLineColor(line: string): ResourceColor {
+    if (line.startsWith('+')) return Theme.SuccessColor
+    if (line.startsWith('-')) return Theme.ErrorColor
+    if (line.startsWith('@@')) return Theme.AccentBlue
+    return Theme.TextSecondary
+  }
+
+  private getFileChangeStats(message: Message, diffText: string): DiffStats {
+    const stats = this.countDiffLines(diffText)
+    if (stats.added > 0 || stats.removed > 0) return stats
+
+    const input = message.toolInput || {}
+    const toolName = this.getEffectiveToolName(message)
+    const oldText = typeof input['old_string'] === 'string' ? (input['old_string'] as string) : ''
+    const newText = typeof input['new_string'] === 'string' ? (input['new_string'] as string) : ''
+    const contentText = typeof input['content'] === 'string' ? (input['content'] as string) : ''
+    if (oldText.length > 0) stats.removed = oldText.split('\n').length
+    if (newText.length > 0) {
+      stats.added = newText.split('\n').length
+    } else if (toolName === 'Write' && contentText.length > 0) {
+      stats.added = contentText.split('\n').length
+    }
+    return stats
+  }
+
+
+  // MARK: - Turn 文件变更汇总
+
+  private shouldShowTurnFileChangeSummary(message: Message): boolean {
+    if (this.isLatestAssistantMessage(message) && this.isThreadRunningForComposer()) return false
+    if (!this.isLastAssistantMessageInTurn(message)) return false
+    return this.getTurnFileChangeSummary(message).entries.length > 0
+  }
+
+  private isLastAssistantMessageInTurn(message: Message): boolean {
+    let index = -1
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i].id === message.id) {
+        index = i
+        break
+      }
+    }
+    if (index < 0) return false
+
+    for (let i = index + 1; i < this.messages.length; i++) {
+      const item = this.messages[i]
+      if (item.type === 'user') return true
+      if (item.type === 'assistant' && item.content && item.content.trim().length > 0) {
+        return false
+      }
+    }
+    return true
+  }
+
+  private isTurnFileChangeSummaryCollapsed(message: Message): boolean {
+    return this.collapsedTurnFileChangeSummaryIds.has(message.id)
+  }
+
+  private toggleTurnFileChangeSummary(messageId: string): void {
+    const next = new Set(this.collapsedTurnFileChangeSummaryIds)
+    if (next.has(messageId)) {
+      next.delete(messageId)
+    } else {
+      next.add(messageId)
+    }
+    this.collapsedTurnFileChangeSummaryIds = next
+  }
+
+  private isLatestAssistantMessage(message: Message): boolean {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const item = this.messages[i]
+      if (item.type === 'assistant' && item.content && item.content.trim().length > 0) {
+        return item.id === message.id
+      }
+    }
+    return false
+  }
+
+  private isThreadRunningForComposer(): boolean {
+    return this.chatStatus === 'thinking' || this.chatStatus === 'tool_executing' || this.chatStatus === 'streaming'
+  }
+
+  private getTurnMessagesForAssistant(message: Message): Message[] {
+    let index = -1
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i].id === message.id) {
+        index = i
+        break
+      }
+    }
+    if (index <= 0) return []
+
+    let start = 0
+    for (let i = index - 1; i >= 0; i--) {
+      if (this.messages[i].type === 'user') {
+        start = i + 1
+        break
+      }
+    }
+
+    let end = this.messages.length
+    for (let i = index + 1; i < this.messages.length; i++) {
+      if (this.messages[i].type === 'user') {
+        end = i
+        break
+      }
+    }
+
+    const result: Message[] = []
+    for (let i = start; i < end; i++) {
+      if (i === index) continue
+      result.push(this.messages[i])
+    }
+    return result
+  }
+
+  private getTurnFileChangeSummary(message: Message): TurnFileChangeSummary {
+    const summary = new TurnFileChangeSummary()
+    const turnMessages = this.getTurnMessagesForAssistant(message)
+    const resultByToolUseId: Map<string, string> = new Map()
+    for (let i = 0; i < turnMessages.length; i++) {
+      const item = turnMessages[i]
+      if (item.type === 'tool_result' && item.toolUseId) {
+        resultByToolUseId.set(item.toolUseId, item.toolResult || item.content || '')
+      }
+    }
+
+    const byPath: Map<string, TurnFileChangeEntry> = new Map()
+    const orderedPaths: string[] = []
+    for (let i = 0; i < turnMessages.length; i++) {
+      const item = turnMessages[i]
+      if (item.type !== 'tool_use') continue
+      const toolName = this.getEffectiveToolName(item)
+      if (toolName !== 'Edit' && toolName !== 'Write') continue
+
+      const path = this.getToolFilePath(item)
+      if (path.length <= 0) continue
+      const diffText = (item.toolResult && item.toolResult.length > 0)
+        ? item.toolResult
+        : (item.toolUseId ? (resultByToolUseId.get(item.toolUseId) || '') : '')
+      const stats = this.getFileChangeStats(item, diffText)
+      const entry = byPath.get(path) || new TurnFileChangeEntry()
+      if (!byPath.has(path)) {
+        entry.path = path
+        byPath.set(path, entry)
+        orderedPaths.push(path)
+      }
+      entry.additions += stats.added
+      entry.deletions += stats.removed
+    }
+
+    for (let i = 0; i < orderedPaths.length; i++) {
+      const entry = byPath.get(orderedPaths[i])
+      if (!entry) continue
+      summary.entries.push(entry)
+      summary.additions += entry.additions
+      summary.deletions += entry.deletions
+    }
+    return summary
+  }
+
+  // TurnFileChangeSummary 数据类
+  @Builder
+  TurnFileChangeSummaryPanel(message: Message) {
+    Column({ space: 0 }) {
+      Row({ space: 12 }) {
+        Column() {
+          SymbolGlyph($r('sys.symbol.square_and_pencil'))
+            .fontSize(18)
+            .fontColor([Theme.TextSecondary])
+        }
+        .width(40)
+        .height(40)
+        .borderRadius(12)
+        .backgroundColor('rgba(255,255,255,0.06)')
+        .justifyContent(FlexAlign.Center)
+
+        Column({ space: 5 }) {
+          Text('已编辑 ' + this.getTurnFileChangeSummary(message).entries.length + ' 个文件')
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Theme.TextPrimary)
+
+          Row({ space: 4 }) {
+            Text('+' + this.getTurnFileChangeSummary(message).additions)
+              .fontSize(13)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Theme.SuccessColor)
+
+            Text('-' + this.getTurnFileChangeSummary(message).deletions)
+              .fontSize(13)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Theme.ErrorColor)
+          }
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+      }
+      .width('100%')
+      .padding({ left: 14, right: 14, top: 14, bottom: 14 })
+
+      if (!this.isTurnFileChangeSummaryCollapsed(message)) {
+        Divider().color('rgba(255,255,255,0.08)').width('100%')
+
+        Column({ space: 0 }) {
+          ForEach(this.getTurnFileChangeSummary(message).entries, (entry: TurnFileChangeEntry) => {
+            this.TurnFileChangeSummaryRow(entry)
+          }, (entry: TurnFileChangeEntry) => entry.path)
+        }
+        .width('100%')
+        .padding({ top: 8, bottom: 8 })
+      }
+
+      Row({ space: 6 }) {
+        Text(this.isTurnFileChangeSummaryCollapsed(message) ? '展开文件' : '收起文件')
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.TextPrimary)
+
+        SymbolGlyph(this.isTurnFileChangeSummaryCollapsed(message) ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_up'))
+          .fontSize(11)
+          .fontColor([Theme.TextPrimary])
+
+        Blank().layoutWeight(1)
+      }
+      .width('100%')
+      .padding({ left: 14, right: 14, top: 10, bottom: 12 })
+      .backgroundColor('rgba(255,255,255,0.025)')
+      .onClick(() => {
+        this.toggleTurnFileChangeSummary(message.id)
+      })
+    }
+    .width('100%')
+    .backgroundColor(this.getOfficialSurfaceBackground())
+    .borderRadius(this.getOfficialSurfaceRadius())
+    .border({ width: 0.5, color: this.getOfficialSurfaceBorder() })
+    .clip(true)
+  }
+
+  @Builder
+  TurnFileChangeSummaryRow(entry: TurnFileChangeEntry) {
+    Row({ space: 10 }) {
+      Text(entry.path)
+        .fontSize(14)
+        .fontColor(Theme.TextPrimary)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
+
+      Row({ space: 4 }) {
+        Text('+' + entry.additions)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.SuccessColor)
+
+        Text('-' + entry.deletions)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Theme.ErrorColor)
+      }
+    }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+  }
+
+  @Builder
+  DiffStatsText(stats: DiffStats) {
+    Row({ space: 4 }) {
+      if (stats.added > 0) {
+        Text('+' + stats.added)
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Theme.SuccessColor)
+      }
+      if (stats.removed > 0) {
+        Text('-' + stats.removed)
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Theme.ErrorColor)
+      }
+    }
+  }
+
+  @Builder
+  FileDiffPreview(message: Message) {
+    Column({ space: 6 }) {
+      Row({ space: 6 }) {
+        Text('DIFF PREVIEW')
+          .fontSize(9)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Theme.TextSecondary)
+
+        if (this.hasMoreDiffPreviewLines(message)) {
+          Text('已截断')
+            .fontSize(9)
+            .fontColor(Theme.TextTertiary)
+        }
+      }
+      .width('100%')
+
+      Column({ space: 2 }) {
+        ForEach(this.getDiffPreviewLineItems(message), (line: string, idx: number) => {
+          Text(line)
+            .width('100%')
+            .fontSize(11)
+            .fontFamily('monospace')
+            .fontColor(this.getDiffPreviewLineColor(line))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }, (line: string, idx: number) => `${message.id}_${idx}_${line.substring(0, 12)}`)
+      }
+      .width('100%')
+      .padding(10)
+      .borderRadius(8)
+      .backgroundColor('#050508')
+    }
+    .width('100%')
+  }
+
   @Builder
   ToolUseBubble(message: Message) {
-    Stack({ alignContent: Alignment.Center }) {
-      Column({ space: 0 }) {
-        // Header
-        Row({ space: 8 }) {
-          // 图标
+    Column({ space: 0 }) {
+      // ── Header: 图标 + 工具信息 + 统计 + 状态 ──
+      Row({ space: 10 }) {
+        // 工具图标（彩色圆底）
+        Column() {
           SymbolGlyph(getToolIcon(this.getEffectiveToolName(message)).symbol)
-            .fontSize(14)
+            .fontSize(16)
             .fontColor([getToolIcon(this.getEffectiveToolName(message)).color])
+        }
+        .width(32)
+        .height(32)
+        .backgroundColor(getToolIcon(this.getEffectiveToolName(message)).color + '20')
+        .borderRadius(8)
+        .justifyContent(FlexAlign.Center)
 
-          // 工具名
-          Text(getToolIcon(this.getEffectiveToolName(message)).label.toUpperCase())
-            .fontSize(10)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Theme.TextSecondary)
+        // 工具名 + 状态徽章 + 输入摘要
+        Column({ space: 3 }) {
+          Row({ space: 6 }) {
+            Text(this.getEffectiveToolName(message))
+              .fontSize(13)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Theme.TextPrimary)
 
-          // 文件名/命令摘要
+            // 状态徽章
+            Text(this.getToolStatusLabel(message.toolStatus))
+              .fontSize(9)
+              .fontColor(this.getToolStatusBadgeColor(message.toolStatus))
+              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+              .backgroundColor(this.getToolStatusBadgeBackground(message.toolStatus))
+              .borderRadius(5)
+          }
+
+          // 输入摘要（命令/文件路径/搜索模式等）
           if (this.getToolActionSummary(message)) {
             Text(this.getToolActionSummary(message))
               .fontSize(11)
               .fontColor(Theme.TextTertiary)
-              .maxLines(1)
-              .layoutWeight(1)
-          } else {
-            Blank().layoutWeight(1)
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
           }
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
 
-          // 结果行数
-          if (this.getToolResultLineCount(message)) {
-            Text(this.getToolResultLineCount(message))
-              .fontSize(10)
-              .fontColor(Theme.TextTertiary)
-          }
-
-          // 状态图标
-          this.ToolStatusIcon(message.toolStatus)
-
-          // 展开箭头
-          if (this.isToolExpandableWithResult(message)) {
-            if (this.expandedToolIds.has(message.id)) {
-              SymbolGlyph($r('sys.symbol.chevron_down'))
-                .fontSize(10)
-                .fontColor([Theme.TextSecondary])
-            } else {
-              SymbolGlyph($r('sys.symbol.chevron_right'))
-                .fontSize(10)
-                .fontColor([Theme.TextSecondary])
+        // Diff 统计
+        if (this.isFileChangeTool(message)) {
+          Row({ space: 4 }) {
+            if (this.getSingleToolDiffStats(message).added > 0) {
+              Text('+' + this.getSingleToolDiffStats(message).added)
+                .fontSize(11)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Theme.SuccessColor)
+            }
+            if (this.getSingleToolDiffStats(message).removed > 0) {
+              Text('-' + this.getSingleToolDiffStats(message).removed)
+                .fontSize(11)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Theme.ErrorColor)
             }
           }
         }
-        .width('100%')
-        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
 
-        // 展开内容
-        if (this.expandedToolIds.has(message.id) && this.isToolExpandableWithResult(message)) {
-          Divider()
-            .color('rgba(255,255,255,0.1)')
-            .width('100%')
+        // 结果行数
+        if (this.getToolResultLineCount(message)) {
+          Text(this.getToolResultLineCount(message))
+            .fontSize(10)
+            .fontColor(Theme.TextTertiary)
+        }
 
-          Column({ space: 8 }) {
-            // Bash 工具：显示命令
-            if (this.getEffectiveToolName(message) === 'Bash' && this.getBashCommand(message)) {
+        // Meta 文字（行数+diff统计）
+        if (this.getToolMetaText(message)) {
+          Text(this.getToolMetaText(message))
+            .fontSize(10)
+            .fontColor(Theme.TextTertiary)
+            .fontFamily('monospace')
+        }
+
+        // 状态图标
+        this.ToolStatusIcon(message.toolStatus)
+
+        // 展开箭头
+        if (this.isToolExpandableWithResult(message)) {
+          SymbolGlyph(this.expandedToolIds.has(message.id) ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_right'))
+            .fontSize(10)
+            .fontColor([Theme.TextSecondary])
+        }
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+
+      // ── 展开内容 ──
+      if (this.expandedToolIds.has(message.id) && this.isToolExpandableWithResult(message)) {
+        Divider()
+          .color('rgba(255,255,255,0.1)')
+          .width('100%')
+
+        Column({ space: 8 }) {
+          // Bash 工具：显示命令
+          if (this.getEffectiveToolName(message) === 'Bash' && this.getBashCommand(message)) {
+            Column({ space: 4 }) {
+              Text('COMMAND')
+                .fontSize(9)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Theme.TextSecondary)
               Text('$ ' + this.getBashCommand(message))
                 .fontSize(11)
                 .fontColor(Theme.TextPrimary)
@@ -3478,67 +4084,99 @@ struct ChatDetailPage {
                 .width('100%')
                 .padding(10)
                 .borderRadius(6)
-                .backgroundColor('#0E0E10')
+                .backgroundColor('#050508')
             }
-
-            // 文件内容预览（Write/Edit）
-            if ((this.getEffectiveToolName(message) === 'Write' ||
-              this.getEffectiveToolName(message) === 'Edit') &&
-              this.getToolFilePath(message) && message.toolStatus === 'completed') {
-              FileAttachmentBubble({
-                filePath: this.getToolFilePath(message),
-                onImageTap: (src: string, alt: string, name: string) => {
-                  this.openFilePreview(src, alt, name)
-                }
-              })
-            }
-
-            // 输出结果
-            if (message.toolResult) {
-              Column({ space: 4 }) {
-                Text(this.getToolResultLabel(message))
-                  .fontSize(9)
-                  .fontWeight(FontWeight.Bold)
-                  .fontColor(Theme.TextSecondary)
-
-                // 检测是否有图片
-                if (message.images && message.images.length > 0) {
-                  ForEach(message.images, (img: MessageImage, idx: number) => {
-                    Image('data:' + img.mediaType + ';base64,' + img.data)
-                      .width('100%')
-                      .constraintSize({ maxHeight: 300 })
-                      .objectFit(ImageFit.Contain)
-                      .borderRadius(8)
-                  })
-                }
-
-                MarkdownRenderer({ content: this.truncateToolResult(message),
-                  onLinkClick: (url: string) => { this.openExternalLink(url) } })
-              }
-              .width('100%')
-              .alignItems(HorizontalAlign.Start)
-            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
           }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+
+          // Read/Grep/Glob：显示输入详情
+          if (this.getEffectiveToolName(message) !== 'Bash' &&
+            this.getEffectiveToolName(message) !== 'Edit' &&
+            this.getEffectiveToolName(message) !== 'Write') {
+            Column({ space: 4 }) {
+              Text('INPUT')
+                .fontSize(9)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Theme.TextSecondary)
+              if (this.getToolFilePath(message)) {
+                Text(this.getToolFilePath(message))
+                  .fontSize(11)
+                  .fontColor(Theme.AccentBlue)
+                  .fontFamily('monospace')
+                  .maxLines(3)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+              }
+              if (this.getToolBlockPreview(message) && !this.getToolFilePath(message)) {
+                Text(this.getToolBlockPreview(message))
+                  .fontSize(11)
+                  .fontColor(Theme.TextPrimary)
+                  .fontFamily('monospace')
+                  .maxLines(4)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .width('100%')
+                  .padding(10)
+                  .borderRadius(6)
+                  .backgroundColor('#050508')
+              }
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+          }
+
+          // 文件内容预览（Write/Edit）
+          if ((this.getEffectiveToolName(message) === 'Write' ||
+            this.getEffectiveToolName(message) === 'Edit') &&
+            this.getToolFilePath(message) && message.toolStatus === 'completed') {
+            FileAttachmentBubble({
+              filePath: this.getToolFilePath(message),
+              onImageTap: (src: string, alt: string, name: string) => {
+                this.openFilePreview(src, alt, name)
+              }
+            })
+          }
+
+          // 输出结果
+          if (message.toolResult) {
+            Column({ space: 4 }) {
+              Text(this.getToolResultLabel(message))
+                .fontSize(9)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Theme.TextSecondary)
+
+              // 检测是否有图片
+              if (message.images && message.images.length > 0) {
+                ForEach(message.images, (img: MessageImage, idx: number) => {
+                  Image('data:' + img.mediaType + ';base64,' + img.data)
+                    .width('100%')
+                    .constraintSize({ maxHeight: 300 })
+                    .objectFit(ImageFit.Contain)
+                    .borderRadius(8)
+                })
+              }
+
+              MarkdownRenderer({ content: this.truncateToolResult(message),
+                onLinkClick: (url: string) => { this.openExternalLink(url) } })
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+          }
         }
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
       }
-      .width('100%')
-      .backgroundColor('#0E0E10')
-      .borderRadius(10)
-      .border({
-        width: 0.5,
-        color: 'rgba(255,255,255,0.12)'
-      })
     }
     .width('100%')
-    .clip(true)
+    .backgroundColor(this.getOfficialSurfaceBackground())
+    .borderRadius(this.getOfficialSurfaceRadius())
+    .border({ width: 0.5, color: this.getOfficialSurfaceBorder() })
     .onClick(() => {
       if (this.isToolExpandableWithResult(message)) {
         this.toggleTool(message.id)
       }
     })
   }
+
 
   // MARK: - 工具组折叠容器
 

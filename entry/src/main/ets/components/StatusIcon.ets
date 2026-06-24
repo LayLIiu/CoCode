@@ -58,9 +58,12 @@ const INITIAL_TENTACLES: Tentacle[] = [
   new Tentacle(12, 148.1, 75.0, 13.6, 14.4)
 ]
 
+const STATUS_ICON_FRAME_INTERVAL_MS = 120
+
 @Component
 export struct StatusIcon {
-  @Prop status: WorkStatus = WorkStatus.IDLE
+  @Prop @Watch('onStatusChange') status: WorkStatus = WorkStatus.IDLE
+  @Prop iconSize: number = 28
   private animTimer: number = -1
   private startTime: number = 0
   private tentacles: Tentacle[] = INITIAL_TENTACLES.map(t =>
@@ -77,6 +80,10 @@ export struct StatusIcon {
     this.stopAnimation()
   }
 
+  onStatusChange(): void {
+    this.startAnimation()
+  }
+
   private startAnimation(): void {
     this.stopAnimation()
     this.startTime = Date.now()
@@ -88,6 +95,14 @@ export struct StatusIcon {
       clearTimeout(this.animTimer)
       this.animTimer = -1
     }
+  }
+
+  private isAnimatedStatus(status: WorkStatus): boolean {
+    return status === WorkStatus.THINKING ||
+      status === WorkStatus.STREAMING ||
+      status === WorkStatus.TOOL_EXECUTING ||
+      status === WorkStatus.PERMISSION_PENDING ||
+      status === WorkStatus.QUESTION_PENDING
   }
 
   private tick(): void {
@@ -184,14 +199,16 @@ export struct StatusIcon {
     }
 
     this.drawCanvas()
-    this.animTimer = setTimeout(() => { this.tick() }, 33) // ~30fps
+    if (this.isAnimatedStatus(mode)) {
+      this.animTimer = setTimeout(() => { this.tick() }, STATUS_ICON_FRAME_INTERVAL_MS)
+    }
   }
 
   private drawCanvas(): void {
     const ctx = this.ctx
     if (!ctx) return
 
-    const size = 28
+    const size = this.iconSize
     const cx = size / 2
     const cy = size / 2
     const canvasScale = size / 240 * 0.85 * this.breathScale
@@ -267,7 +284,7 @@ export struct StatusIcon {
 
   build() {
     Canvas(this.ctx)
-      .width(28)
-      .height(28)
+      .width(this.iconSize)
+      .height(this.iconSize)
   }
 }

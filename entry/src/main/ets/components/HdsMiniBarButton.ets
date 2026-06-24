@@ -1,4 +1,5 @@
-import { hdsMaterial, HdsTabs } from '@kit.UIDesignKit';
+import { hdsMaterial } from '@kit.UIDesignKit';
+import { HdsLiquidGlassContainer } from './HdsLiquidGlassContainer';
 
 /**
  * HdsMiniBarButton 浮动迷你栏按钮组件
@@ -10,25 +11,38 @@ export struct HdsMiniBarButton {
 
   /**
    * 按钮栏宽度
-   * @defaults 50
+   * @default 50
    */
   @Param barWidth: number = 50;
 
   /**
    * 按钮栏高度
-   * @defaults 50
+   * @default 50
    */
   @Param barHeight: number = 50;
 
   /**
-   * 容器内边距（防止光效被裁切）
-   * @defaults 12
+   * 兼容旧版本的容器内边距
+   * 推荐新项目使用 horizontalOverflow / verticalOverflow 分别控制横向与纵向防裁切空间
+   * @default 8
    */
-  @Param contentPadding: number = 12;
+  @Param contentPadding: number = 8;
+
+  /**
+   * 横向溢出缓冲，宿主容器会比按钮栏左右各多出该值，防止液态玻璃光效被裁切
+   * @default 32
+   */
+  @Param horizontalOverflow: number = 32;
+
+  /**
+   * 纵向溢出缓冲，宿主容器会比按钮栏上下各多出该值，防止液态玻璃光效被裁切
+   * @default 12
+   */
+  @Param verticalOverflow: number = 12;
 
   /**
    * 容器尺寸，优先使用此值，未设置时自动计算
-   * @defaults undefined
+   * @default undefined
    */
   @Param containerSize: SizeOptions | undefined = undefined;
 
@@ -36,19 +50,19 @@ export struct HdsMiniBarButton {
 
   /**
    * 图标资源（SymbolGlyph 资源类型）
-   * @defaults $r('sys.symbol.plus')
+   * @default $r('sys.symbol.plus')
    */
   @Param iconResource: Resource = $r('sys.symbol.plus');
 
   /**
    * 图标大小
-   * @defaults 27
+   * @default 27
    */
   @Param iconSize: number = 27;
 
   /**
    * 图标颜色数组（支持渐变效果）
-   * @defaults [Color.Gray]
+   * @default [Color.Gray]
    */
   @Param iconColor: ResourceColor[] = [Color.Gray];
 
@@ -56,46 +70,64 @@ export struct HdsMiniBarButton {
 
   /**
    * 遮罩颜色
-   * @defaults Color.Transparent
+   * @default Color.Transparent
    */
   @Param maskColor: ResourceColor = Color.Transparent;
 
   /**
    * 按钮栏底部边距
-   * @defaults 8
+   * @default 8
    */
   @Param barBottomMargin: number = 8;
 
   /**
    * 材质类型（沉浸式效果）
-   * @defaults hdsMaterial.MaterialType.IMMERSIVE
+   * @default hdsMaterial.MaterialType.IMMERSIVE
    */
   @Param materialType: hdsMaterial.MaterialType = hdsMaterial.MaterialType.IMMERSIVE;
 
   /**
    * 材质级别
-   * @defaults hdsMaterial.MaterialLevel.ADAPTIVE
+   * @default hdsMaterial.MaterialLevel.ADAPTIVE
    */
   @Param materialLevel: hdsMaterial.MaterialLevel = hdsMaterial.MaterialLevel.ADAPTIVE;
 
   /**
-   * 是否启用系统材质效果（沉浸光感）
-   * 若在鸿蒙 6.1 出现异常阴影，可设为 false 关闭材质效果
-   * @defaults true
+   * 是否启用自定义圆角模式
+   * 开启后不再使用 HdsTabs 默认胶囊外形，改用可控圆角的矩形液态玻璃容器
+   * @default false
    */
-  @Param enableMaterialEffect: boolean = true;
+  @Param useCustomCornerRadius: boolean = false;
+
+  /**
+   * 自定义圆角，仅在 useCustomCornerRadius 为 true 时生效
+   * @default 20
+   */
+  @Param cornerRadius: number = 20;
+
+  /**
+   * 自定义圆角模式下的边框颜色
+   * @default '#65FFFFFF'
+   */
+  @Param customGlassBorderColor: ResourceColor = '#65FFFFFF';
+
+  /**
+   * 自定义圆角模式下的边框宽度
+   * @default 0.5
+   */
+  @Param customGlassBorderWidth: number = 0.5;
 
   // ==================== 布局参数 ====================
 
   /**
    * 按钮栏位置
-   * @defaults BarPosition.End
+   * @default BarPosition.End
    */
   @Param barPosition: BarPosition = BarPosition.End;
 
   /**
    * 按钮栏是否与内容重叠
-   * @defaults true
+   * @default true
    */
   @Param barOverlap: boolean = true;
 
@@ -103,7 +135,7 @@ export struct HdsMiniBarButton {
 
   /**
    * 按钮点击事件回调
-   * @defaults undefined
+   * @default undefined
    */
   @Param onButtonClick: (() => void) | undefined = undefined;
 
@@ -118,7 +150,6 @@ export struct HdsMiniBarButton {
     SymbolGlyph(this.iconResource)
       .fontSize(this.iconSize)
       .fontColor(this.iconColor)
-      .margin({ left: -2 })
   }
 
   /**
@@ -132,7 +163,6 @@ export struct HdsMiniBarButton {
   /**
    * 计算容器尺寸
    * 如果已设置 containerSize 则直接使用，否则根据 barWidth、barHeight 和 padding 计算
-   * 高度额外增加以容纳底部形变效果
    * @returns 容器尺寸配置
    */
   private getComputedContainerSize(): SizeOptions {
@@ -140,68 +170,54 @@ export struct HdsMiniBarButton {
       return this.containerSize;
     }
     return {
-      width: this.barWidth + this.contentPadding * 4,
-      height: this.barHeight + this.contentPadding * 5  // 高度额外增加，给底部更多空间
+      width: this.barWidth + this.getHorizontalOverflow() * 2,
+      height: this.barHeight + this.getVerticalOverflow() * 2
     };
+  }
+
+  /**
+   * 计算横向防裁切缓冲
+   * 保留 contentPadding 参与计算，兼容旧版本只配置 contentPadding 的写法
+   */
+  private getHorizontalOverflow(): number {
+    return Math.max(this.horizontalOverflow, this.contentPadding);
+  }
+
+  /**
+   * 计算纵向防裁切缓冲
+   * 保留 contentPadding 参与计算，兼容旧版本只配置 contentPadding 的写法
+   */
+  private getVerticalOverflow(): number {
+    return Math.max(this.verticalOverflow, this.contentPadding);
   }
 
   // ==================== UI 构建 ====================
 
   /**
    * 构建组件 UI
-   * 使用 Stack 让点击区域和视觉区域一致
+   * 复用通用液态玻璃容器实现浮动按钮效果
    */
   build() {
-    Stack() {
-      // 液态玻璃效果层
-      HdsTabs() {
-        TabContent()
-          .tabBar(this.buttonContent())
-      }
-      .barWidth(this.barWidth)
-      .barHeight(this.barHeight)
-      .barOverlap(this.barOverlap)
-      .barPosition(this.barPosition)
-      .scrollable(false)
-      .animationDuration(0)
-      .barFloatingStyle({
-        gradientMask: {
-          maskColor: 'rgba(0,0,0,0)'
-        },
-        barBottomMargin: this.barBottomMargin,
-        systemMaterialEffect: this.enableMaterialEffect ? {
-          materialType: this.materialType,
-          materialLevel: this.materialLevel
-        } : undefined
-      })
-      .backgroundColor(Color.Transparent)
-      .border({ width: 0 })
-      .shadow({ radius: 0 })
-      .hitTestBehavior(HitTestMode.Transparent)  // 让点击穿透到外层
-
-      // 透明点击层 - 覆盖整个按钮区域
-      Column()
-        .width(this.barWidth)
-        .height(this.barHeight)
-        .backgroundColor(Color.Transparent)
-        .hitTestBehavior(HitTestMode.Block)  // 阻止点击穿透，确保接收所有点击
-        .onClick(() => {
-          if (this.onButtonClick) {
-            this.onButtonClick();
-          }
-        })
+    HdsLiquidGlassContainer({
+      barWidth: this.barWidth,
+      barHeight: this.barHeight,
+      contentPadding: this.contentPadding,
+      horizontalOverflow: this.horizontalOverflow,
+      verticalOverflow: this.verticalOverflow,
+      containerSize: this.getComputedContainerSize(),
+      maskColor: this.maskColor,
+      barBottomMargin: this.barBottomMargin,
+      materialType: this.materialType,
+      materialLevel: this.materialLevel,
+      useCustomCornerRadius: this.useCustomCornerRadius,
+      cornerRadius: this.cornerRadius,
+      customGlassBorderColor: this.customGlassBorderColor,
+      customGlassBorderWidth: this.customGlassBorderWidth,
+      barPosition: this.barPosition,
+      barOverlap: this.barOverlap,
+      onGlassClick: this.onButtonClick
+    }) {
+      this.buttonContent()
     }
-    .size(this.getComputedContainerSize())
-    .alignContent(Alignment.Center)
-    .backgroundColor(Color.Transparent)
-    .border({ width: 0 })
-    .shadow({ radius: 0 })
-    .clip(false)
-    .onClick(() => {
-      // 外层 Stack 也响应点击，双重保障
-      if (this.onButtonClick) {
-        this.onButtonClick();
-      }
-    })
   }
 }

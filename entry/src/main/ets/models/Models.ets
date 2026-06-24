@@ -89,6 +89,9 @@ export interface Message {
 
   // 工具结果是否为错误
   isError?: boolean
+
+  // 用户消息附件
+  attachments?: AttachmentRef[]
 }
 
 // MARK: - 图片内容

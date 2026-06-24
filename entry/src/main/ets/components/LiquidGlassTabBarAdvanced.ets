@@ -15,6 +15,8 @@ export struct LiquidGlassTabBarAdvanced {
   // Tab项配置
   private tabItems: Array<{label: string, icon: Resource, activeIcon: Resource}> = [
     { label: 'Claude', icon: $r('app.media.ic_claude'), activeIcon: $r('app.media.ic_claude_filled') },
+    { label: 'Codex', icon: $r('app.media.ic_codex'), activeIcon: $r('app.media.ic_codex_filled') },
+    { label: 'Open Code', icon: $r('app.media.ic_terminal'), activeIcon: $r('app.media.ic_terminal_filled') },
     { label: '设置', icon: $r('app.media.ic_settings'), activeIcon: $r('app.media.ic_settings') }
   ];
   
