@@ -26,3 +26,9 @@ screenshot_*
 icon_*
 crop_*
 *.preview.png
+# 分析文档
+iOS_Correct_Migration_Plan.md
+iOS_Migration_Analysis_Report.md
+iOS_Migration_Plan_Detailed.md
+鸿蒙端iOS移植蓝图.md
+鸿蒙项目UI分析.md
