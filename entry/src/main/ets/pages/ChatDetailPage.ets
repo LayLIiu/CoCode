@@ -263,6 +263,7 @@ struct ChatDetailPage {
   @State contextModel: string = ''
 
   // Turn 文件变更汇总折叠状态
+  @State inputOverlayMode: string = ''
   @State collapsedTurnFileChangeSummaryIds: Set<string> = new Set()
   // 文件变更预览展开状态
   @State expandedFileChangePreviewIds: Set<string> = new Set()
@@ -354,6 +355,44 @@ struct ChatDetailPage {
 
   private getOfficialSurfaceRadius(): number {
     return 14
+  }
+
+  // ── 输入框辅助方法 ──
+
+  private getExpandedInputTextAreaHeight(): number {
+    return Math.min(90, Math.max(34, this.getInputTextAreaMaxHeight()))
+  }
+
+  private getExpandedInputCapsuleHeight(): number {
+    let extra = 42 + 9 + 12  // 底部工具栏 + 底部 padding + 顶部 padding
+    if (this.getPreviewAttachments().length > 0) {
+      extra += 44  // 附件预览高度
+    }
+    return this.getExpandedInputTextAreaHeight() + extra
+  }
+
+  private canSendInputMessage(): boolean {
+    return this.inputText.trim().length > 0 || this.pendingAttachments.length > 0
+  }
+
+  private getPreviewAttachments(): AttachmentRef[] {
+    return this.pendingAttachments
+  }
+
+  private getCurrentModelDisplayName(): string {
+    if (!this.currentModel) return '模型'
+    for (let i = 0; i < this.models.length; i++) {
+      if (this.models[i].id === this.currentModel) {
+        return this.models[i].name
+      }
+    }
+    return this.currentModel
+  }
+
+  private removePendingAttachment(index: number): void {
+    if (index >= 0 && index < this.pendingAttachments.length) {
+      this.pendingAttachments.splice(index, 1)
+    }
   }
 
   private getInputAreaContentWidth(): number {
@@ -6416,219 +6455,283 @@ struct ChatDetailPage {
 
   @Builder
   InputAreaContent() {
-    Stack() {
-      Row({ space: this.inputModuleGap }) {
-        // 加号按钮：键盘弹出时或收缩后隐藏
-        if (!this.isKeyboardVisible && this.shouldShowButtons()) {
-          this.InputActionGlassButton($r('sys.symbol.plus'), '#E3E3E3', this.getButtonOpacity(), () => {
-            this.showMenu = !this.showMenu
-          })
-        } else if (!this.isKeyboardVisible && !this.shouldShowButtons()) {
-          // 收缩后占位，保持布局稳定
-          Row().width(this.inputActionGlassSize).height(this.inputActionGlassSize)
-        }
-
-        HdsTabs() {
-          TabContent()
-            .tabBar(this.InputGlassContent())
-        }
-        .width(this.getInputGlassHostWidth())
-        .height(this.getInputGlassHostHeight())
-        .padding({
-          left: this.inputGlassHorizontalOverflow,
-          right: this.inputGlassHorizontalOverflow,
-          top: this.inputGlassVerticalOverflow,
-          bottom: this.inputGlassVerticalOverflow
-        })
-        .barWidth(this.getInputGlassWidth())
-        .barHeight(this.getInputGlassHeight())
-        .barOverlap(true)
-        .barPosition(BarPosition.End)
-        .scrollable(false)
-        .animationDuration(0)
-        .barFloatingStyle({
-          gradientMask: {
-            maskColor: 'rgba(0,0,0,0)'
-          },
-          barBottomMargin: 0,
-          systemMaterialEffect: {
-            materialType: hdsMaterial.MaterialType.IMMERSIVE,
-            materialLevel: hdsMaterial.MaterialLevel.EXQUISITE
-          }
-        })
-        .backgroundColor(Color.Transparent)
-        .border({ width: 0 })
-        .shadow({ radius: 0 })
-
-        // 发送按钮：收缩后隐藏
-        if (this.shouldShowButtons()) {
-          this.InputActionGlassButton($r('sys.symbol.arrow_up'),
-            this.inputText.trim() || this.pendingAttachments.length > 0 ? Color.White : '#8E8E8E',
-            this.getButtonOpacity(), () => {
-              if (this.inputText.trim() || this.pendingAttachments.length > 0) {
-                this.sendMessage()
-              }
-            })
-        } else {
-          // 收缩后占位，保持布局稳定
-          Row().width(this.inputActionGlassSize).height(this.inputActionGlassSize)
-        }
+    Column({ space: 12 }) {
+      if (this.isKeyboardVisible || this.inputText.length > 0 || this.pendingAttachments.length > 0) {
+        this.ExpandedInputCapsule()
+      } else {
+        this.CollapsedInputCapsule()
       }
-      .width(this.getInputAreaContentWidth())
-      .height(this.getInputAreaHostHeight())
-      .alignItems(VerticalAlign.Center)
-      .scale({
-        x: this.getCollapseScale(),
-        y: this.getCollapseScale()
-      })
-      .animation({
-        duration: 200,
-        curve: Curve.EaseOut
-      })
     }
     .width('100%')
-    .height(this.getInputAreaHostHeight())
-    .alignContent(Alignment.Center)
+    .alignItems(HorizontalAlign.Center)
     .clip(false)
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       this.inputAreaWidth = newArea.width as number
     })
   }
 
+  // ── 折叠态输入胶囊 ──
   @Builder
-  InputActionGlassButton(icon: Resource, color: ResourceColor, opacityValue: number, action: () => void) {
+  CollapsedInputCapsule() {
     Stack() {
-      HdsTabs() {
-        TabContent()
-          .tabBar(this.InputActionGlassContent(icon, color, opacityValue))
-      }
-      .width(this.getInputActionHostSize())
-      .height(this.getInputActionHostSize())
-      .padding({
-        left: this.inputActionGlassOverflow,
-        right: this.inputActionGlassOverflow,
-        top: this.inputActionGlassOverflow,
-        bottom: this.inputActionGlassOverflow
-      })
-      .barWidth(this.inputActionGlassSize)
-      .barHeight(this.inputActionGlassSize)
-      .barOverlap(true)
-      .barPosition(BarPosition.End)
-      .scrollable(false)
-      .animationDuration(0)
-      .barFloatingStyle({
-        gradientMask: {
-          maskColor: 'rgba(0,0,0,0)'
-        },
+      HdsLiquidGlassContainer({
+        barWidth: this.getInputAreaContentWidth(),
+        barHeight: 56,
+        maskColor: 'rgba(0,0,0,0)',
         barBottomMargin: 0,
-        systemMaterialEffect: {
-          materialType: hdsMaterial.MaterialType.IMMERSIVE,
-          materialLevel: hdsMaterial.MaterialLevel.EXQUISITE
-        }
-      })
-      .backgroundColor(Color.Transparent)
-      .border({ width: 0 })
-      .shadow({ radius: 0 })
-      .opacity(opacityValue)
-      .onTabBarClick(() => {
-        action()
-      })
-    }
-    .width(this.inputActionGlassSize)
-    .height(this.getInputActionHostSize())
-    .alignContent(Alignment.Center)
-    .clip(false)
-  }
-
-  @Builder
-  InputActionGlassContent(icon: Resource, color: ResourceColor, opacityValue: number) {
-    Column() {
-      SymbolGlyph(icon)
-        .fontSize(22)
-        .fontColor([color])
-        .translate({ y: this.inputActionIconOffsetY })
-    }
-    .width(this.inputActionGlassSize)
-    .height(this.inputActionGlassSize)
-    .justifyContent(FlexAlign.Center)
-    .opacity(opacityValue)
-  }
-
-  @Builder
-  InputGlassContent() {
-    Stack() {
-      if (this.lightIntensity > 0) {
-        Flex()
-          .size({ width: 1, height: 1 })
+        materialType: hdsMaterial.MaterialType.IMMERSIVE,
+        materialLevel: hdsMaterial.MaterialLevel.EXQUISITE,
+        cornerRadius: 22,
+        customGlassBorderColor: 'rgba(255,255,255,0.16)',
+        customGlassBorderWidth: 0.65
+      }) {
+        Row()
+          .width(this.getInputAreaContentWidth())
+          .height(56)
           .backgroundColor(Color.Transparent)
-          .visualEffect(
-            new hdsEffect.HdsEffectBuilder()
-              .pointLight({
-                options: {
-                  color: Color.White,
-                  intensity: this.lightIntensity,
-                  height: 100
-                }
-              })
-              .buildEffect()
-          )
-          .position({ x: this.lightFingerX, y: this.lightFingerY })
       }
 
-      TextArea({ placeholder: this.pendingAttachments.length > 0 ? '添加描述...' : '输入消息或指令', text: this.inputText })
-        .width('100%')
-        .constraintSize({ minHeight: 32, maxHeight: this.getInputTextAreaMaxHeight() })
-        .backgroundColor(Color.Transparent)
-        .fontColor(Theme.TextPrimary)
-        .placeholderColor('#8E8E8E')
-        .fontSize(16)
-        .fontWeight(FontWeight.Medium)
-        .textAlign(TextAlign.Start)
-        .padding({ left: 2, right: 2, top: 4, bottom: 4 })
-        .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
-        .onChange((value: string) => {
-          this.inputText = value
+      Row({ space: 10 }) {
+        this.InputIconButton($r('sys.symbol.plus'), Color.White, false, () => {
+          this.showMenu = !this.showMenu
         })
-        .onSubmit(() => {
-          if (this.inputText.trim() || this.pendingAttachments.length > 0) {
+
+        TextArea({ placeholder: '向 Codex 提问', text: this.inputText })
+          .layoutWeight(1)
+          .height(42)
+          .backgroundColor(Color.Transparent)
+          .fontColor(Theme.TextPrimary)
+          .placeholderColor('#8E8E93')
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .padding({ left: 0, right: 0, top: 9, bottom: 0 })
+          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .onChange((value: string) => {
+            this.inputText = value
+          })
+          .onFocus(() => {
+            this.isKeyboardVisible = true
+            this.resetInputCollapseProgress()
+          })
+          .onSubmit(() => {
             this.sendMessage()
-          }
-        })
-        .onFocus(() => {
-          this.isKeyboardVisible = true
-          // 键盘弹出时重置收缩进度
-          this.resetInputCollapseProgress()
-        })
-        .onBlur(() => {
-          this.isKeyboardVisible = false
-        })
+          })
+
+        this.InputSendButton()
+      }
+      .width('100%')
+      .height(56)
+      .padding({ left: 12, right: 18 })
+      .alignItems(VerticalAlign.Center)
     }
-    .width(this.getInputGlassWidth())
-    .height(this.getInputGlassHeight())
-    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+    .width('100%')
+    .height(56)
     .alignContent(Alignment.Center)
     .clip(false)
-    .onTouch((event: TouchEvent) => {
-      if (event.type === TouchType.Down) {
-        animateTo({ duration: 100, curve: Curve.EaseIn }, () => {
-          this.lightIntensity = 2.5
-        })
-        this.lightFingerX = event.touches[0].x
-        this.lightFingerY = event.touches[0].y
-      } else if (event.type === TouchType.Move) {
-        animateTo({
-          curve: curves.responsiveSpringMotion(0.5, 0.5)
-        }, () => {
-          this.lightFingerX = event.touches[0].x
-          this.lightFingerY = event.touches[0].y
-        })
-      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-        animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
-          this.lightIntensity = 0
-        })
+  }
+
+  // ── 展开态输入胶囊 ──
+  @Builder
+  ExpandedInputCapsule() {
+    Stack() {
+      this.ExpandedInputGlassPanel()
+
+      Column({ space: 6 }) {
+        if (this.getPreviewAttachments().length > 0) {
+          this.ComposerAttachmentPreview()
+        }
+
+        TextArea({ placeholder: this.pendingAttachments.length > 0 ? '添加描述...' : '向 Codex 提问', text: this.inputText })
+          .width('100%')
+          .height(this.getExpandedInputTextAreaHeight())
+          .backgroundColor(Color.Transparent)
+          .fontColor(Theme.TextPrimary)
+          .placeholderColor('#7E7E85')
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .padding({ left: 6, right: 6, top: 2, bottom: 0 })
+          .keyboardAppearance(KeyboardAppearance.IMMERSIVE)
+          .onChange((value: string) => {
+            this.inputText = value
+          })
+          .onSubmit(() => {
+            this.sendMessage()
+          })
+          .onFocus(() => {
+            this.isKeyboardVisible = true
+            this.resetInputCollapseProgress()
+          })
+          .onBlur(() => {
+            this.isKeyboardVisible = false
+          })
+
+        Row({ space: 6 }) {
+          this.InputIconButton($r('sys.symbol.plus'), Color.White, false, () => {
+            this.showMenu = !this.showMenu
+          })
+
+          this.InputIconButton($r('sys.symbol.lock_shield_fill'), Color.White,
+            this.currentPermissionMode !== PermissionMode.DEFAULT, () => {
+              this.showMenu = false
+              this.showPermSheet = true
+            })
+
+          this.InputModelToolbarButton()
+
+          Blank()
+
+          this.InputSendButton()
+        }
+        .width('100%')
+        .height(42)
+        .margin({ top: 8 })
+        .alignItems(VerticalAlign.Center)
+      }
+      .width('100%')
+      .height(this.getExpandedInputCapsuleHeight())
+      .padding({ left: 14, right: 18, top: 12, bottom: 9 })
+    }
+    .width('100%')
+    .height(this.getExpandedInputCapsuleHeight())
+    .alignContent(Alignment.Center)
+    .clip(false)
+  }
+
+  // ── 展开态玻璃面板 ──
+  @Builder
+  ExpandedInputGlassPanel() {
+    Column()
+      .width(this.getInputAreaContentWidth())
+      .height(this.getExpandedInputCapsuleHeight())
+      .backgroundColor('#222222')
+      .borderRadius(16)
+      .border({ width: 1, color: 'rgba(255, 255, 255, 0.18)' })
+      .hitTestBehavior(HitTestMode.None)
+  }
+
+  // ── 输入框图标按钮 ──
+  @Builder
+  InputIconButton(icon: Resource, color: ResourceColor, selected: boolean, action: () => void) {
+    Stack() {
+      if (selected) {
+        Circle()
+          .width(28)
+          .height(28)
+          .fill('rgba(255,255,255,0.12)')
+      }
+      SymbolGlyph(icon)
+        .fontSize(18)
+        .fontColor([color])
+    }
+    .width(32)
+    .height(32)
+    .alignContent(Alignment.Center)
+    .onClick(() => {
+      hapticFeedback.tap()
+      action()
+    })
+  }
+
+  // ── 发送按钮 ──
+  @Builder
+  InputSendButton() {
+    Stack() {
+      Circle()
+        .width(32)
+        .height(32)
+        .fill(this.canSendInputMessage() ? Color.White : 'rgba(255,255,255,0.07)')
+      SymbolGlyph($r('sys.symbol.arrow_up'))
+        .fontSize(17)
+        .fontColor([this.canSendInputMessage() ? '#222222' : 'rgba(255,255,255,0.26)'])
+    }
+    .width(36)
+    .height(36)
+    .margin({ right: -4 })
+    .alignContent(Alignment.Center)
+    .onClick(() => {
+      if (this.canSendInputMessage()) {
+        hapticFeedback.submit()
+        this.sendMessage()
       }
     })
   }
+
+  // ── 附件预览条 ──
+  @Builder
+  ComposerAttachmentPreview() {
+    Scroll() {
+      Row({ space: 8 }) {
+        ForEach(this.getPreviewAttachments(), (att: AttachmentRef, index: number) => {
+          Stack() {
+            Row({ space: 6 }) {
+              if (att.type === 'image') {
+                SymbolGlyph($r('sys.symbol.camera'))
+                  .fontSize(14)
+                  .fontColor([Theme.AccentGreen])
+              } else {
+                SymbolGlyph($r('sys.symbol.doc_text'))
+                  .fontSize(14)
+                  .fontColor([Theme.AccentBlue])
+              }
+
+              Text(att.name || '附件')
+                .fontSize(12)
+                .fontColor(Theme.TextPrimary)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+            .height(34)
+            .padding({ left: 10, right: 28 })
+            .backgroundColor('rgba(255,255,255,0.075)')
+            .borderRadius(12)
+
+            SymbolGlyph($r('sys.symbol.xmark_circle_fill'))
+              .fontSize(16)
+              .fontColor([Theme.TextSecondary])
+              .position({ x: 100, y: 9 })
+              .onClick(() => {
+                hapticFeedback.tap()
+                const originalIndex = this.pendingAttachments.indexOf(att)
+                this.removePendingAttachment(originalIndex)
+              })
+          }
+          .width(122)
+          .height(34)
+        }, (att: AttachmentRef, index: number) => `${index}-${att.name || 'attachment'}`)
+      }
+      .padding({ left: 2, right: 2 })
+    }
+    .scrollable(ScrollDirection.Horizontal)
+    .scrollBar(BarState.Off)
+    .width('100%')
+    .height(38)
+  }
+
+  // ── 模型选择按钮 ──
+  @Builder
+  InputModelToolbarButton() {
+    Row({ space: 2 }) {
+      Text(this.getCurrentModelDisplayName())
+        .fontSize(12)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('rgba(255,255,255,0.7)')
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .constraintSize({ maxWidth: 64 })
+      SymbolGlyph($r('sys.symbol.chevron_down'))
+        .fontSize(10)
+        .fontColor(['rgba(255,255,255,0.36)'])
+    }
+    .height(28)
+    .padding({ left: 8, right: 6 })
+    .borderRadius(19)
+    .backgroundColor('rgba(255,255,255,0.06)')
+    .onClick(() => {
+      hapticFeedback.selection()
+      this.showModelSheet = true
+    })
+  }
+
   // 任务列表签名（避免每次状态变化都同步）
   private lastTasksSignature: string = ''
 
