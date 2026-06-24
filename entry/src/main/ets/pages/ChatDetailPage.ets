@@ -364,9 +364,9 @@ struct ChatDetailPage {
   }
 
   private getExpandedInputCapsuleHeight(): number {
-    let extra = 42 + 9 + 12  // 底部工具栏 + 底部 padding + 顶部 padding
+    let extra = 75
     if (this.getPreviewAttachments().length > 0) {
-      extra += 44  // 附件预览高度
+      extra += 42
     }
     return this.getExpandedInputTextAreaHeight() + extra
   }
@@ -6496,7 +6496,7 @@ struct ChatDetailPage {
           this.showMenu = !this.showMenu
         })
 
-        TextArea({ placeholder: '向 Codex 提问', text: this.inputText })
+        TextArea({ placeholder: '向 Claude 提问', text: this.inputText })
           .layoutWeight(1)
           .height(42)
           .backgroundColor(Color.Transparent)
@@ -6541,7 +6541,7 @@ struct ChatDetailPage {
           this.ComposerAttachmentPreview()
         }
 
-        TextArea({ placeholder: this.pendingAttachments.length > 0 ? '添加描述...' : '向 Codex 提问', text: this.inputText })
+        TextArea({ placeholder: this.pendingAttachments.length > 0 ? '添加描述...' : '向 Claude 提问', text: this.inputText })
           .width('100%')
           .height(this.getExpandedInputTextAreaHeight())
           .backgroundColor(Color.Transparent)
