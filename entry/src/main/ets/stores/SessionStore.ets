@@ -18,6 +18,8 @@ class StreamingBuffer {
   assistant: string = ''
   thinking: string = ''
   blockType: string = ''
+  // 已处理的 delta 去重 key，防止双通道导致内容翻倍
+  processedDeltaKeys: Set<string> = new Set()
 }
 
 class OfficialCodexThreadRuntimeSnapshot {
@@ -5046,10 +5048,28 @@ export class SessionStore {
         {
           const deltaText = typeof msg.text === 'string' ? msg.text as string : ''
           if (deltaText) {
+            // 流式 delta 去重：防止双通道（会话WS + 全局广播）导致同一 delta
+            // 被累加两次，造成消息内容翻倍。用 msg.id（最可靠）或文本摘要做 key。
+            let deltaKey = ''
+            if (msg.id) {
+              deltaKey = 'id:' + msg.id
+            } else {
+              // 降级：用 type + 文本前200字符 + 总长度做 key
+              const textRaw = deltaText
+              deltaKey = messageType + ':' + textRaw.substring(0, 200) + ':l' + textRaw.length
+            }
+
             let buffer = this.streamingBuffers.get(sessionId)
             if (!buffer) {
               buffer = new StreamingBuffer()
             }
+
+            if (buffer.processedDeltaKeys.has(deltaKey)) {
+              // 已处理过此 delta，跳过（双通道重复）
+              console.info(`[SessionStore] Skip duplicate delta for ${sessionId}: ${deltaKey.substring(0, 80)}`)
+              break
+            }
+            buffer.processedDeltaKeys.add(deltaKey)
 
             if (messageType === 'content_delta') {
               buffer.assistant += deltaText
@@ -5060,10 +5080,6 @@ export class SessionStore {
             }
 
             this.streamingBuffers.set(sessionId, buffer)
-            // 不再每 120ms 刷新预览到 streamHeads，避免在 UI 上出现
-            // "正在生成"气泡 + 闪烁光标 + 半截内容。等 message_complete /
-            // tool_use_complete 时 flushStreamingBuffer + flushHeadToTail
-            // 一次性出完整消息。
           }
         }
         break
