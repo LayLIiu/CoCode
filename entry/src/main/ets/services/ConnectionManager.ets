@@ -220,6 +220,67 @@ export class ConnectionManager {
   }
 
   /**
+   * 端口自动扫描：当配置的 URL 不可用时，扫描同 IP 的其他端口寻找 cchaha 服务器
+   * 扫描范围：3456（fixedPort）以及桌面端可能使用的随机端口范围
+   */
+  private async scanPortsForServer(originalUrl: string): Promise<string | null> {
+    // 手动解析 URL 获取 host 和 scheme（ArkTS 不支持 new URL）
+    let scheme = 'http'
+    let host = ''
+    let originalPort = 3456
+
+    if (originalUrl.startsWith('https://')) {
+      scheme = 'https'
+    }
+    const cleaned = originalUrl.replace(/^https?:\/\//, '')
+    const colonIdx = cleaned.indexOf(':')
+    const slashIdx = cleaned.indexOf('/')
+    if (colonIdx > 0 && (slashIdx < 0 || colonIdx < slashIdx)) {
+      host = cleaned.substring(0, colonIdx)
+      const portEnd = slashIdx > 0 ? slashIdx : cleaned.length
+      originalPort = parseInt(cleaned.substring(colonIdx + 1, portEnd)) || 3456
+    } else {
+      host = slashIdx > 0 ? cleaned.substring(0, slashIdx) : cleaned
+    }
+
+    if (!host) return null
+
+    // 构造候选端口列表：3456 优先，然后是桌面端可能使用的端口范围
+    const candidatePorts: number[] = [3456]
+    if (originalPort !== 3456) {
+      candidatePorts.push(originalPort)
+    }
+    // 桌面端 sidecar 可能的随机端口范围（常见的高位端口）
+    const scanRanges = [51000, 52000, 53000, 54000, 55000, 56000, 57000, 58000, 59000, 60000,
+      61000, 62000, 40000, 41000, 42000, 43000, 44000, 45000, 46000, 47000, 48000, 49000, 50000]
+    for (let i = 0; i < scanRanges.length; i++) {
+      if (!candidatePorts.includes(scanRanges[i])) {
+        candidatePorts.push(scanRanges[i])
+      }
+    }
+
+    // 并行扫描所有候选端口，使用较短超时
+    const scanTimeout = 3000
+    const foundUrls: string[] = []
+
+    const testPromises: Promise<void>[] = []
+    for (let i = 0; i < candidatePorts.length; i++) {
+      const port = candidatePorts[i]
+      const testUrl = scheme + '://' + host + ':' + port
+      testPromises.push(
+        this.testConnection(testUrl, scanTimeout, 'lan').then(result => {
+          if (result.available) {
+            foundUrls.push(testUrl)
+          }
+        }).catch(() => {})
+      )
+    }
+
+    await Promise.all(testPromises)
+    return foundUrls.length > 0 ? foundUrls[0] : null
+  }
+
+  /**
    * 并行测试多个 URL，返回最快的可用连接
    * 优化：使用"第一个成功即返回"策略，不等待所有测试完成
    */
@@ -369,8 +430,29 @@ export class ConnectionManager {
         return status
       }
 
-      // 单 URL 不可用时返回错误状态
-      console.warn(`[ConnectionManager] Single URL ${singleUrl} is not available`)
+      // 单 URL 不可用时，尝试同 IP 自动扫描端口
+      console.warn(`[ConnectionManager] Single URL ${singleUrl} is not available, trying port scan...`)
+      const scannedUrl = await this.scanPortsForServer(singleUrl)
+      if (scannedUrl) {
+        console.info(`[ConnectionManager] Found server at ${scannedUrl} via port scan`)
+        await this.switchToUrl(scannedUrl, singleType)
+        // 自动更新保存的 URL，下次就不用再扫描了
+        authStore.updateActiveProfileUrl(scannedUrl)
+        const scanStatus: ConnectionStatus = {
+          type: singleType,
+          quality: 'good',
+          latency: 0,
+          lastChecked: Date.now(),
+          lanUrl: '',
+          tunnelUrl: '',
+          cloudRelayUrl: singleType === 'cloud_relay' ? scannedUrl : ''
+        }
+        this.currentStatus = scanStatus
+        this.isInitialized = true
+        this.notifyListeners()
+        return scanStatus
+      }
+
       const failStatus: ConnectionStatus = {
         type: singleType,
         quality: 'unavailable',

@@ -764,13 +764,13 @@ export struct ConversationListPage {
   @Builder
   ProjectHeader(group: ProjectSessionGroup, expanded: boolean) {
     Row() {
-      Row({ space: 10 }) {
+      Row({ space: 9 }) {
         SymbolGlyph($r('sys.symbol.folder'))
-          .fontSize(21)
+          .fontSize(19)
           .fontColor(['#8E8E93'])
 
         Text(group.projectName)
-          .fontSize(18)
+          .fontSize(17)
           .fontColor('#8E8E93')
           .fontWeight(FontWeight.Medium)
           .maxLines(1)
@@ -781,7 +781,7 @@ export struct ConversationListPage {
           .fontColor(['#8E8E93'])
       }
       .layoutWeight(1)
-      .height(44)
+      .height(36)
       .onClick(() => {
         this.toggleProjectExpanded(group.projectName)
       })
@@ -791,16 +791,16 @@ export struct ConversationListPage {
           .fontSize(20)
           .fontColor(['#8E8E93'])
       }
-      .width(44)
-      .height(44)
+      .width(40)
+      .height(36)
       .backgroundColor(Color.Transparent)
       .onClick(() => {
         void this.createSessionForProject(group.projectPath)
       })
     }
     .width('100%')
-    .height(56)
-    .padding({ top: 12, bottom: 0, left: 4, right: 0 })
+    .height(40)
+    .padding({ top: 4, bottom: 0, left: 4, right: 0 })
   }
 
   @Builder

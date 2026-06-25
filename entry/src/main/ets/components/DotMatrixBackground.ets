@@ -1,42 +1,50 @@
 /**
- * 点阵背景组件 - 复刻桌面端 NoiseDotBackground 效果
- * 深色背景上绘制动态噪声点阵，缓慢慢速旋转产生流动感
- * 触控穿透触控，不影响列表滑动和按钮点击
+ * 点阵背景组件 - 复刻桌面端 DotGridShader 螺旋臂 + 涟漪效果
+ *
+ * 效果原理（与桌面端 WebGL 着色器等价）：
+ * 1. 网格点阵：固定间距排列的圆点
+ * 2. 螺旋臂旋转：2 条螺旋臂从中心向外旋转，臂上的点更大更亮
+ * 3. 涟漪扰动：两个方向的正弦波让点产生轻微位移，形成水面涟漪
+ * 4. 中心漂移：螺旋原点在中心附近缓慢漂移
+ *
+ * 移动端适配：间距/半径/涟漪幅度针对小屏调优，
+ * 使用真实时间差驱动动画保证流畅度。
  */
 
-// 伪噪声函数：输入坐标和时间，返回 0~1 之间的平滑值
-function pseudoNoise(x: number, y: number, z: number): number {
-  const nx = x * 0.004
-  const ny = y * 0.004
-  const v = Math.sin(nx + Math.cos(ny + z)) * Math.cos(nx * 1.5 - z)
-    + Math.sin(ny * 2.0 + z * 0.5)
-    + Math.cos(Math.sqrt(nx * nx + ny * ny) - z)
-  return (v + 2) / 4
-}
+// ---- 移动端适配参数 ----
+const GAP = 10              // 间距更小，点更密
+const DOT_R = 1.2           // 亮点
+const R_MIN = 0.6           // 暗点
+const RIPPLE_AMP = 1.5      // 涟漪幅度
 
-const DOT_RADIUS = 1
-const SPACING = 16
-const DISPLACEMENT = 4
-const TIME_SPEED = 0.018
-const ROTATION_SPEED = 0.3
-const FPS_INTERVAL = 16          // ~60fps 全速
-const ECO_FPS_INTERVAL = 50      // ~20fps 节能模式
-const ENABLE_DYNAMIC_DOT_BACKGROUND = false
+// ---- 着色器参数（屏幕无关，直接复用桌面端） ----
+const ARMS = 2.0
+const PITCH = 0.08
+const SPIN = 0.25
+const DRIFT = 0.035
+const WIDTH = 0.7           // 更宽的螺旋臂，过渡更柔和
+const GAMMA = 2.5           // 更陡的衰减，配合宽臂降低峰值
+const MAX_ALPHA = 0.2       // 限制最大亮度，整体更暗更柔和
+const RIPPLE_FREQ = 0.020
+const RIPPLE_VEL = 0.12
+const RIPPLE_TURN = 0.015
+
+// ---- 渲染控制 ----
+const TWO_PI = Math.PI * 2
+const FRAME_INTERVAL = 16       // ~60fps requestAnimationFrame 节拍
+const ECO_INTERVAL = 50         // 不可见时降频
 
 @Component
 export struct DotMatrixBackground {
   @Prop active: boolean = true
   private ctx: CanvasRenderingContext2D = new CanvasRenderingContext2D()
   private time: number = 0
+  private lastTs: number = 0
   private animId: number = -1
   private isAnimating: boolean = false
   private w: number = 0
   private h: number = 0
   private hasDrawnOnce: boolean = false
-  private frameCount: number = 0
-  // 节能模式：每 5 帧才重新绘制（降 ~12fps 有效帧率，装饰背景足够）
-  private skipFrameMod: number = 5
-  // 可见性状态
   private isVisible: boolean = false
 
   build() {
@@ -50,7 +58,7 @@ export struct DotMatrixBackground {
           this.startAnimation()
         }
       })
-      .onVisibleAreaChange([0.0, 1.0], (isVisible: boolean, currentRatio: number) => {
+      .onVisibleAreaChange([0.0, 1.0], (isVisible: boolean, _currentRatio: number) => {
         this.isVisible = isVisible
         if (isVisible && this.active) {
           this.resumeAnimation()
@@ -66,15 +74,10 @@ export struct DotMatrixBackground {
 
   private startAnimation(): void {
     if (this.isAnimating) return
-    if (!ENABLE_DYNAMIC_DOT_BACKGROUND) {
-      this.drawFrame()
-      this.hasDrawnOnce = true
-      return
-    }
     this.isAnimating = true
     this.time = 0
-    this.frameCount = 0
-    this.animId = setTimeout(() => { this.animate() }, FPS_INTERVAL)
+    this.lastTs = Date.now()
+    this.scheduleNext()
   }
 
   private pauseAnimation(): void {
@@ -86,68 +89,101 @@ export struct DotMatrixBackground {
   }
 
   private resumeAnimation(): void {
-    if (!ENABLE_DYNAMIC_DOT_BACKGROUND) return
     if (this.isAnimating) return
     if (this.hasDrawnOnce) {
       this.isAnimating = true
-      this.frameCount = 0
-      this.animId = setTimeout(() => { this.animate() }, FPS_INTERVAL)
+      this.lastTs = Date.now()
+      this.scheduleNext()
     }
   }
 
-  private animate(): void {
+  private scheduleNext(): void {
+    const interval = (!this.isVisible || !this.active)
+      ? ECO_INTERVAL
+      : FRAME_INTERVAL
+    this.animId = setTimeout(() => { this.tick() }, interval)
+  }
+
+  private tick(): void {
     if (!this.isAnimating) return
 
-    // 节能策略：非可见区域或内容被覆盖时降帧
-    const interval = (!this.isVisible || !this.active)
-      ? ECO_FPS_INTERVAL
-      : FPS_INTERVAL
+    // 用真实时间差驱动动画，与帧率解耦
+    const now = Date.now()
+    const dt = (now - this.lastTs) * 0.001  // 秒
+    this.lastTs = now
+    this.time += dt
 
-    // 降帧绘制：只在关键帧重绘，减少 GPU 负载
-    this.frameCount++
-    if (this.frameCount % this.skipFrameMod === 0 || this.frameCount < 3) {
-      this.drawFrame()
-    }
+    this.drawFrame()
     this.hasDrawnOnce = true
-
-    this.animId = setTimeout(() => { this.animate() }, interval)
+    this.scheduleNext()
   }
 
   private drawFrame(): void {
     const w = this.w
     const h = this.h
-    if (w <= 0 || h <= 0) {
-      return
-    }
+    if (w <= 0 || h <= 0) return
 
-    this.ctx.clearRect(0, 0, w, h)
+    const t = this.time
+    const ctx = this.ctx
+    ctx.clearRect(0, 0, w, h)
 
-    this.time += TIME_SPEED
-    const cx = w / 2
-    const cy = h / 2
+    // ---- 涟漪方向向量 ----
+    const rh = t * RIPPLE_TURN
+    const k1x = Math.cos(rh)
+    const k1y = Math.sin(rh)
+    const k2x = Math.cos(rh + 1.05)
+    const k2y = Math.sin(rh + 1.05)
 
-    for (let gx = SPACING / 2; gx < w; gx += SPACING) {
-      for (let gy = SPACING / 2; gy < h; gy += SPACING) {
-        const dx = gx - cx
-        const dy = gy - cy
-        const angle = Math.atan2(dy, dx)
-        const dist = Math.sqrt(dx * dx + dy * dy)
-        const rotatedAngle = angle + this.time * ROTATION_SPEED
-        const sx = cx + Math.cos(rotatedAngle) * dist
-        const sy = cy + Math.sin(rotatedAngle) * dist
+    // ---- 螺旋臂中心漂移 ----
+    const gridW = w / GAP
+    const gridH = h / GAP
+    const originX = gridW * 0.5 + gridW * 0.35 * Math.sin(t * DRIFT * 3.0)
+    const originY = gridH * 0.5 + gridH * 0.35 * Math.cos(t * DRIFT * 2.0)
 
-        const n = pseudoNoise(sx, sy, this.time)
-        const opacity = 0.005 + n * 0.15
+    // ---- 颜色 ----
+    const baseR = 255
+    const baseG = 255
+    const baseB = 255
 
-        const dx2 = pseudoNoise(sx + 100, sy, this.time) - 0.5
-        const dy2 = pseudoNoise(sx, sy + 100, this.time + 50) - 0.5
-        const px = gx + dx2 * DISPLACEMENT
-        const py = gy + dy2 * DISPLACEMENT
+    // ---- 逐行逐列绘制 ----
+    const cols = Math.ceil(w / GAP) + 1
+    const rows = Math.ceil(h / GAP) + 1
 
-        this.ctx.beginPath()
-        this.ctx.arc(px, py, DOT_RADIUS, 0, Math.PI * 2)
-        this.ctx.fillStyle = `rgba(255,255,255,${opacity})`
-        this.ctx.fill()
+    for (let ci = 0; ci <= cols; ci++) {
+      const cellX = ci - 0.5
+
+      for (let ri = 0; ri <= rows; ri++) {
+        const cellY = ri - 0.5
+
+        // ---- 涟漪位移 ----
+        const s1 = Math.sin((cellX * k1x + cellY * k1y) * RIPPLE_FREQ * TWO_PI - t * RIPPLE_VEL)
+        const s2 = Math.sin((cellX * k2x + cellY * k2y) * RIPPLE_FREQ * TWO_PI - t * RIPPLE_VEL * 0.8)
+        const dispX = (k1x * s1 + k2x * s2) * RIPPLE_AMP * 0.5
+        const dispY = (k1y * s1 + k2y * s2) * RIPPLE_AMP * 0.5
+
+        // ---- 点像素位置 ----
+        const px = (ci + 0.5) * GAP + dispX
+        const py = (ri + 0.5) * GAP + dispY
+
+        // ---- 螺旋臂亮度 ----
+        const dx = cellX - originX
+        const dy = cellY - originY
+        const rad = Math.sqrt(dx * dx + dy * dy)
+        const ang = Math.atan2(dy, dx)
+        const phase = ang * ARMS + rad * PITCH - t * SPIN
+        const dArm = Math.acos(Math.cos(phase)) / Math.PI
+        const tArm = Math.max(1.0 - dArm / WIDTH, 0.0)
+        const alpha = Math.min(MAX_ALPHA, Math.pow(tArm, GAMMA))
+
+        // ---- 半径插值 ----
+        const radius = R_MIN + (DOT_R - R_MIN) * tArm
+
+        if (alpha > 0.005) {
+          ctx.beginPath()
+          ctx.arc(px, py, radius, 0, TWO_PI)
+          ctx.fillStyle = `rgba(${baseR},${baseG},${baseB},${alpha.toFixed(3)})`
+          ctx.fill()
+        }
       }
     }
   }

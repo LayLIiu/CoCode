@@ -175,6 +175,14 @@ export class AuthStore {
   }
 
   /**
+   * 更新当前活跃配置的 URL（用于端口自动扫描后更新实际端口）
+   */
+  async updateActiveProfileUrl(newUrl: string): Promise<void> {
+    if (!this.activeProfileId) return
+    await this.updateProfileUrl(this.activeProfileId, newUrl)
+  }
+
+  /**
    * 更新服务器配置名称
    */
   async updateProfileName(id: string, name: string): Promise<void> {
