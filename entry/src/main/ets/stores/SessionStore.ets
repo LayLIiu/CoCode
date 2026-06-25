@@ -1432,8 +1432,7 @@ export class SessionStore {
 
           // 合并消息
           const merged = this.mergeOpenCodeMessages(currentMessages, importedMessages)
-          this.messages.set(sessionId, merged)
-          this.notifyMessagesChanged(sessionId)
+          this.commitMessages(sessionId, merged, true)
 
           // 如果有新的 assistant 消息出现，更新状态
           if (importedAssistantCount > currentAssistantCount) {
@@ -1453,10 +1452,7 @@ export class SessionStore {
             if (checkAssistantCount === importedAssistantCount) {
               // 回复完成
               const finalMerged = this.mergeOpenCodeMessages(this.messages.get(sessionId) || [], checkImported)
-              this.messages.set(sessionId, finalMerged)
-              await this.persistMessages(sessionId, finalMerged)
-              const latestTimestamp = this.getLatestMessageTimestamp(finalMerged, new Date().toISOString())
-              this.updateSessionActivity(sessionId, latestTimestamp, finalMerged.length, true)
+              this.commitMessages(sessionId, finalMerged, true)
               this.updateSessionStatus(sessionId, 'idle')
               this.notifyMessagesChanged(sessionId)
               console.info('[pollOpenCodeReply] Reply complete, ' + checkImported.length + ' messages')
@@ -1509,12 +1505,8 @@ export class SessionStore {
       const existing = this.messages.get(sessionId) || []
       const merged = this.mergeOpenCodeMessages(existing, importedMessages)
 
-      this.messages.set(sessionId, merged)
-      await this.persistMessages(sessionId, merged)
-      const latestTimestamp = this.getLatestMessageTimestamp(merged, new Date().toISOString())
-      this.updateSessionActivity(sessionId, latestTimestamp, merged.length, true)
+      this.commitMessages(sessionId, merged, true)
       this.updateSessionStatus(sessionId, 'idle')
-      this.notifyMessagesChanged(sessionId)
 
       console.info('[syncOpenCodeSessionMessages] Loaded ' + importedMessages.length + ' messages for ' + threadId)
     } catch (e) {
@@ -2219,10 +2211,7 @@ export class SessionStore {
         const deduped = this.deduplicateMessages(existing)
         if (deduped.length !== existing.length) {
           console.warn(`[SessionStore] loadMessages: cleaned ${existing.length - deduped.length} duplicates from memory for ${sessionId}`)
-          this.messages.set(sessionId, deduped)
-          // 立即保存去重后的消息到本地存储
-          this.persistMessages(sessionId, deduped)
-          this.notifyMessagesChanged(sessionId)
+          this.commitMessages(sessionId, deduped, true)
         }
       } else {
         // 先加载本地缓存（快速展示）
@@ -2232,11 +2221,9 @@ export class SessionStore {
           const deduped = this.deduplicateMessages(localMessages)
           if (deduped.length !== localMessages.length) {
             console.warn(`[SessionStore] loadMessages: cleaned ${localMessages.length - deduped.length} duplicates from local storage for ${sessionId}`)
-            // 更新本地存储
             this.persistMessages(sessionId, deduped)
           }
-          this.messages.set(sessionId, deduped)
-          this.notifyMessagesChanged(sessionId)
+          this.commitMessages(sessionId, deduped, true)
         }
       }
     } catch (e) {
@@ -2370,8 +2357,8 @@ export class SessionStore {
         new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
       )
 
-      this.messages.set(sessionId, merged)
-      this.notifyMessagesChanged(sessionId)
+      // 使用 commitMessages 替换模式写入，自动合并覆盖期间 WS 新增的消息
+      this.commitMessages(sessionId, merged, true)
 
       // 打印所有 tool_use 消息的工具名
       const toolNamesInMerge = merged.filter(m => m.type === 'tool_use' && m.toolName).map(m => m.toolName)
@@ -2393,8 +2380,7 @@ export class SessionStore {
         console.info(`[SessionStore] Tasks API error (non-fatal): ${e}`)
       }
 
-      // 串行化保存到本地（通过队列确保顺序）
-      this.persistMessages(sessionId, merged)
+      // commitMessages 已包含 persistMessages，无需重复调用
     } catch (e) {
       console.error(`[SessionStore] Sync messages error: ${e}`)
     } finally {
@@ -2527,41 +2513,85 @@ export class SessionStore {
     return shorter.length >= 80 && longer.includes(shorter)
   }
 
-  addMessage(sessionId: string, message: Message): void {
-    let sessionMessages = this.messages.get(sessionId)
-    if (!sessionMessages) {
-      sessionMessages = []
-    }
-
-    // 去重：先按 ID，再按内容
-    let exists = false
-    for (let i = 0; i < sessionMessages.length; i++) {
-      if (sessionMessages[i].id === message.id) {
-        exists = true
-        break
-      }
-    }
-    if (!exists) {
-      // 内容级去重：防止 ID 不同但内容相同的消息重复
-      // （Head/Tail 双路径或 WS 重放可能导致同一内容抵达两次）
-      const newKey = this.messageSemanticKey(message)
-      for (let i = 0; i < sessionMessages.length; i++) {
-        if (this.messageSemanticKey(sessionMessages[i]) === newKey) {
-          exists = true
-          break
+  /**
+   * 统一的消息写入入口。所有对 this.messages 的修改都必须通过此方法，
+   * 确保去重一致性和并发安全。
+   *
+   * @param sessionId 会话 ID
+   * @param newMessages 要写入的消息数组
+   * @param replace 是否替换模式（true=直接覆盖，用于 sync；false=增量追加+去重）
+   */
+  private commitMessages(sessionId: string, newMessages: Message[], replace: boolean): void {
+    if (replace) {
+      // 替换模式：用新数组覆盖，但需要合并覆盖期间 WS 可能新增的消息
+      const current = this.messages.get(sessionId) || []
+      if (current.length > 0 && current !== newMessages) {
+        // 覆盖前，把 current 中不在 newMessages 里的消息合并进来
+        const newIds = new Set<string>()
+        const newSemanticKeys = new Set<string>()
+        for (let i = 0; i < newMessages.length; i++) {
+          if (newMessages[i].id) newIds.add(newMessages[i].id)
+          newSemanticKeys.add(this.messageSemanticKey(newMessages[i]))
+        }
+        for (let i = 0; i < current.length; i++) {
+          const m = current[i]
+          // 按 ID 去重
+          if (m.id && newIds.has(m.id)) continue
+          // 按语义去重
+          if (newSemanticKeys.has(this.messageSemanticKey(m))) continue
+          newMessages.push(m)
+          if (m.id) newIds.add(m.id)
+          newSemanticKeys.add(this.messageSemanticKey(m))
+        }
+        if (newMessages.length > current.length) {
+          newMessages.sort((a, b) =>
+            new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+          )
         }
       }
+      // 终极去重
+      const deduped = this.deduplicateMessages(newMessages)
+      this.messages.set(sessionId, deduped)
+    } else {
+      // 增量追加模式：逐条去重后追加
+      const existing = this.messages.get(sessionId) || []
+      let changed = false
+      for (let i = 0; i < newMessages.length; i++) {
+        const msg = newMessages[i]
+        let exists = false
+        // 按 ID 检查
+        for (let j = 0; j < existing.length; j++) {
+          if (existing[j].id === msg.id && msg.id) {
+            exists = true
+            break
+          }
+        }
+        // 按语义检查
+        if (!exists) {
+          const key = this.messageSemanticKey(msg)
+          for (let j = 0; j < existing.length; j++) {
+            if (this.messageSemanticKey(existing[j]) === key) {
+              exists = true
+              break
+            }
+          }
+        }
+        if (!exists) {
+          existing.push(msg)
+          changed = true
+        }
+      }
+      if (changed) {
+        this.messages.set(sessionId, existing)
+      }
     }
+    this.updateSessionActivity(sessionId, new Date().toISOString(), this.messages.get(sessionId)?.length || 0)
+    this.notifyMessagesChanged(sessionId)
+    this.persistMessages(sessionId)
+  }
 
-    if (!exists) {
-      sessionMessages.push(message)
-      this.messages.set(sessionId, sessionMessages)
-      this.updateSessionActivity(sessionId, message.timestamp, sessionMessages.length)
-      this.notifyMessagesChanged(sessionId)
-
-      // 串行化保存到本地（通过队列确保顺序，防止并发竞态）
-      this.persistMessages(sessionId)
-    }
+  addMessage(sessionId: string, message: Message): void {
+    this.commitMessages(sessionId, [message], false)
   }
 
   // MARK: - Head/Tail 流式缓冲
@@ -2632,58 +2662,13 @@ export class SessionStore {
     const head = this.streamHeads.get(sessionId)
     if (!head || head.length === 0) return
 
-    let tail = this.messages.get(sessionId) || []
-    let changed = false
-
+    // Head 中的消息已不再流式
     for (let i = 0; i < head.length; i++) {
-      const headMsg = head[i]
-      // Head 中的消息已不再流式
-      headMsg.isStreaming = false
-
-      // 使用 messageContentKey 进行统一的去重检查
-      const headKey = this.messageSemanticKey(headMsg)
-      let exists = false
-
-      // 先按 ID 检查
-      if (headMsg.id) {
-        for (let j = tail.length - 1; j >= 0; j--) {
-          if (tail[j].id === headMsg.id) {
-            exists = true
-            break
-          }
-        }
-      }
-
-      // 再按内容键检查
-      if (!exists) {
-        for (let j = tail.length - 1; j >= 0; j--) {
-          if (this.messageSemanticKey(tail[j]) === headKey) {
-            exists = true
-            break
-          }
-        }
-      }
-
-      if (!exists) {
-        tail.push(headMsg)
-        changed = true
-      }
+      head[i].isStreaming = false
     }
 
-    if (changed) {
-      // 最终彻底去重，确保没有遗漏
-      const deduped = this.deduplicateMessages(tail)
-      if (deduped.length !== tail.length) {
-        console.warn(`[SessionStore] flushHeadToTail: removed ${tail.length - deduped.length} duplicates`)
-        tail = deduped
-      }
-      this.messages.set(sessionId, tail)
-      const latestTimestamp = this.getLatestMessageTimestamp(tail, new Date().toISOString())
-      this.updateSessionActivity(sessionId, latestTimestamp, tail.length)
-      // 串行化保存到本地（通过队列确保顺序）
-      this.persistMessages(sessionId, tail)
-      this.notifyMessagesChanged(sessionId)
-    }
+    // 通过 commitMessages 统一写入，确保与 addMessage/sync 协调
+    this.commitMessages(sessionId, head, false)
     this.streamHeads.set(sessionId, [])
   }
 
@@ -3024,9 +3009,7 @@ export class SessionStore {
       const cleaned = this.deduplicateMessages(msgs)
       if (cleaned.length !== msgs.length) {
         console.info(`[SessionStore] Cleaned ${msgs.length - cleaned.length} duplicate(s) for ${sessionId}`)
-        this.messages.set(sessionId, cleaned)
-        this.persistMessages(sessionId, cleaned)
-        this.notifyMessagesChanged(sessionId)
+        this.commitMessages(sessionId, cleaned, true)
       }
     }
   }
@@ -3696,11 +3679,7 @@ export class SessionStore {
         return false
       }
 
-      this.messages.set(sessionId, mergedMessages)
-      await this.persistMessages(sessionId, mergedMessages)
-      const latestTimestamp = this.getLatestMessageTimestamp(mergedMessages, new Date().toISOString())
-      this.updateSessionActivity(sessionId, latestTimestamp, mergedMessages.length, true)
-      this.notifyMessagesChanged(sessionId)
+      this.commitMessages(sessionId, mergedMessages, true)
       console.info(`[SessionStore] Loaded ${importedMessages.length} local Codex messages for ${threadId}`)
       return true
     } catch (e) {
@@ -4928,11 +4907,17 @@ export class SessionStore {
       // 必须包含 msg.type，防止 tool_use_complete 和 tool_result 共享 toolUseId 互相去重
       dedupKey = sessionId + ':type:' + msg.type + ':toolUseId:' + msg.toolUseId
     } else {
-      // 降级：type + text/toolName/content 构建摘要，避免只取前100字符导致的误去重
-      const textPart = typeof msg.text === 'string' ? msg.text.substring(0, 200) : ''
-      const contentPart = typeof msg.content === 'string' ? (msg.content as string).substring(0, 200) : ''
+      // 降级：type + toolName + 内容摘要（前200字符 + 总长度 + 尾部50字符）
+      // 加入总长度和尾部摘要，防止长内容时不同消息产生相同 key 或相同消息产生不同 key
       const toolPart = msg.toolName || ''
-      dedupKey = sessionId + ':no-id:' + msg.type + ':' + toolPart + ':' + textPart + ':' + contentPart
+      const textRaw = typeof msg.text === 'string' ? msg.text as string : ''
+      const contentRaw = typeof msg.content === 'string' ? msg.content as string : ''
+      const textPart = textRaw.substring(0, 200)
+      const contentPart = contentRaw.substring(0, 200)
+      // 尾部摘要：防止前200字符相同但后续不同的消息被误判为重复
+      const textTail = textRaw.length > 200 ? `:t${textRaw.length}:${textRaw.substring(textRaw.length - 50)}` : `:t${textRaw.length}`
+      const contentTail = contentRaw.length > 200 ? `:c${contentRaw.length}:${contentRaw.substring(contentRaw.length - 50)}` : `:c${contentRaw.length}`
+      dedupKey = sessionId + ':no-id:' + msg.type + ':' + toolPart + ':' + textPart + textTail + ':' + contentPart + contentTail
     }
     if (this.recentMessageIds.has(dedupKey)) {
       console.info(`[SessionStore] Dedup: skipping duplicate msg ${msg.id || '(no-id)'} (${msg.type})`)
@@ -5485,9 +5470,7 @@ export class SessionStore {
         if (msg.sessionId && msg.message) {
           // 检查是否是 Official Codex 格式的 sessionId (official-codex-{threadId})
           let targetSessionId = msg.sessionId
-          let isOfficialCodexBroadcast = false
           if (msg.sessionId.startsWith('official-codex-')) {
-            isOfficialCodexBroadcast = true
             // 从 threadId 找到对应的真实 sessionId
             const threadId = msg.sessionId.replace('official-codex-', '')
             const mappedSessionId = this.findExistingSessionIdByOfficialCodexThreadId(threadId)
@@ -5504,9 +5487,10 @@ export class SessionStore {
             }
           }
 
-          // 已有直连 WS 且真正在线时才跳过全局广播，防止 WS 断开后遗漏 message_complete 等关键消息
-          if (!isOfficialCodexBroadcast && wsService.isSubscribed(targetSessionId) && wsService.isConnected(targetSessionId)) {
-            console.info(`[SessionStore] Skip session_broadcast for ${targetSessionId}: already connected`)
+          // 已有直连 WS 且真正在线时跳过全局广播，防止双通道消息重复
+          // 所有会话类型（包括 Codex）统一检查：在线则跳过，离线则兜底
+          if (wsService.isSubscribed(targetSessionId) && wsService.isConnected(targetSessionId)) {
+            console.info(`[SessionStore] Skip session_broadcast for ${targetSessionId}: direct WS connected`)
             break
           }
           console.info(`[SessionStore] Session broadcast for ${targetSessionId} (direct WS not connected)`)

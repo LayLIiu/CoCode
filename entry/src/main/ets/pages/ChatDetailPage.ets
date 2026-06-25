@@ -1850,14 +1850,72 @@ struct ChatDetailPage {
     return Math.max(1, Math.floor((end - start) / 1000))
   }
 
+  /** 获取工具组中最新（最后一个）工具的友好名称 */
+  private getLatestToolName(messages: Message[]): string {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].type === 'tool_use' && messages[i].toolName) {
+        return this.getToolLabel(this.getEffectiveToolName(messages[i]))
+      }
+    }
+    return ''
+  }
+
+  /** 单个工具的中文标签（用于处理中标题） */
+  private getToolLabel(name: string): string {
+    if (name === 'Read') return '读取文件'
+    if (name === 'Write') return '写入文件'
+    if (name === 'Edit') return '编辑文件'
+    if (name === 'Bash') return '执行命令'
+    if (name === 'Grep') return '搜索内容'
+    if (name === 'Glob') return '查找文件'
+    if (name === 'WebSearch') return '网页搜索'
+    if (name === 'WebFetch') return '获取页面'
+    if (name === 'Agent') return '调用代理'
+    return name
+  }
+
   private getToolGroupProcessLabel(messages: Message[]): string {
     const elapsed = this.getToolGroupElapsedSeconds(messages)
     const elapsedText = elapsed > 0 ? this.formatElapsed(elapsed) : ''
-    if (!this.isToolGroupComplete(messages)) {
-      return elapsedText.length > 0 ? '处理中 · ' + elapsedText : '处理中'
+    // 工具组还有未完成的工具 → 显示最新工具名
+    // 工具都完成了但后面还没出现文字消息（可能还有新工具）→ 继续显示最新工具名
+    // 工具都完成了且后面已有文字消息 → 显示总结
+    const allComplete = this.isToolGroupComplete(messages)
+    const hasFollowUpText = this.hasFollowUpAssistantMessage(messages)
+    if (!allComplete || !hasFollowUpText) {
+      const latestTool = this.getLatestToolName(messages)
+      const prefix = latestTool.length > 0 ? latestTool : '处理中'
+      return elapsedText.length > 0 ? prefix + ' · ' + elapsedText : prefix
     }
     const summary = this.getToolGroupSummary(messages)
     return elapsedText.length > 0 ? summary + ' · ' + elapsedText : summary
+  }
+
+  /** 工具组之后是否已有 assistant 文字消息（说明不会再有新工具了） */
+  private hasFollowUpAssistantMessage(toolGroupMessages: Message[]): boolean {
+    // 流式阶段：正在接收文字，说明工具阶段已结束
+    if (this.streamingAssistant.trim().length > 0 || this.streamingThinking.trim().length > 0) {
+      return true
+    }
+    const lastToolId = toolGroupMessages.length > 0 ? toolGroupMessages[toolGroupMessages.length - 1].id : ''
+    if (!lastToolId) return false
+    const allMessages = this.messages
+    let foundLastTool = false
+    for (let i = 0; i < allMessages.length; i++) {
+      if (allMessages[i].id === lastToolId) {
+        foundLastTool = true
+        continue
+      }
+      if (foundLastTool) {
+        if (allMessages[i].type === 'assistant' && allMessages[i].content && allMessages[i].content.trim().length > 0) {
+          return true
+        }
+        if (allMessages[i].type === 'user') {
+          return true
+        }
+      }
+    }
+    return false
   }
 
   private getBottomSpacerHeight(): number {
@@ -4412,7 +4470,6 @@ struct ChatDetailPage {
   }
 
   private isToolGroupExpanded(messages: Message[]): boolean {
-    if (!this.isToolGroupComplete(messages)) return true
     return this.expandedToolGroupIds.has(this.getToolGroupId(messages))
   }
 
