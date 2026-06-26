@@ -19,6 +19,8 @@ import { apiService } from '../services/APIService'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { FileAttachmentBubble } from '../components/FileAttachmentBubble'
 import { ImagePreviewDialog } from '../components/ImagePreviewDialog'
+import { PermissionApprovalCard } from '../components/PermissionApprovalCard'
+import { PermissionQuickActionBar } from '../components/PermissionQuickActionBar'
 import { toastManager } from '../services/ToastManager'
 import { notificationHelper } from '../services/NotificationHelper'
 import { fileService, FileInfo } from '../services/FileService'
@@ -2623,6 +2625,44 @@ struct ChatDetailPage {
           }
           .justifyContent(FlexAlign.Center)
           .width('100%')
+        }
+
+        // 权限快速审批浮动栏
+        if (this.getPendingPermissionMessages().length > 0) {
+          PermissionQuickActionBar({
+            pendingMessages: this.getPendingPermissionMessages(),
+            onApprove: (msg: Message) => {
+              if (msg.permissionId) {
+                sessionStore.sendPermissionResponse(msg.permissionId, true)
+                msg.isPermissionHandled = true
+                msg.permissionResult = true
+                this.messageUpdateCounter++
+              }
+            },
+            onAlwaysApprove: (msg: Message) => {
+              if (msg.permissionId) {
+                sessionStore.sendPermissionResponse(msg.permissionId, true, true)
+                msg.isPermissionHandled = true
+                msg.permissionResult = true
+                this.messageUpdateCounter++
+              }
+            },
+            onReject: (msg: Message) => {
+              if (msg.permissionId) {
+                sessionStore.sendPermissionResponse(msg.permissionId, false)
+                msg.isPermissionHandled = true
+                msg.permissionResult = false
+                this.messageUpdateCounter++
+              }
+            },
+            onExpand: () => {
+              // 滚动到第一条未处理的权限请求
+              const pending = this.getPendingPermissionMessages()
+              if (pending.length > 0) {
+                this.scroller.scrollToIndex(this.findMessageIndex(pending[0].id))
+              }
+            }
+          })
         }
 
         // Codex 连接状态提示
@@ -5759,218 +5799,35 @@ struct ChatDetailPage {
 
   @Builder
   PermissionBubble(message: Message) {
-    Column({ space: 12 }) {
-      // Header
-      Row({ space: 8 }) {
-        SymbolGlyph(this.getPermissionToolIcon(message.toolName || '').symbol)
-          .fontSize(20)
-          .fontColor([this.getPermissionToolIcon(message.toolName || '').color])
-
-        Text(this.getPermissionTitle(message.toolName || '', message.toolInput))
-          .fontSize(Theme.FontBody)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(Theme.TextPrimary)
-          .layoutWeight(1)
-
-        if (message.isPermissionHandled) {
-          Text(message.permissionResult ? '已允许' : '已拒绝')
-            .fontSize(Theme.FontTiny)
-            .fontColor(message.permissionResult ? Theme.SuccessColor : Theme.ErrorColor)
-            .backgroundColor(message.permissionResult ? 'rgba(52,199,89,0.15)' : 'rgba(255,69,58,0.15)')
-            .borderRadius(4)
-            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+    PermissionApprovalCard({
+      message: message,
+      compact: false,
+      highlighted: false,
+      onApprove: (msg: Message) => {
+        if (msg.permissionId) {
+          sessionStore.sendPermissionResponse(msg.permissionId, true)
+          msg.isPermissionHandled = true
+          msg.permissionResult = true
+          this.messageUpdateCounter++
+        }
+      },
+      onAlwaysApprove: (msg: Message) => {
+        if (msg.permissionId) {
+          sessionStore.sendPermissionResponse(msg.permissionId, true, true)
+          msg.isPermissionHandled = true
+          msg.permissionResult = true
+          this.messageUpdateCounter++
+        }
+      },
+      onReject: (msg: Message) => {
+        if (msg.permissionId) {
+          sessionStore.sendPermissionResponse(msg.permissionId, false)
+          msg.isPermissionHandled = true
+          msg.permissionResult = false
+          this.messageUpdateCounter++
         }
       }
-
-      // 描述
-      if (message.permissionDescription) {
-        Text(message.permissionDescription)
-          .fontSize(Theme.FontCaption)
-          .fontColor(Theme.TextSecondary)
-      }
-
-      // Diff 预览（Edit/Write 工具）
-      if ((message.toolName === 'Edit' || message.toolName === 'Write') && message.toolInput) {
-        this.PermissionDiffPreview(message.toolName, message.toolInput)
-      }
-
-      // Bash 命令预览
-      if (message.toolName === 'Bash' && message.toolInput) {
-        if ((message.toolInput as Record<string, Object>)['command']) {
-          Row() {
-            Text('$ ')
-              .fontSize(Theme.FontTiny)
-              .fontColor(Theme.AccentGreen)
-            Text((message.toolInput as Record<string, Object>)['command'] as string)
-              .fontSize(Theme.FontTiny)
-              .fontColor(Theme.TextPrimary)
-              .layoutWeight(1)
-          }
-          .width('100%')
-          .padding(8)
-          .backgroundColor(Theme.BackgroundTertiary)
-          .borderRadius(8)
-        }
-      }
-
-      // 操作按钮
-      if (!message.isPermissionHandled) {
-        Column({ space: 8 }) {
-          Row({ space: 8 }) {
-            Button('允许')
-              .fontSize(Theme.FontCaption)
-              .fontColor(Theme.TextOnPrimary)
-              .backgroundColor(Theme.PrimaryColor)
-              .borderRadius(8)
-              .layoutWeight(1)
-              .onClick(() => {
-                if (message.permissionId) {
-                  sessionStore.sendPermissionResponse(message.permissionId, true)
-                  message.isPermissionHandled = true
-                  message.permissionResult = true
-                  this.messageUpdateCounter++
-                }
-              })
-
-            Button('始终允许')
-              .fontSize(Theme.FontCaption)
-              .fontColor(Theme.PrimaryColor)
-              .backgroundColor('rgba(0,122,255,0.15)')
-              .borderRadius(8)
-              .layoutWeight(1)
-              .onClick(() => {
-                if (message.permissionId) {
-                  sessionStore.sendPermissionResponse(message.permissionId, true, true)
-                  message.isPermissionHandled = true
-                  message.permissionResult = true
-                  this.messageUpdateCounter++
-                }
-              })
-          }
-          .width('100%')
-
-          Button('拒绝')
-            .fontSize(Theme.FontCaption)
-            .fontColor(Theme.TextSecondary)
-            .backgroundColor(Theme.BackgroundTertiary)
-            .borderRadius(8)
-            .width('100%')
-            .onClick(() => {
-              if (message.permissionId) {
-                sessionStore.sendPermissionResponse(message.permissionId, false)
-                message.isPermissionHandled = true
-                message.permissionResult = false
-                this.messageUpdateCounter++
-              }
-            })
-        }
-      }
-    }
-    .width('100%')
-    .padding(Theme.SpacingLG)
-    .backgroundColor(Theme.BackgroundSecondary)
-    .borderRadius(Theme.RadiusMedium)
-    .border({ width: 1, color: message.isPermissionHandled ? Theme.GlassBorder : Theme.AccentOrange })
-  }
-
-  // 权限工具图标
-  private getPermissionToolIcon(toolName: string): ToolIconInfo {
-    switch (toolName) {
-      case 'Edit': return new ToolIconInfo($r('sys.symbol.square_and_pencil'), '编辑文件', Theme.WarningColor)
-      case 'Write': return new ToolIconInfo($r('sys.symbol.doc_text'), '写入文件', Theme.AccentGreen)
-      case 'Bash': return new ToolIconInfo($r('sys.symbol.gearshape'), '执行命令', Theme.AccentOrange)
-      case 'Read': return new ToolIconInfo($r('sys.symbol.doc_text'), '读取文件', Theme.AccentBlue)
-      case 'Glob': return new ToolIconInfo($r('sys.symbol.folder'), '搜索文件', Theme.AccentPurple)
-      case 'Grep': return new ToolIconInfo($r('sys.symbol.magnifyingglass'), '搜索内容', Theme.AccentPurple)
-      default: return new ToolIconInfo($r('sys.symbol.lock_shield_fill'), toolName, Theme.AccentOrange)
-    }
-  }
-
-  // 权限标题
-  private getPermissionTitle(toolName: string, input?: Record<string, Object>): string {
-    const obj = input || {}
-    const filePath = obj['file_path'] as string || ''
-    const fileName = filePath ? filePath.split('/').pop() || filePath : ''
-
-    switch (toolName) {
-      case 'Edit': return fileName ? `编辑 ${fileName}` : '编辑文件'
-      case 'Write': return fileName ? `写入 ${fileName}` : '写入文件'
-      case 'Bash': return '执行命令'
-      case 'Read': return fileName ? `读取 ${fileName}` : '读取文件'
-      default: return `权限请求: ${toolName}`
-    }
-  }
-
-  // Diff 预览
-  @Builder
-  PermissionDiffPreview(toolName: string, input: Record<string, Object>) {
-    Column({ space: 4 }) {
-      // 文件路径
-      Text(input['file_path'] as string || 'file')
-        .fontSize(Theme.FontTiny)
-        .fontColor(Theme.TextTertiary)
-        .width('100%')
-
-      // 简化 diff 显示
-      Scroll() {
-        Column({ space: 2 }) {
-          // 删除的内容（old_string）
-          if (toolName === 'Edit' && (input['old_string'] as string)) {
-            ForEach((input['old_string'] as string).split('\n').slice(0, 10), (line: string, idx: number) => {
-              Row() {
-                Text('-')
-                  .fontSize(Theme.FontTiny)
-                  .fontColor(Theme.ErrorColor)
-                  .width(12)
-                Text(line || ' ')
-                  .fontSize(Theme.FontTiny)
-                  .fontColor(Theme.ErrorColor)
-                  .backgroundColor('rgba(255,69,58,0.1)')
-                  .layoutWeight(1)
-              }
-              .width('100%')
-              .padding({ left: 4, right: 4 })
-            }, (line: string, idx: number) => `old-${idx}`)
-            if ((input['old_string'] as string).split('\n').length > 10) {
-              Text(`... 还有 ${(input['old_string'] as string).split('\n').length - 10} 行`)
-                .fontSize(Theme.FontTiny)
-                .fontColor(Theme.TextTertiary)
-            }
-          }
-
-          // 添加的内容（new_string / content）
-          if ((input['new_string'] as string) || (toolName === 'Write' ? input['content'] as string : '')) {
-            ForEach(((input['new_string'] as string) || (toolName === 'Write' ? input['content'] as string : '')).split('\n').slice(0, 10), (line: string, idx: number) => {
-              Row() {
-                Text('+')
-                  .fontSize(Theme.FontTiny)
-                  .fontColor(Theme.SuccessColor)
-                  .width(12)
-                Text(line || ' ')
-                  .fontSize(Theme.FontTiny)
-                  .fontColor(Theme.SuccessColor)
-                  .backgroundColor('rgba(52,199,89,0.1)')
-                  .layoutWeight(1)
-              }
-              .width('100%')
-              .padding({ left: 4, right: 4 })
-            }, (line: string, idx: number) => `new-${idx}`)
-            if (((input['new_string'] as string) || (toolName === 'Write' ? input['content'] as string : '')).split('\n').length > 10) {
-              Text(`... 还有 ${((input['new_string'] as string) || (toolName === 'Write' ? input['content'] as string : '')).split('\n').length - 10} 行`)
-                .fontSize(Theme.FontTiny)
-                .fontColor(Theme.TextTertiary)
-            }
-          }
-        }
-        .width('100%')
-      }
-      .width('100%')
-      .constraintSize({ maxHeight: 150 })
-      .padding(8)
-      .backgroundColor(Theme.BackgroundTertiary)
-      .borderRadius(8)
-    }
-    .width('100%')
+    })
   }
 
   @Builder
@@ -6787,6 +6644,30 @@ struct ChatDetailPage {
       hapticFeedback.selection()
       this.showModelSheet = true
     })
+  }
+
+  // ── 权限审批辅助方法 ──
+
+  /** 获取所有未处理的权限请求消息 */
+  private getPendingPermissionMessages(): Message[] {
+    const result: Message[] = []
+    for (let i = 0; i < this.messages.length; i++) {
+      const msg = this.messages[i]
+      if (msg.type === 'permission_request' && !msg.isPermissionHandled) {
+        result.push(msg)
+      }
+    }
+    return result
+  }
+
+  /** 查找消息在列表中的索引 */
+  private findMessageIndex(messageId: string): number {
+    for (let i = 0; i < this.messages.length; i++) {
+      if (this.messages[i].id === messageId) {
+        return i
+      }
+    }
+    return 0
   }
 
   // 任务列表签名（避免每次状态变化都同步）

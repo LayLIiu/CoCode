@@ -1,11 +1,13 @@
 /**
  * 通知辅助工具
  * 在后台收到新消息时发送系统通知
+ * 集成 PushApprovalService 支持批量权限请求推送
  */
 
 import { notificationManager } from '@kit.NotificationKit'
 import { wantAgent, WantAgent, common } from '@kit.AbilityKit'
 import { appState } from '../stores/AppState'
+import { pushApprovalService } from './PushApprovalService'
 
 class NotificationParams {
   id: number = 0
@@ -32,6 +34,8 @@ export class NotificationHelper {
   setContext(context: Context): void {
     this.context = context
     this.bundleName = context.applicationInfo.name
+    // 同步 context 到 PushApprovalService
+    pushApprovalService.setContext(context)
   }
 
   async requestNotificationPermission(): Promise<void> {
@@ -42,20 +46,16 @@ export class NotificationHelper {
         this.isNotificationEnabled = true
         await this.ensureSlotCreated()
       } else {
-        // 尝试请求权限，UI 未就绪时可能失败——不设 false，保持默认 false
-        // publishNotification 中会兜底重试
         try {
           await notificationManager.requestEnableNotification(this.context as common.UIAbilityContext)
           this.isNotificationEnabled = true
           await this.ensureSlotCreated()
         } catch (innerErr) {
           console.warn('[NotificationHelper] requestEnableNotification failed (UI not ready?), will retry later')
-          // 保持 this.isNotificationEnabled 为 false，publish 时会再试
         }
       }
     } catch (e) {
       console.warn('[NotificationHelper] isNotificationEnabled check failed: ' + JSON.stringify(e))
-      // 保持 this.isNotificationEnabled 为 false
     }
   }
 
@@ -65,7 +65,6 @@ export class NotificationHelper {
       await notificationManager.addSlot(notificationManager.SlotType.SOCIAL_COMMUNICATION)
       this.isSlotCreated = true
     } catch (e) {
-      // addSlot 在槽位已存在时也会报错，标记已创建避免重复尝试
       this.isSlotCreated = true
     }
   }
@@ -95,6 +94,16 @@ export class NotificationHelper {
     p.label = 'PermissionRequest'
     p.sessionId = sessionId
     await this.publishNotification(p)
+
+    // 同步推送到 PushApprovalService（支持批量聚合 + 快速跳转）
+    pushApprovalService.pushPermissionRequest({
+      sessionId: sessionId,
+      sessionTitle: sessionTitle,
+      aiName: aiName,
+      type: 'permission',
+      toolName: toolName,
+      description: '工具 "' + toolName + '" 需要您的授权'
+    })
   }
 
   async notifyQuestion(aiName: string, sessionTitle: string, text: string, sessionId: string): Promise<void> {
@@ -106,6 +115,43 @@ export class NotificationHelper {
     p.label = 'Question'
     p.sessionId = sessionId
     await this.publishNotification(p)
+
+    // 同步推送到 PushApprovalService
+    pushApprovalService.pushQuestion({
+      sessionId: sessionId,
+      sessionTitle: sessionTitle,
+      aiName: aiName,
+      type: 'question',
+      description: text.length > 100 ? text.substring(0, 97) + '...' : text
+    })
+  }
+
+  /**
+   * 推送 AI 完成通知（新增）
+   */
+  async notifyCompleted(aiName: string, sessionTitle: string, sessionId: string): Promise<void> {
+    if (!this.shouldNotify()) return
+    pushApprovalService.pushCompleted({
+      sessionId: sessionId,
+      sessionTitle: sessionTitle,
+      aiName: aiName,
+      type: 'completed',
+      description: '任务已完成'
+    })
+  }
+
+  /**
+   * 推送 AI 出错通知（新增）
+   */
+  async notifyError(aiName: string, sessionTitle: string, errorText: string, sessionId: string): Promise<void> {
+    if (!this.shouldNotify(true)) return
+    pushApprovalService.pushError({
+      sessionId: sessionId,
+      sessionTitle: sessionTitle,
+      aiName: aiName,
+      type: 'error',
+      description: errorText
+    })
   }
 
   private shouldNotify(allowInForeground: boolean = false): boolean {
@@ -117,15 +163,12 @@ export class NotificationHelper {
 
   private async publishNotification(params: NotificationParams): Promise<void> {
     if (!this.context) return
-    // 权限未确认时检查（不请求——requestEnableNotification 必须在前台调用）
-    // 权限请求已在 EntryAbility.onForeground 中处理
     if (!this.isNotificationEnabled) {
       try {
         const enabled = await notificationManager.isNotificationEnabled()
         if (enabled) {
           this.isNotificationEnabled = true
         } else {
-          // 权限未授予，跳过（前台时 requestNotificationPermission 已尝试过）
           return
         }
       } catch (e) {
@@ -170,6 +213,8 @@ export class NotificationHelper {
   async cancelNotification(sessionId: string): Promise<void> {
     try {
       await notificationManager.cancel(this.hashSessionId(sessionId))
+      // 同步取消 PushApprovalService 的通知
+      await pushApprovalService.cancelSessionNotifications(sessionId)
     } catch (e) {
       // ignore
     }
@@ -178,6 +223,7 @@ export class NotificationHelper {
   async cancelAll(): Promise<void> {
     try {
       await notificationManager.cancelAll()
+      await pushApprovalService.cancelAll()
     } catch (e) {
       // ignore
     }
@@ -193,7 +239,8 @@ export class NotificationHelper {
         abilityName: 'EntryAbility',
         parameters: {
           'sessionId': sessionId,
-          'fromNotification': 'true'
+          'fromNotification': 'true',
+          'action': 'open_chat'
         }
       }],
       operationType: wantAgent.OperationType.START_ABILITY,
