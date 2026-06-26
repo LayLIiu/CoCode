@@ -3,14 +3,6 @@
  *
  * 从 ChatDetailPage.PermissionBubble 拆分而来，独立成可复用组件。
  * 显示 AI 工具的权限请求，支持允许/始终允许/拒绝操作。
- *
- * 使用方式：
- *   PermissionApprovalCard({
- *     message: permissionMessage,
- *     onApprove: (msg) => { ... },
- *     onAlwaysApprove: (msg) => { ... },
- *     onReject: (msg) => { ... }
- *   })
  */
 
 import { Theme } from '../common/Theme'
@@ -52,7 +44,7 @@ function getPermissionToolIcon(toolName: string): ToolIconInfo {
 }
 
 function getPermissionTitle(toolName: string, input?: Record<string, Object>): string {
-  const obj = input || {}
+  const obj = input || {} as Record<string, Object>
   const filePath = obj['file_path'] as string || ''
   const fileName = filePath ? filePath.split('/').pop() || filePath : ''
 
@@ -87,7 +79,6 @@ export struct PermissionApprovalCard {
   // 内部状态
   @State approveButtonScale: number = 1.0
   @State rejectButtonScale: number = 1.0
-  @State highlightPulse: number = 0
 
   private toolIconInfo: ToolIconInfo = new ToolIconInfo($r('sys.symbol.lock_shield_fill'), '', Theme.AccentOrange)
 
@@ -117,12 +108,10 @@ export struct PermissionApprovalCard {
             .borderRadius(4)
             .padding({ left: 6, right: 6, top: 2, bottom: 2 })
         } else if (this.highlighted) {
-          // 未处理 + 高亮：脉冲指示器
           Circle()
             .width(8)
             .height(8)
             .fill(Theme.AccentOrange)
-            .opacity(0.6 + this.highlightPulse * 0.4)
         }
       }
 
@@ -145,22 +134,7 @@ export struct PermissionApprovalCard {
 
       // Bash 命令预览
       if (this.message.toolName === 'Bash' && this.message.toolInput) {
-        const command = (this.message.toolInput as Record<string, Object>)['command']
-        if (command) {
-          Row() {
-            Text('$ ')
-              .fontSize(Theme.FontTiny)
-              .fontColor(Theme.AccentGreen)
-            Text(command as string)
-              .fontSize(Theme.FontTiny)
-              .fontColor(Theme.TextPrimary)
-              .layoutWeight(1)
-          }
-          .width('100%')
-          .padding(8)
-          .backgroundColor(Theme.BackgroundTertiary)
-          .borderRadius(8)
-        }
+        this.BashCommandPreview()
       }
 
       // 操作按钮
@@ -174,12 +148,27 @@ export struct PermissionApprovalCard {
     .borderRadius(Theme.RadiusMedium)
     .border({
       width: 1,
-      color: this.message.isPermissionHandled
-        ? Theme.GlassBorder
-        : (this.highlighted ? Theme.AccentOrange : Theme.AccentOrange)
+      color: this.message.isPermissionHandled ? Theme.GlassBorder : Theme.AccentOrange
     })
     .opacity(this.message.isPermissionHandled ? 0.7 : 1.0)
     .animation({ duration: 200, curve: Curve.EaseInOut })
+  }
+
+  @Builder
+  BashCommandPreview() {
+    Row() {
+      Text('$ ')
+        .fontSize(Theme.FontTiny)
+        .fontColor(Theme.AccentGreen)
+      Text((this.message.toolInput as Record<string, Object>)['command'] as string || '')
+        .fontSize(Theme.FontTiny)
+        .fontColor(Theme.TextPrimary)
+        .layoutWeight(1)
+    }
+    .width('100%')
+    .padding(8)
+    .backgroundColor(Theme.BackgroundTertiary)
+    .borderRadius(8)
   }
 
   @Builder
@@ -196,14 +185,6 @@ export struct PermissionApprovalCard {
           .scale({ x: this.approveButtonScale, y: this.approveButtonScale })
           .onClick(() => {
             hapticFeedback.submit()
-            animateTo({ duration: 100, curve: Curve.EaseOut }, () => {
-              this.approveButtonScale = 0.92
-            })
-            setTimeout(() => {
-              animateTo({ duration: 150, curve: Curve.EaseOut }, () => {
-                this.approveButtonScale = 1.0
-              })
-            }, 80)
             this.onApprove(this.message)
           })
 
@@ -231,14 +212,6 @@ export struct PermissionApprovalCard {
         .scale({ x: this.rejectButtonScale, y: this.rejectButtonScale })
         .onClick(() => {
           hapticFeedback.tap()
-          animateTo({ duration: 100, curve: Curve.EaseOut }, () => {
-            this.rejectButtonScale = 0.92
-          })
-          setTimeout(() => {
-            animateTo({ duration: 150, curve: Curve.EaseOut }, () => {
-              this.rejectButtonScale = 1.0
-            })
-          }, 80)
           this.onReject(this.message)
         })
     }

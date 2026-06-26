@@ -3,48 +3,44 @@
  *
  * 当 AI 请求权限时，立即推送系统通知。
  * 用户点击通知即可跳转到对应会话页面处理审批。
- *
- * 功能：
- * 1. 权限请求推送 —— 显示工具名称和简短描述
- * 2. 问题推送 —— AI 提问时通知用户
- * 3. 会话完成推送 —— AI 完成任务后通知
- * 4. 批量审批 —— 同一会话多个权限请求时合并为一条通知
- * 5. 通知点击跳转 —— 自动导航到对应会话
  */
 
-import { notificationManager, NotificationRequest, NotificationSlot } from '@kit.NotificationKit'
+import { notificationManager } from '@kit.NotificationKit'
 import { wantAgent, WantAgent, common } from '@kit.AbilityKit'
 import { appState } from '../stores/AppState'
-import { Theme } from '../common/Theme'
 
 // 通知类型
 export type PushApprovalType = 'permission' | 'question' | 'completed' | 'error'
 
-// 推送审批参数
-interface PushApprovalParams {
-  sessionId: string
-  sessionTitle: string
-  aiName: string
-  type: PushApprovalType
-  toolName?: string
-  description?: string
-  requestId?: string
+// 推送审批参数 - 必须导出供 NotificationHelper 使用
+export class PushApprovalParams {
+  sessionId: string = ''
+  sessionTitle: string = ''
+  aiName: string = ''
+  type: PushApprovalType = 'permission'
+  toolName: string = ''
+  description: string = ''
+  requestId: string = ''
 }
 
 // 批量权限请求聚合
-interface PendingPermissionBatch {
-  sessionId: string
-  count: number
-  firstToolName: string
-  firstDescription: string
-  requestId: string
-  timestamp: number
+class PendingPermissionBatch {
+  sessionId: string = ''
+  count: number = 0
+  firstToolName: string = ''
+  firstDescription: string = ''
+  requestId: string = ''
+  timestamp: number = 0
 }
 
-// 通知渠道 ID
-const CHANNEL_PERMISSION = 'permission_requests'
-const CHANNEL_QUESTION = 'ai_questions'
-const CHANNEL_STATUS = 'ai_status'
+// 通知发送参数
+class NotificationSendParams {
+  id: number = 0
+  title: string = ''
+  text: string = ''
+  sessionId: string = ''
+  channel: string = ''
+}
 
 class PushApprovalService {
   private static instance: PushApprovalService
@@ -55,7 +51,7 @@ class PushApprovalService {
   // 批量聚合：同一会话的权限请求
   private pendingBatches: Map<string, PendingPermissionBatch> = new Map()
   private batchFlushTimer: number = -1
-  private readonly BATCH_FLUSH_INTERVAL = 2000  // 2秒内聚合同一会话的权限请求
+  private readonly BATCH_FLUSH_INTERVAL: number = 2000
 
   static getInstance(): PushApprovalService {
     if (!PushApprovalService.instance) {
@@ -80,7 +76,6 @@ class PushApprovalService {
           console.warn('[PushApproval] requestEnableNotification failed, will retry later')
         }
       }
-      // 创建通知渠道
       await this.ensureChannelsCreated()
       this.isInitialized = true
     } catch (e) {
@@ -88,33 +83,24 @@ class PushApprovalService {
     }
   }
 
-  /**
-   * 推送权限请求通知
-   *
-   * 支持批量聚合：2秒内同一会话的多个权限请求合并为一条通知
-   * "3个权限请求待审批 - 第一个: 编辑 main.ts"
-   */
   pushPermissionRequest(params: PushApprovalParams): void {
     if (!this.shouldPush(params.sessionId, true)) return
 
-    // 聚合到批量
     const existing = this.pendingBatches.get(params.sessionId)
     if (existing) {
       existing.count++
       existing.timestamp = Date.now()
     } else {
-      const batch: PendingPermissionBatch = {
-        sessionId: params.sessionId,
-        count: 1,
-        firstToolName: params.toolName || '操作',
-        firstDescription: params.description || '',
-        requestId: params.requestId || '',
-        timestamp: Date.now()
-      }
+      const batch = new PendingPermissionBatch()
+      batch.sessionId = params.sessionId
+      batch.count = 1
+      batch.firstToolName = params.toolName || '操作'
+      batch.firstDescription = params.description || ''
+      batch.requestId = params.requestId || ''
+      batch.timestamp = Date.now()
       this.pendingBatches.set(params.sessionId, batch)
     }
 
-    // 延迟刷新（批量聚合）
     if (this.batchFlushTimer >= 0) {
       clearTimeout(this.batchFlushTimer)
     }
@@ -123,66 +109,51 @@ class PushApprovalService {
     }, this.BATCH_FLUSH_INTERVAL)
   }
 
-  /**
-   * 推送 AI 问题通知
-   */
   pushQuestion(params: PushApprovalParams): void {
     if (!this.shouldPush(params.sessionId, true)) return
-    this.sendNotification({
-      id: this.hashSessionId(params.sessionId) + 20000,
-      title: `${params.aiName} 提问 - ${params.sessionTitle}`,
-      text: params.description || 'AI 需要您的回答',
-      sessionId: params.sessionId,
-      channel: CHANNEL_QUESTION
-    })
+    const sendParams = new NotificationSendParams()
+    sendParams.id = this.hashSessionId(params.sessionId) + 20000
+    sendParams.title = `${params.aiName} 提问 - ${params.sessionTitle}`
+    sendParams.text = params.description || 'AI 需要您的回答'
+    sendParams.sessionId = params.sessionId
+    sendParams.channel = 'ai_questions'
+    this.sendNotification(sendParams)
   }
 
-  /**
-   * 推送 AI 完成通知
-   */
   pushCompleted(params: PushApprovalParams): void {
     if (!this.shouldPush(params.sessionId, false)) return
-    this.sendNotification({
-      id: this.hashSessionId(params.sessionId) + 30000,
-      title: `${params.aiName} 已完成 - ${params.sessionTitle}`,
-      text: params.description || '任务已完成',
-      sessionId: params.sessionId,
-      channel: CHANNEL_STATUS
-    })
+    const sendParams = new NotificationSendParams()
+    sendParams.id = this.hashSessionId(params.sessionId) + 30000
+    sendParams.title = `${params.aiName} 已完成 - ${params.sessionTitle}`
+    sendParams.text = params.description || '任务已完成'
+    sendParams.sessionId = params.sessionId
+    sendParams.channel = 'ai_status'
+    this.sendNotification(sendParams)
   }
 
-  /**
-   * 推送 AI 出错通知
-   */
   pushError(params: PushApprovalParams): void {
     if (!this.shouldPush(params.sessionId, true)) return
-    this.sendNotification({
-      id: this.hashSessionId(params.sessionId) + 40000,
-      title: `${params.aiName} 出错 - ${params.sessionTitle}`,
-      text: params.description || '执行过程中发生错误',
-      sessionId: params.sessionId,
-      channel: CHANNEL_STATUS
-    })
+    const sendParams = new NotificationSendParams()
+    sendParams.id = this.hashSessionId(params.sessionId) + 40000
+    sendParams.title = `${params.aiName} 出错 - ${params.sessionTitle}`
+    sendParams.text = params.description || '执行过程中发生错误'
+    sendParams.sessionId = params.sessionId
+    sendParams.channel = 'ai_status'
+    this.sendNotification(sendParams)
   }
 
-  /**
-   * 取消指定会话的通知
-   */
   async cancelSessionNotifications(sessionId: string): Promise<void> {
     const baseId = this.hashSessionId(sessionId)
     const ids = [baseId, baseId + 10000, baseId + 20000, baseId + 30000, baseId + 40000]
-    for (const id of ids) {
+    for (let i = 0; i < ids.length; i++) {
       try {
-        await notificationManager.cancel(id)
+        await notificationManager.cancel(ids[i])
       } catch (e) {
         // ignore
       }
     }
   }
 
-  /**
-   * 取消所有通知
-   */
   async cancelAll(): Promise<void> {
     try {
       await notificationManager.cancelAll()
@@ -191,10 +162,7 @@ class PushApprovalService {
     }
   }
 
-  // ── 内部方法 ──
-
   private shouldPush(sessionId: string, allowInForeground: boolean): boolean {
-    // 当前正在查看该会话时，不推送（除非强制前台推送类型如权限请求）
     if (appState.isInForeground && !allowInForeground) {
       return false
     }
@@ -202,11 +170,24 @@ class PushApprovalService {
   }
 
   private async flushBatchNotifications(): Promise<void> {
-    const batches = new Map(this.pendingBatches)
+    const batchKeys = Array.from(this.pendingBatches.keys())
+    const batches = new Map<string, PendingPermissionBatch>()
+    for (let i = 0; i < batchKeys.length; i++) {
+      const key = batchKeys[i]
+      const batch = this.pendingBatches.get(key)
+      if (batch) {
+        batches.set(key, batch)
+      }
+    }
     this.pendingBatches.clear()
     this.batchFlushTimer = -1
 
-    for (const [sessionId, batch] of batches) {
+    const keys = Array.from(batches.keys())
+    for (let i = 0; i < keys.length; i++) {
+      const sessionId = keys[i]
+      const batch = batches.get(sessionId)
+      if (!batch) continue
+
       let title = ''
       let text = ''
 
@@ -219,26 +200,19 @@ class PushApprovalService {
           (batch.firstDescription ? ` - ${batch.firstDescription}` : '')
       }
 
-      await this.sendNotification({
-        id: this.hashSessionId(sessionId) + 10000,
-        title: title,
-        text: text,
-        sessionId: sessionId,
-        channel: CHANNEL_PERMISSION
-      })
+      const sendParams = new NotificationSendParams()
+      sendParams.id = this.hashSessionId(sessionId) + 10000
+      sendParams.title = title
+      sendParams.text = text
+      sendParams.sessionId = sessionId
+      sendParams.channel = 'permission_requests'
+      await this.sendNotification(sendParams)
     }
   }
 
-  private async sendNotification(params: {
-    id: number
-    title: string
-    text: string
-    sessionId: string
-    channel: string
-  }): Promise<void> {
+  private async sendNotification(params: NotificationSendParams): Promise<void> {
     if (!this.context) return
 
-    // 确保初始化
     if (!this.isInitialized) {
       await this.initialize()
     }
@@ -246,7 +220,7 @@ class PushApprovalService {
     try {
       const agent = await this.createWantAgent(params.sessionId)
 
-      const request: NotificationRequest = {
+      const request: notificationManager.NotificationRequest = {
         id: params.id,
         notificationSlotType: notificationManager.SlotType.SOCIAL_COMMUNICATION,
         content: {
@@ -270,11 +244,10 @@ class PushApprovalService {
   }
 
   private async ensureChannelsCreated(): Promise<void> {
-    // 鸿蒙使用 SlotType，这里用 addSlot 确保 SOCIAL_COMMUNICATION 槽存在
     try {
       await notificationManager.addSlot(notificationManager.SlotType.SOCIAL_COMMUNICATION)
     } catch (e) {
-      // 槽已存在或其他错误，忽略
+      // ignore
     }
   }
 

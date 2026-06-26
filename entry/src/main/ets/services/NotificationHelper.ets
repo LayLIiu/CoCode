@@ -7,7 +7,7 @@
 import { notificationManager } from '@kit.NotificationKit'
 import { wantAgent, WantAgent, common } from '@kit.AbilityKit'
 import { appState } from '../stores/AppState'
-import { pushApprovalService } from './PushApprovalService'
+import { pushApprovalService, PushApprovalParams } from './PushApprovalService'
 
 class NotificationParams {
   id: number = 0
@@ -34,7 +34,6 @@ export class NotificationHelper {
   setContext(context: Context): void {
     this.context = context
     this.bundleName = context.applicationInfo.name
-    // 同步 context 到 PushApprovalService
     pushApprovalService.setContext(context)
   }
 
@@ -95,15 +94,14 @@ export class NotificationHelper {
     p.sessionId = sessionId
     await this.publishNotification(p)
 
-    // 同步推送到 PushApprovalService（支持批量聚合 + 快速跳转）
-    pushApprovalService.pushPermissionRequest({
-      sessionId: sessionId,
-      sessionTitle: sessionTitle,
-      aiName: aiName,
-      type: 'permission',
-      toolName: toolName,
-      description: '工具 "' + toolName + '" 需要您的授权'
-    })
+    const pushParams = new PushApprovalParams()
+    pushParams.sessionId = sessionId
+    pushParams.sessionTitle = sessionTitle
+    pushParams.aiName = aiName
+    pushParams.type = 'permission'
+    pushParams.toolName = toolName
+    pushParams.description = '工具 "' + toolName + '" 需要您的授权'
+    pushApprovalService.pushPermissionRequest(pushParams)
   }
 
   async notifyQuestion(aiName: string, sessionTitle: string, text: string, sessionId: string): Promise<void> {
@@ -116,42 +114,35 @@ export class NotificationHelper {
     p.sessionId = sessionId
     await this.publishNotification(p)
 
-    // 同步推送到 PushApprovalService
-    pushApprovalService.pushQuestion({
-      sessionId: sessionId,
-      sessionTitle: sessionTitle,
-      aiName: aiName,
-      type: 'question',
-      description: text.length > 100 ? text.substring(0, 97) + '...' : text
-    })
+    const pushParams = new PushApprovalParams()
+    pushParams.sessionId = sessionId
+    pushParams.sessionTitle = sessionTitle
+    pushParams.aiName = aiName
+    pushParams.type = 'question'
+    pushParams.description = text.length > 100 ? text.substring(0, 97) + '...' : text
+    pushApprovalService.pushQuestion(pushParams)
   }
 
-  /**
-   * 推送 AI 完成通知（新增）
-   */
   async notifyCompleted(aiName: string, sessionTitle: string, sessionId: string): Promise<void> {
     if (!this.shouldNotify()) return
-    pushApprovalService.pushCompleted({
-      sessionId: sessionId,
-      sessionTitle: sessionTitle,
-      aiName: aiName,
-      type: 'completed',
-      description: '任务已完成'
-    })
+    const pushParams = new PushApprovalParams()
+    pushParams.sessionId = sessionId
+    pushParams.sessionTitle = sessionTitle
+    pushParams.aiName = aiName
+    pushParams.type = 'completed'
+    pushParams.description = '任务已完成'
+    pushApprovalService.pushCompleted(pushParams)
   }
 
-  /**
-   * 推送 AI 出错通知（新增）
-   */
   async notifyError(aiName: string, sessionTitle: string, errorText: string, sessionId: string): Promise<void> {
     if (!this.shouldNotify(true)) return
-    pushApprovalService.pushError({
-      sessionId: sessionId,
-      sessionTitle: sessionTitle,
-      aiName: aiName,
-      type: 'error',
-      description: errorText
-    })
+    const pushParams = new PushApprovalParams()
+    pushParams.sessionId = sessionId
+    pushParams.sessionTitle = sessionTitle
+    pushParams.aiName = aiName
+    pushParams.type = 'error'
+    pushParams.description = errorText
+    pushApprovalService.pushError(pushParams)
   }
 
   private shouldNotify(allowInForeground: boolean = false): boolean {
@@ -213,7 +204,6 @@ export class NotificationHelper {
   async cancelNotification(sessionId: string): Promise<void> {
     try {
       await notificationManager.cancel(this.hashSessionId(sessionId))
-      // 同步取消 PushApprovalService 的通知
       await pushApprovalService.cancelSessionNotifications(sessionId)
     } catch (e) {
       // ignore
